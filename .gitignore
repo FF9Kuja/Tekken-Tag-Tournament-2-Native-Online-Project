@@ -1,0 +1,135 @@
+# =============================================================================
+#  NOTHING DERIVED FROM THE GAME DISC, TITLE UPDATES OR THE GAME EXECUTABLE
+#  MAY EVER BE COMMITTED. See docs/LEGAL.md. CI runs scripts/check_repo_hygiene.py
+#  to catch mistakes; this file is the first line of defence.
+# =============================================================================
+
+# --- Xbox 360 game content (disc images, executables, title updates, data) ---
+*.iso
+*.ISO
+*.xex
+*.XEX
+*.xexp
+*.XEXP
+*.xzp
+*.xpr
+*.xma
+*.xwb
+*.xsb
+*.bin
+*.BIN
+*.img
+*.IMG
+*.xcp
+*.xdbf
+TU_*
+Content/
+Updates/
+game/
+games/
+game_data/
+extracted/
+dump/
+dumps/
+private/
+
+# --- Code generated from the game executable (ReXGlue / XenonRecomp output) ---
+generated/
+recomp/generated/
+re/ppc/
+ppc_recomp*.cpp
+ppc_recomp*.h
+ppc_func_mapping.cpp
+ppc_config.h
+*_funcs.h
+*_pch.h
+*.gen.cpp
+*.gen.h
+codegen.d
+codegen.build.stamp
+
+# --- Credentials, tokens, secrets, local configuration ---
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+!/third_party/**/*.crt
+.env
+.env.*
+secrets/
+*.secret
+official.cmake
+official.qrc
+*.ini
+!/.editorconfig
+
+# --- Build output and intermediates ---
+/out/
+/build/
+/build-*/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.txt
+Testing/
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.pch
+*.gch
+*.profraw
+*.profdata
+*.ninja
+.ninja_deps
+.ninja_log
+/toolchain/
+/third_party/rexglue-sdk/out/
+
+# --- Logs, dumps, captures, saves ---
+*.log
+*.dmp
+*.sav
+crash*/
+crashes/
+captures/
+shader_cache*/
+saves/
+user/
+runs/
+
+# --- Large archives (never commit binaries this way) ---
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+*.xz
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Editors / OS noise ---
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.swp
+*~
+.DS_Store
+Thumbs.db
