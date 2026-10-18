@@ -59,8 +59,7 @@ class ByteReader {
   /// A NUL-terminated string starting at `offset`, searched within at most
   /// `max_length` bytes. Returns the bytes before the NUL (or all
   /// `max_length` bytes when no NUL is found inside the window).
-  [[nodiscard]] std::optional<std::string> cstring(std::size_t offset,
-                                                   std::size_t max_length) const {
+  [[nodiscard]] std::optional<std::string> cstring(std::size_t offset, std::size_t max_length) const {
     if (!in_bounds(offset, 0)) return std::nullopt;
     const std::size_t available = data_.size() - offset;
     const std::size_t window = max_length < available ? max_length : available;

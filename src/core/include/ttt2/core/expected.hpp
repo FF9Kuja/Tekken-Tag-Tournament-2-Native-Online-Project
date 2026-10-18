@@ -17,12 +17,14 @@ struct Error {
   std::string message;
 };
 
-[[nodiscard]] inline Error make_error(std::string message) { return Error{std::move(message)}; }
+[[nodiscard]] inline Error make_error(std::string message) {
+  return Error{std::move(message)};
+}
 
 template <typename T>
 class Expected {
  public:
-  Expected(T value) : storage_(std::move(value)) {}  // NOLINT(google-explicit-constructor)
+  Expected(T value) : storage_(std::move(value)) {}      // NOLINT(google-explicit-constructor)
   Expected(Error error) : storage_(std::move(error)) {}  // NOLINT(google-explicit-constructor)
 
   [[nodiscard]] bool has_value() const noexcept { return storage_.index() == 0; }

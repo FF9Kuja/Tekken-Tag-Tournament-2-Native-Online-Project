@@ -89,8 +89,8 @@ class XexBuilder {
   }
 
   /// Body of a FILE_FORMAT_INFO header (without the size prefix).
-  static std::vector<std::uint8_t> file_format_basic(std::uint16_t encryption,
-                                                     const std::vector<std::pair<std::uint32_t, std::uint32_t>>& blocks) {
+  static std::vector<std::uint8_t> file_format_basic(
+      std::uint16_t encryption, const std::vector<std::pair<std::uint32_t, std::uint32_t>>& blocks) {
     std::vector<std::uint8_t> b(4, 0);
     store_be16(b.data(), encryption);
     store_be16(b.data() + 2, 1);  // basic
@@ -132,7 +132,8 @@ class XexBuilder {
       store_be32(e.data() + 0x20, l.version_min);
       store_be16(e.data() + 0x24, static_cast<std::uint16_t>(i));
       store_be16(e.data() + 0x26, l.import_count);
-      for (std::uint16_t k = 0; k < l.import_count; ++k) store_be32(e.data() + 0x28 + k * 4, 0x82000000u + k * 4);
+      for (std::uint16_t k = 0; k < l.import_count; ++k)
+        store_be32(e.data() + 0x28 + k * 4, 0x82000000u + k * 4);
       b.insert(b.end(), e.begin(), e.end());
     }
     return b;
@@ -140,7 +141,8 @@ class XexBuilder {
 
   /// Body of a STATIC_LIBRARIES header (without the size prefix).
   static std::vector<std::uint8_t> static_libraries(
-      const std::vector<std::tuple<std::string, std::uint16_t, std::uint16_t, std::uint16_t, std::uint8_t>>& libs) {
+      const std::vector<std::tuple<std::string, std::uint16_t, std::uint16_t, std::uint16_t, std::uint8_t>>&
+          libs) {
     std::vector<std::uint8_t> b;
     for (const auto& [name, major, minor, build, qfe] : libs) {
       std::uint8_t e[0x10] = {};
@@ -148,7 +150,7 @@ class XexBuilder {
       store_be16(e + 0x8, major);
       store_be16(e + 0xA, minor);
       store_be16(e + 0xC, build);
-      e[0xE] = 0;    // approval
+      e[0xE] = 0;  // approval
       e[0xF] = qfe;
       b.insert(b.end(), e, e + 0x10);
     }
@@ -162,10 +164,9 @@ class XexBuilder {
     return b;
   }
 
-  static std::vector<std::uint8_t> security_info(std::uint32_t image_size, std::uint32_t image_flags,
-                                                 std::uint32_t load_address, std::uint32_t region,
-                                                 std::uint32_t media_types,
-                                                 const std::vector<std::pair<std::uint32_t, std::uint32_t>>& pages) {
+  static std::vector<std::uint8_t> security_info(
+      std::uint32_t image_size, std::uint32_t image_flags, std::uint32_t load_address, std::uint32_t region,
+      std::uint32_t media_types, const std::vector<std::pair<std::uint32_t, std::uint32_t>>& pages) {
     std::vector<std::uint8_t> s(0x184 + pages.size() * 0x18, 0);
     store_be32(s.data() + 0x000, static_cast<std::uint32_t>(s.size()));
     store_be32(s.data() + 0x004, image_size);

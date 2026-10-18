@@ -10,8 +10,8 @@ namespace ttt2::xex {
 
 namespace {
 
-constexpr std::size_t kHeaderSize = 0x18;        // fixed part of xex2_header
-constexpr std::size_t kOptHeaderEntrySize = 8;   // key + value/offset
+constexpr std::size_t kHeaderSize = 0x18;         // fixed part of xex2_header
+constexpr std::size_t kOptHeaderEntrySize = 8;    // key + value/offset
 constexpr std::size_t kSecurityInfoSize = 0x184;  // up to the page descriptors
 constexpr std::size_t kPageDescriptorSize = 0x18;
 constexpr std::size_t kImportLibraryHeaderSize = 0x28;
@@ -33,8 +33,7 @@ bool copy_bytes(const ByteReader& r, std::size_t offset, std::array<std::uint8_t
 
 /// Splits the import-library string table: NUL-terminated strings, each padded
 /// to a 4-byte boundary.
-std::vector<std::string> split_string_table(const ByteReader& r, std::size_t offset,
-                                            std::size_t table_size) {
+std::vector<std::string> split_string_table(const ByteReader& r, std::size_t offset, std::size_t table_size) {
   std::vector<std::string> names;
   std::size_t pos = 0;
   while (pos < table_size) {
@@ -155,9 +154,8 @@ void parse_import_libraries(const ByteReader& r, std::size_t off, std::size_t si
   }
   const std::vector<std::string> names = split_string_table(r, off + 12, string_table_size);
   if (names.size() != string_count) {
-    img.warnings.push_back("import library string count mismatch (declared " +
-                           std::to_string(string_count) + ", found " +
-                           std::to_string(names.size()) + ")");
+    img.warnings.push_back("import library string count mismatch (declared " + std::to_string(string_count) +
+                           ", found " + std::to_string(names.size()) + ")");
   }
   std::size_t pos = off + 12 + string_table_size;
   const std::size_t end = off + size;
@@ -173,7 +171,8 @@ void parse_import_libraries(const ByteReader& r, std::size_t off, std::size_t si
     lib.version_min = Version::from_u32(*r.u32be(pos + 0x20));
     const std::uint16_t name_index = *r.u16be(pos + 0x24);
     lib.import_count = *r.u16be(pos + 0x26);
-    lib.name = name_index < names.size() ? names[name_index] : ("<bad name index " + std::to_string(name_index) + ">");
+    lib.name = name_index < names.size() ? names[name_index]
+                                         : ("<bad name index " + std::to_string(name_index) + ">");
     img.import_libraries.push_back(std::move(lib));
     if (lib_size < kImportLibraryHeaderSize) {
       img.warnings.push_back("import library entry has an invalid size");
@@ -282,16 +281,35 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
 
     if (h.is_inline()) {
       switch (h.key) {
-        case header_key::kEntryPoint: img.entry_point = h.data; break;
-        case header_key::kImageBaseAddress: img.image_base = h.data; break;
-        case header_key::kOriginalBaseAddress: img.original_base_address = h.data; break;
-        case header_key::kDefaultStackSize: img.default_stack_size = h.data; break;
-        case header_key::kDefaultHeapSize: img.default_heap_size = h.data; break;
-        case header_key::kDefaultFilesystemCacheSize: img.default_filesystem_cache_size = h.data; break;
-        case header_key::kSystemFlags: img.system_flags = h.data; break;
-        case header_key::kTitleWorkspaceSize: img.title_workspace_size = h.data; break;
-        case header_key::kAdditionalTitleMemory: img.additional_title_memory = h.data; break;
-        default: break;
+        case header_key::kEntryPoint:
+          img.entry_point = h.data;
+          break;
+        case header_key::kImageBaseAddress:
+          img.image_base = h.data;
+          break;
+        case header_key::kOriginalBaseAddress:
+          img.original_base_address = h.data;
+          break;
+        case header_key::kDefaultStackSize:
+          img.default_stack_size = h.data;
+          break;
+        case header_key::kDefaultHeapSize:
+          img.default_heap_size = h.data;
+          break;
+        case header_key::kDefaultFilesystemCacheSize:
+          img.default_filesystem_cache_size = h.data;
+          break;
+        case header_key::kSystemFlags:
+          img.system_flags = h.data;
+          break;
+        case header_key::kTitleWorkspaceSize:
+          img.title_workspace_size = h.data;
+          break;
+        case header_key::kAdditionalTitleMemory:
+          img.additional_title_memory = h.data;
+          break;
+        default:
+          break;
       }
       continue;
     }
@@ -322,12 +340,24 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
     }
 
     switch (h.key) {
-      case header_key::kFileFormatInfo: parse_file_format_info(r, off, size, img); break;
-      case header_key::kExecutionInfo: parse_execution_info(r, off, img); break;
-      case header_key::kImportLibraries: parse_import_libraries(r, off, size, img, options); break;
-      case header_key::kStaticLibraries: parse_static_libraries(r, off, size, img); break;
-      case header_key::kDeltaPatchDescriptor: parse_delta_patch(r, off, size, img); break;
-      case header_key::kTlsInfo: parse_tls_info(r, off, img); break;
+      case header_key::kFileFormatInfo:
+        parse_file_format_info(r, off, size, img);
+        break;
+      case header_key::kExecutionInfo:
+        parse_execution_info(r, off, img);
+        break;
+      case header_key::kImportLibraries:
+        parse_import_libraries(r, off, size, img, options);
+        break;
+      case header_key::kStaticLibraries:
+        parse_static_libraries(r, off, size, img);
+        break;
+      case header_key::kDeltaPatchDescriptor:
+        parse_delta_patch(r, off, size, img);
+        break;
+      case header_key::kTlsInfo:
+        parse_tls_info(r, off, img);
+        break;
       case header_key::kOriginalPeName:
         parse_sized_string(r, off, size, img.original_pe_name, "original PE name", img);
         break;
@@ -342,7 +372,8 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
         for (std::size_t k = 0; k < n; ++k) img.alternate_title_ids.push_back(*r.u32be(off + 4 + k * 4));
         break;
       }
-      default: break;
+      default:
+        break;
     }
   }
 
@@ -358,46 +389,79 @@ Expected<Xex2Image> parse_file(const std::filesystem::path& path, const ParseOpt
 
 std::string_view optional_header_name(std::uint32_t key) noexcept {
   switch (key) {
-    case header_key::kResourceInfo: return "RESOURCE_INFO";
-    case header_key::kFileFormatInfo: return "FILE_FORMAT_INFO";
-    case header_key::kDeltaPatchDescriptor: return "DELTA_PATCH_DESCRIPTOR";
-    case header_key::kBaseReference: return "BASE_REFERENCE";
-    case header_key::kBoundingPath: return "BOUNDING_PATH";
-    case header_key::kDeviceId: return "DEVICE_ID";
-    case header_key::kOriginalBaseAddress: return "ORIGINAL_BASE_ADDRESS";
-    case header_key::kEntryPoint: return "ENTRY_POINT";
-    case header_key::kImageBaseAddress: return "IMAGE_BASE_ADDRESS";
-    case header_key::kImportLibraries: return "IMPORT_LIBRARIES";
-    case header_key::kChecksumTimestamp: return "CHECKSUM_TIMESTAMP";
-    case header_key::kEnabledForCallcap: return "ENABLED_FOR_CALLCAP";
-    case header_key::kEnabledForFastcap: return "ENABLED_FOR_FASTCAP";
-    case header_key::kOriginalPeName: return "ORIGINAL_PE_NAME";
-    case header_key::kStaticLibraries: return "STATIC_LIBRARIES";
-    case header_key::kTlsInfo: return "TLS_INFO";
-    case header_key::kDefaultStackSize: return "DEFAULT_STACK_SIZE";
-    case header_key::kDefaultFilesystemCacheSize: return "DEFAULT_FILESYSTEM_CACHE_SIZE";
-    case header_key::kDefaultHeapSize: return "DEFAULT_HEAP_SIZE";
-    case header_key::kPageHeapSizeAndFlags: return "PAGE_HEAP_SIZE_AND_FLAGS";
-    case header_key::kSystemFlags: return "SYSTEM_FLAGS";
-    case header_key::kExecutionInfo: return "EXECUTION_INFO";
-    case header_key::kTitleWorkspaceSize: return "TITLE_WORKSPACE_SIZE";
-    case header_key::kGameRatings: return "GAME_RATINGS";
-    case header_key::kLanKey: return "LAN_KEY";
-    case header_key::kXbox360Logo: return "XBOX360_LOGO";
-    case header_key::kMultidiscMediaIds: return "MULTIDISC_MEDIA_IDS";
-    case header_key::kAlternateTitleIds: return "ALTERNATE_TITLE_IDS";
-    case header_key::kAdditionalTitleMemory: return "ADDITIONAL_TITLE_MEMORY";
-    case header_key::kExportsByName: return "EXPORTS_BY_NAME";
-    default: return "UNKNOWN";
+    case header_key::kResourceInfo:
+      return "RESOURCE_INFO";
+    case header_key::kFileFormatInfo:
+      return "FILE_FORMAT_INFO";
+    case header_key::kDeltaPatchDescriptor:
+      return "DELTA_PATCH_DESCRIPTOR";
+    case header_key::kBaseReference:
+      return "BASE_REFERENCE";
+    case header_key::kBoundingPath:
+      return "BOUNDING_PATH";
+    case header_key::kDeviceId:
+      return "DEVICE_ID";
+    case header_key::kOriginalBaseAddress:
+      return "ORIGINAL_BASE_ADDRESS";
+    case header_key::kEntryPoint:
+      return "ENTRY_POINT";
+    case header_key::kImageBaseAddress:
+      return "IMAGE_BASE_ADDRESS";
+    case header_key::kImportLibraries:
+      return "IMPORT_LIBRARIES";
+    case header_key::kChecksumTimestamp:
+      return "CHECKSUM_TIMESTAMP";
+    case header_key::kEnabledForCallcap:
+      return "ENABLED_FOR_CALLCAP";
+    case header_key::kEnabledForFastcap:
+      return "ENABLED_FOR_FASTCAP";
+    case header_key::kOriginalPeName:
+      return "ORIGINAL_PE_NAME";
+    case header_key::kStaticLibraries:
+      return "STATIC_LIBRARIES";
+    case header_key::kTlsInfo:
+      return "TLS_INFO";
+    case header_key::kDefaultStackSize:
+      return "DEFAULT_STACK_SIZE";
+    case header_key::kDefaultFilesystemCacheSize:
+      return "DEFAULT_FILESYSTEM_CACHE_SIZE";
+    case header_key::kDefaultHeapSize:
+      return "DEFAULT_HEAP_SIZE";
+    case header_key::kPageHeapSizeAndFlags:
+      return "PAGE_HEAP_SIZE_AND_FLAGS";
+    case header_key::kSystemFlags:
+      return "SYSTEM_FLAGS";
+    case header_key::kExecutionInfo:
+      return "EXECUTION_INFO";
+    case header_key::kTitleWorkspaceSize:
+      return "TITLE_WORKSPACE_SIZE";
+    case header_key::kGameRatings:
+      return "GAME_RATINGS";
+    case header_key::kLanKey:
+      return "LAN_KEY";
+    case header_key::kXbox360Logo:
+      return "XBOX360_LOGO";
+    case header_key::kMultidiscMediaIds:
+      return "MULTIDISC_MEDIA_IDS";
+    case header_key::kAlternateTitleIds:
+      return "ALTERNATE_TITLE_IDS";
+    case header_key::kAdditionalTitleMemory:
+      return "ADDITIONAL_TITLE_MEMORY";
+    case header_key::kExportsByName:
+      return "EXPORTS_BY_NAME";
+    default:
+      return "UNKNOWN";
   }
 }
 
 std::string describe_module_flags(std::uint32_t flags) {
-  struct Entry { std::uint32_t bit; const char* name; };
+  struct Entry {
+    std::uint32_t bit;
+    const char* name;
+  };
   static constexpr Entry kEntries[] = {
-      {0x01, "TITLE"},        {0x02, "EXPORTS_TO_TITLE"}, {0x04, "SYSTEM_DEBUGGER"},
-      {0x08, "DLL_MODULE"},   {0x10, "MODULE_PATCH"},     {0x20, "PATCH_FULL"},
-      {0x40, "PATCH_DELTA"},  {0x80, "USER_MODE"},
+      {0x01, "TITLE"},        {0x02, "EXPORTS_TO_TITLE"}, {0x04, "SYSTEM_DEBUGGER"}, {0x08, "DLL_MODULE"},
+      {0x10, "MODULE_PATCH"}, {0x20, "PATCH_FULL"},       {0x40, "PATCH_DELTA"},     {0x80, "USER_MODE"},
   };
   std::string out;
   for (const auto& e : kEntries) {
@@ -430,18 +494,24 @@ std::string describe_region(std::uint32_t region) {
 
 std::string_view encryption_name(EncryptionType t) noexcept {
   switch (t) {
-    case EncryptionType::None: return "none";
-    case EncryptionType::Normal: return "normal (AES-128-CBC, retail key)";
+    case EncryptionType::None:
+      return "none";
+    case EncryptionType::Normal:
+      return "normal (AES-128-CBC, retail key)";
   }
   return "unknown";
 }
 
 std::string_view compression_name(CompressionType t) noexcept {
   switch (t) {
-    case CompressionType::None: return "none";
-    case CompressionType::Basic: return "basic (zero-run blocks)";
-    case CompressionType::Normal: return "normal (LZX)";
-    case CompressionType::Delta: return "delta (LZX patch)";
+    case CompressionType::None:
+      return "none";
+    case CompressionType::Basic:
+      return "basic (zero-run blocks)";
+    case CompressionType::Normal:
+      return "normal (LZX)";
+    case CompressionType::Delta:
+      return "delta (LZX patch)";
   }
   return "unknown";
 }

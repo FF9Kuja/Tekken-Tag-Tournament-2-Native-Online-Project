@@ -23,8 +23,8 @@ namespace ttt2 {
 }
 
 [[nodiscard]] constexpr std::uint32_t byteswap32(std::uint32_t v) noexcept {
-  return ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) |
-         ((v & 0x00FF0000u) >> 8) | ((v & 0xFF000000u) >> 24);
+  return ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) | ((v & 0x00FF0000u) >> 8) |
+         ((v & 0xFF000000u) >> 24);
 }
 
 [[nodiscard]] constexpr std::uint64_t byteswap64(std::uint64_t v) noexcept {
@@ -38,8 +38,7 @@ template <typename T>
 using unsigned_bits_t =
     std::conditional_t<sizeof(T) == 1, std::uint8_t,
                        std::conditional_t<sizeof(T) == 2, std::uint16_t,
-                                          std::conditional_t<sizeof(T) == 4, std::uint32_t,
-                                                             std::uint64_t>>>;
+                                          std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>>;
 
 template <typename U>
 [[nodiscard]] constexpr U byteswap_unsigned(U v) noexcept {
@@ -59,8 +58,7 @@ template <typename U>
 /// Reverses the byte order of any 1/2/4/8-byte integral or enum value.
 template <typename T>
 [[nodiscard]] constexpr T byteswap(T v) noexcept {
-  static_assert(std::is_integral_v<T> || std::is_enum_v<T>,
-                "byteswap requires an integral or enum type");
+  static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "byteswap requires an integral or enum type");
   static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 || sizeof(T) == 8);
   using U = detail::unsigned_bits_t<T>;
   return std::bit_cast<T>(detail::byteswap_unsigned(std::bit_cast<U>(v)));
@@ -88,7 +86,9 @@ template <typename T>
 // offset) and guest memory.
 // ---------------------------------------------------------------------------
 
-[[nodiscard]] constexpr std::uint8_t load_be8(const std::uint8_t* p) noexcept { return p[0]; }
+[[nodiscard]] constexpr std::uint8_t load_be8(const std::uint8_t* p) noexcept {
+  return p[0];
+}
 
 [[nodiscard]] constexpr std::uint16_t load_be16(const std::uint8_t* p) noexcept {
   return static_cast<std::uint16_t>((static_cast<std::uint16_t>(p[0]) << 8) | p[1]);
@@ -125,8 +125,7 @@ constexpr void store_be64(std::uint8_t* p, std::uint64_t v) noexcept {
 /// The object is trivially copyable and exactly sizeof(T) bytes.
 template <typename T>
 struct be {
-  static_assert(std::is_integral_v<T> || std::is_enum_v<T>,
-                "be<T> requires an integral or enum type");
+  static_assert(std::is_integral_v<T> || std::is_enum_v<T>, "be<T> requires an integral or enum type");
 
   T raw{};  ///< the big-endian bit pattern as stored in memory
 

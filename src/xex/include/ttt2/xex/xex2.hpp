@@ -47,8 +47,7 @@ struct Version {
                    static_cast<std::uint16_t>((v >> 8) & 0xFFFF), static_cast<std::uint8_t>(v & 0xFF)};
   }
   [[nodiscard]] constexpr std::uint32_t to_u32() const noexcept {
-    return (static_cast<std::uint32_t>(major & 0xF) << 28) |
-           (static_cast<std::uint32_t>(minor & 0xF) << 24) |
+    return (static_cast<std::uint32_t>(major & 0xF) << 28) | (static_cast<std::uint32_t>(minor & 0xF) << 24) |
            (static_cast<std::uint32_t>(build) << 8) | qfe;
   }
   [[nodiscard]] std::string to_string() const;  // "0.0.3.2"
@@ -248,8 +247,7 @@ struct ParseOptions {
 };
 
 /// Parses the XEX2 container headers of an in-memory file image.
-[[nodiscard]] Expected<Xex2Image> parse(std::span<const std::uint8_t> file,
-                                        const ParseOptions& options = {});
+[[nodiscard]] Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions& options = {});
 
 /// Reads and parses a file. Only the headers are interpreted; the whole file
 /// is read so callers can hash it afterwards.

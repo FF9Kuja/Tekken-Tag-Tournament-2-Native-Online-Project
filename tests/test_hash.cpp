@@ -8,8 +8,12 @@
 using namespace ttt2::hash;
 
 namespace {
-std::string sha1_hex(std::string_view s) { return to_hex(Sha1::compute(s)); }
-std::string sha256_hex(std::string_view s) { return to_hex(Sha256::compute(s)); }
+std::string sha1_hex(std::string_view s) {
+  return to_hex(Sha1::compute(s));
+}
+std::string sha256_hex(std::string_view s) {
+  return to_hex(Sha256::compute(s));
+}
 }  // namespace
 
 // Test vectors: FIPS 180-4 examples and the NIST "million a" vector.
@@ -50,8 +54,8 @@ TEST_CASE("hex conversion") {
   CHECK(from_hex("00ABff10", out));
   CHECK(out[1] == 0xAB);
   CHECK(out[2] == 0xFF);
-  CHECK_FALSE(from_hex("00abff1", out));   // odd length
-  CHECK_FALSE(from_hex("00abffzz", out));  // bad digit
+  CHECK_FALSE(from_hex("00abff1", out));     // odd length
+  CHECK_FALSE(from_hex("00abffzz", out));    // bad digit
   CHECK_FALSE(from_hex("00abff1000", out));  // too long for the buffer
 }
 

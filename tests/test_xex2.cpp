@@ -3,9 +3,10 @@
 #include <cstdint>
 #include <vector>
 
+#include "xex_builder.hpp"
+
 #include "ttt2/xex/known_titles.hpp"
 #include "ttt2/xex/xex2.hpp"
-#include "xex_builder.hpp"
 
 using namespace ttt2;
 using namespace ttt2::xex;
@@ -22,9 +23,10 @@ std::vector<std::uint8_t> make_title_image() {
   b.add_inline(header_key::kOriginalBaseAddress, 0x82000000u);
   b.add_inline(header_key::kDefaultStackSize, 0x00040000u);
   b.add_inline(header_key::kSystemFlags, 0x00000021u);
-  b.add_struct(header_key::kExecutionInfo,
-               XexBuilder::execution_info(0x12345678u, 0x00000302u, 0x00000002u, 0x4E4D0859u, 1, 1, 0x4E4D0859u));
-  b.add_sized(header_key::kFileFormatInfo, XexBuilder::file_format_basic(1, {{0x1000, 0x0}, {0x2000, 0x3000}}));
+  b.add_struct(header_key::kExecutionInfo, XexBuilder::execution_info(0x12345678u, 0x00000302u, 0x00000002u,
+                                                                      0x4E4D0859u, 1, 1, 0x4E4D0859u));
+  b.add_sized(header_key::kFileFormatInfo,
+              XexBuilder::file_format_basic(1, {{0x1000, 0x0}, {0x2000, 0x3000}}));
   b.add_sized(header_key::kOriginalPeName, XexBuilder::sized_string("tekken.exe"));
   b.add_sized(header_key::kImportLibraries,
               XexBuilder::import_libraries({{"xboxkrnl.exe", 0, 0x00000302u, 0x00000301u, 3},
@@ -151,12 +153,12 @@ TEST_CASE("parses a synthetic title executable") {
 
 TEST_CASE("parses a synthetic delta patch (.xexp)") {
   XexBuilder b;
-  b.set_module_flags(0x10 | 0x40);  // MODULE_PATCH | PATCH_DELTA
+  b.set_module_flags(0x10 | 0x40);              // MODULE_PATCH | PATCH_DELTA
   std::vector<std::uint8_t> desc(0x4C - 4, 0);  // body without the size prefix
   store_be32(desc.data() + 0x0, 0x00000302u);   // target 0.0.3.2
   store_be32(desc.data() + 0x4, 0x00000002u);   // source 0.0.0.2
   for (int i = 0; i < 0x14; ++i) desc[0x8 + static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(i);
-  store_be32(desc.data() + 0x2C, 0x1000);       // size of target headers
+  store_be32(desc.data() + 0x2C, 0x1000);  // size of target headers
   b.add_sized(header_key::kDeltaPatchDescriptor, desc);
   b.add_struct(header_key::kExecutionInfo,
                XexBuilder::execution_info(0, 0x00000302u, 0x00000002u, 0x4E4D0859u, 1, 1, 0));
@@ -202,7 +204,8 @@ TEST_CASE("implausible header counts and out-of-range offsets are handled") {
   // Point the execution info header at an impossible offset: must warn, not crash.
   for (std::size_t i = 0; i < 12; ++i) {
     const std::size_t e = 0x18 + i * 8;
-    if (load_be32(image.data() + e) == header_key::kExecutionInfo) store_be32(image.data() + e + 4, 0xFFFFFF00u);
+    if (load_be32(image.data() + e) == header_key::kExecutionInfo)
+      store_be32(image.data() + e + 4, 0xFFFFFF00u);
   }
   const auto result = parse(image);
   REQUIRE(result.has_value());
@@ -242,7 +245,8 @@ TEST_CASE("every truncation of a valid image is handled without crashing") {
 
 TEST_CASE("known executable lookup") {
   CHECK(match_known_executable("a942090b7c293d0ce63346ed8a2974448135d0dd", "") != nullptr);
-  CHECK(match_known_executable("", "ee138a4fe8d32a0edc131451377f4377041a49626153fa992db24f5420a7f15c") != nullptr);
+  CHECK(match_known_executable("", "ee138a4fe8d32a0edc131451377f4377041a49626153fa992db24f5420a7f15c") !=
+        nullptr);
   CHECK(match_known_executable("", "") == nullptr);
   CHECK(match_known_executable("0000000000000000000000000000000000000000", "") == nullptr);
   CHECK(known_title_name(0x4E4D07FCu) == std::string_view("Tekken 6"));

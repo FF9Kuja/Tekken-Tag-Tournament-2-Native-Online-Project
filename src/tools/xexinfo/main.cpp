@@ -44,9 +44,15 @@ std::string json_escape(std::string_view s) {
   std::string out;
   for (const char c : s) {
     switch (c) {
-      case '"': out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\n': out += "\\n"; break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
@@ -69,10 +75,11 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
                 const Hashes* hashes) {
   using namespace ttt2::xex;
   std::printf("File:               %s (%zu bytes)\n", opt.path.c_str(), file_size);
-  std::printf("Module flags:       0x%08X  %s\n", img.module_flags, describe_module_flags(img.module_flags).c_str());
+  std::printf("Module flags:       0x%08X  %s\n", img.module_flags,
+              describe_module_flags(img.module_flags).c_str());
   std::printf("Kind:               %s\n", img.is_delta_patch() ? "title update (delta patch, .xexp)"
-                                           : img.is_patch()    ? "patch module"
-                                           : img.is_dll()      ? "DLL module"
+                                          : img.is_patch()     ? "patch module"
+                                          : img.is_dll()       ? "DLL module"
                                                                : "title executable");
   std::printf("Header size:        0x%08X (basefile starts here)\n", img.header_size);
   if (img.execution_info) {
@@ -181,7 +188,8 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
   }
   if (img.entry_point) std::printf("  \"entry_point\": \"%s\",\n", hex8(*img.entry_point).c_str());
   if (img.image_base) std::printf("  \"image_base\": \"%s\",\n", hex8(*img.image_base).c_str());
-  if (img.original_pe_name) std::printf("  \"original_pe_name\": \"%s\",\n", json_escape(*img.original_pe_name).c_str());
+  if (img.original_pe_name)
+    std::printf("  \"original_pe_name\": \"%s\",\n", json_escape(*img.original_pe_name).c_str());
   if (img.file_format) {
     std::printf("  \"encryption\": %u,\n  \"compression\": %u,\n",
                 static_cast<unsigned>(img.file_format->encryption),

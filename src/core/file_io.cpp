@@ -5,8 +5,7 @@
 
 namespace ttt2 {
 
-Expected<std::vector<std::uint8_t>> read_file(const std::filesystem::path& path,
-                                              std::uint64_t max_bytes) {
+Expected<std::vector<std::uint8_t>> read_file(const std::filesystem::path& path, std::uint64_t max_bytes) {
   std::error_code ec;
   if (!std::filesystem::is_regular_file(path, ec)) {
     return make_error("not a regular file: " + path.string());
