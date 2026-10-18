@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**", "feature/**", "dev/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hygiene:
+    name: Repository hygiene (no game content, no secrets)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_repo_hygiene.py
+
+  linux:
+    name: Linux ${{ matrix.compiler }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: clang
+            preset: linux-clang
+          - compiler: gcc
+            preset: linux-gcc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang g++ cmake
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DTTT2_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Tool smoke test
+        run: ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo --version
+
+  windows-msvc:
+    name: Windows MSVC (VS 2022)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset windows-msvc
+      - name: Build
+        run: cmake --build --preset windows-msvc
+      - name: Test
+        run: ctest --preset windows-msvc
+      - name: Tool smoke test
+        run: .\out\build\windows-msvc\bin\Release\ttt2-xexinfo.exe --version
+
+  windows-clang-cl:
+    name: Windows clang-cl (Ninja)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset windows-clang-cl
+      - name: Build
+        run: cmake --build --preset windows-clang-cl
+      - name: Test
+        run: ctest --preset windows-clang-cl

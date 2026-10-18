@@ -133,3 +133,6 @@ venv/
 *~
 .DS_Store
 Thumbs.db
+
+# doctest header: downloaded at configure time (third_party/doctest/CMakeLists.txt); a local copy is allowed but not committed
+third_party/doctest/doctest.h

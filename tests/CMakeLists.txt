@@ -1,0 +1,17 @@
+add_executable(ttt2_tests
+    test_main.cpp
+    test_endian.cpp
+    test_hash.cpp
+    test_xex2.cpp
+)
+target_link_libraries(ttt2_tests PRIVATE ttt2::core ttt2::xex doctest::doctest)
+target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+ttt2_apply_warnings(ttt2_tests)
+
+add_test(NAME ttt2_unit_tests COMMAND ttt2_tests --reporters=console --no-intro)
+
+# Smoke test of the tool: it must refuse a non-XEX file with exit code 1 and
+# print its version with exit code 0.
+add_test(NAME xexinfo_version COMMAND ttt2-xexinfo --version)
+add_test(NAME xexinfo_rejects_non_xex COMMAND ttt2-xexinfo "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
+set_tests_properties(xexinfo_rejects_non_xex PROPERTIES WILL_FAIL TRUE)
