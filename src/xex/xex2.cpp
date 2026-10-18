@@ -49,6 +49,11 @@ std::vector<std::string> split_string_table(const ByteReader& r, std::size_t off
 
 void parse_security_info(const ByteReader& r, Xex2Image& img, const ParseOptions& options) {
   const std::size_t off = img.security_offset;
+  if (off < kHeaderSize || off >= img.header_size) {
+    img.warnings.push_back("security info offset 0x" + hex32(img.security_offset) +
+                           " is not inside the header area");
+    return;
+  }
   if (!r.in_bounds(off, kSecurityInfoSize)) {
     img.warnings.push_back("security info at offset 0x" + hex32(img.security_offset) +
                            " is outside the file");

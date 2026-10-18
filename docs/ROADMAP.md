@@ -17,7 +17,7 @@ steps that cannot run in the Linux development container. Status legend: done / 
 * [x] CMake 3.25 project with presets for Linux (clang, gcc) and Windows (MSVC, clang-cl).
 * [x] Native C++ libraries `ttt2_core` (endian, bounds-checked reader, SHA-1/SHA-256, FNV-1a) and `ttt2_xex`
       (XEX2 header parser, known-title data) and the `ttt2-xexinfo` tool.
-* [x] Unit tests (doctest): 16 cases / 274 assertions, passing with Clang 18 and GCC 13 under `-Werror`.
+* [x] Unit tests (doctest): 17 cases / 279 assertions, passing with Clang 18 and GCC 13 under `-Werror`.
 * [x] Reproducible scripts (`scripts/build.sh`, `build.ps1`, `setup-ubuntu.sh`).
 * [x] GitHub Actions: hygiene + Linux clang/gcc + Windows MSVC/clang-cl (Windows jobs validated only when the
       workflow first runs on GitHub - see `docs/STATUS.md`).

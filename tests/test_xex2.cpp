@@ -210,6 +210,19 @@ TEST_CASE("implausible header counts and out-of-range offsets are handled") {
   CHECK_FALSE(result->warnings.empty());
 }
 
+TEST_CASE("a security offset outside the header area is reported, not parsed") {
+  auto image = make_title_image();
+  store_be32(image.data() + 0x10, 0);  // security offset 0: would alias the file header
+  auto result = parse(image);
+  REQUIRE(result.has_value());
+  CHECK_FALSE(result->security.has_value());
+  CHECK_FALSE(result->warnings.empty());
+  store_be32(image.data() + 0x10, 0x7FFFFFF0u);  // far outside the file
+  result = parse(image);
+  REQUIRE(result.has_value());
+  CHECK_FALSE(result->security.has_value());
+}
+
 TEST_CASE("every truncation of a valid image is handled without crashing") {
   const auto image = make_title_image();
   for (std::size_t len = 0; len < image.size(); len += 7) {

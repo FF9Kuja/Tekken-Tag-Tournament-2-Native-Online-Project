@@ -11,8 +11,8 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   hygiene check, CI workflow.
 
 **Verified (where)**
-* Linux container (Ubuntu 24.04): Clang 18 and GCC 13 builds with `-Werror`; `ctest`: 3/3 tests (16 doctest cases,
-  274 assertions) pass; `ttt2-xexinfo` parses a synthetic XEX2 image and a synthetic `.xexp`; the hygiene checker
+* Linux container (Ubuntu 24.04): Clang 18 and GCC 13 builds with `-Werror`; `ctest`: 3/3 tests (17 doctest cases,
+  279 assertions) pass; `ttt2-xexinfo` parses a synthetic XEX2 image and a synthetic `.xexp`; the hygiene checker
   flags a synthetic XEX and passes the tree.
 * XenonRecomp + XenonAnalyse (MIT, commit `ddd128b`) build on Linux with Clang 18.
 * Clang 18 emits 32-bit big-endian PowerPC ELF (`--target=powerpc-unknown-linux-gnu`, LLD `elf32ppc`).
@@ -24,9 +24,14 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Hashes in `known_titles.hpp` are reported by other projects, not reproduced.
 
 **Blocked / pending**
-* ReXGlue `rexglue` tool build on Linux: configure needed GTK3, Xss and XCB dev packages (installed); the build
-  result is recorded below when finished. If it fails, Milestone 3 starts by fixing the Linux build or using the
-  SDK's published Linux binaries.
+* **Pushing to GitHub is blocked**: both `git push` (through the session's proxy) and the GitHub API return 403
+  because the Claude GitHub App is not installed on this repository. The commits exist locally and in a git bundle
+  handed to the owner. Fix: install the app on the repository (https://github.com/apps/claude/installations/select_target)
+  or reconnect GitHub (https://claude.ai/connect-github); then the branches are pushed and the pull request opened.
+* ReXGlue `rexglue` tool build on Linux: three attempts, each fixing one requirement - (1) SDL3 needed the X11
+  screensaver/XCB/GTK3 development packages; (2) the SDK core needs `-mssse3`; (3) `rex/result.h` uses
+  `std::expected`, which libstdc++ 13 withholds from Clang 18 (`__cpp_concepts 201907L`), so Clang 20 is required
+  as the wiki says. The fourth attempt (Clang 20) is recorded under "ReXGlue build result" below.
 * Repository license: owner decision (MIT recommended, `docs/LEGAL.md`).
 * Everything past Milestone 2 needs the owner's Windows PC and game files for validation.
 

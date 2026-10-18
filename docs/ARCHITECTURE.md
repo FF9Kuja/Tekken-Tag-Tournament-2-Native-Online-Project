@@ -152,7 +152,7 @@ cmake/                              warning policy, version header              
 src/core/                           endian, bounds-checked reader, SHA-1/SHA-256, file I/O  [implemented]
 src/xex/                            XEX2 header parser, known titles                        [implemented]
 src/tools/xexinfo/                  ttt2-xexinfo CLI                                        [implemented]
-tests/                              doctest unit tests (274 assertions)                     [implemented]
+tests/                              doctest unit tests (279 assertions)                     [implemented]
 third_party/doctest/                test framework (MIT), header fetched at configure time    [implemented]
 scripts/                            build/test scripts, hygiene check, git hook             [implemented]
 .github/workflows/ci.yml            Linux (clang, gcc) + Windows (MSVC, clang-cl) CI        [implemented]

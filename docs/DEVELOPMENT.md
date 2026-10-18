@@ -57,13 +57,24 @@ clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also sm
 
 ## Working with the ReXGlue SDK on Linux (Milestone 3 preview)
 
-What was needed in this session to configure the SDK on Ubuntu 24.04 (beyond the compilers): `libgtk-3-dev`,
-`libxss-dev` (or `-DSDL_X11_XSCRNSAVER=OFF`), `libx11-xcb-dev` and the XCB/Xinput/Xrandr dev packages, plus the
-usual SDL3 audio/Wayland dev packages and `nasm` for FFmpeg. The codegen-only target is `rexglue`:
+Measured in the first session on Ubuntu 24.04 (the SDK wiki is right: **Clang 20** is needed on Linux - Clang 18
+reports `__cpp_concepts 201907L`, so libstdc++ 13 hides `std::expected`, which `rex/result.h` uses). The SDK's
+core also needs SSSE3 enabled (`-mssse3`; the tekken6-recomp README passes the same flag).
 
 ```sh
+sudo apt-get install -y clang-20 lld-20 libclang-rt-20-dev cmake ninja-build nasm \
+    libgtk-3-dev libxss-dev libx11-xcb-dev libxcb1-dev libxcb-randr0-dev libxcb-xfixes0-dev \
+    libxcb-shape0-dev libxcb-xkb-dev libxcb-icccm4-dev libxcb-keysyms1-dev libxcb-cursor-dev \
+    libxkbcommon-x11-dev libxcb-util-dev libxcb-image0-dev libxcb-render-util0-dev libxcb-xinerama0-dev \
+    libxcb-present-dev libxcb-dri3-dev libxcb-sync-dev libxcb-glx0-dev libxcb-shm0-dev libxcb-xinput-dev \
+    libxinerama-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libpulse-dev libwayland-dev \
+    libdecor-0-dev libxkbcommon-dev libdrm-dev libgbm-dev libibus-1.0-dev libudev-dev libegl1-mesa-dev \
+    libgl1-mesa-dev libdbus-1-dev
 git clone --recursive https://github.com/rexglue/rexglue-sdk   # pin the commit from docs/DEPENDENCIES.md
-cmake -S rexglue-sdk -B build/sdk -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-      -DCMAKE_BUILD_TYPE=Release -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=OFF
-cmake --build build/sdk --target rexglue --parallel
+cmake -S rexglue-sdk -B build/sdk -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-mssse3 -DCMAKE_CXX_FLAGS=-mssse3 \
+      -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_ENABLE_PERF_COUNTERS=OFF -DSDL_X11_XSCRNSAVER=OFF
+cmake --build build/sdk --target rexglue --parallel        # the codegen tool only
 ```
+
+The result of this build in the first session is recorded in `docs/STATUS.md`.
