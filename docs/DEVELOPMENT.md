@@ -80,6 +80,10 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   because SDK 0.10.0's own detector misses offset tables and picks wrong registers (`docs/RESEARCH.md` 8a).
 * `scripts/check_instruction_coverage.py [--expect-missing 2]` - compares `recomp/ttt2_instructions.txt` with
   the SDK's instruction builders.
+* `recomp/tools/import_ttt2web_functions.py <TTT2.toml> --out recomp/ttt2_functions.ttt2web.toml` - converts
+  TTT2 Web's (CC0) explicit function boundaries into ReXGlue's `[functions]` table; `recomp/ttt2_manifest.ttt2web.toml`
+  includes the result and is only for images whose helper addresses match TTT2 Web's published set
+  (`ttt2-xexinfo --helpers`). Unit-tested in `tests/python`.
 * `scripts/make-ppc-test-xex.sh <source.c|.s> <out.xex>` - builds a license-free PowerPC test program and packs
   it as an XEX2 image (assembly through the SDK's bundled binutils); writes `<out.xex>.syms`.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
