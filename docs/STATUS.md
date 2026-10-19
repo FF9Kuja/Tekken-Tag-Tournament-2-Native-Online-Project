@@ -123,27 +123,41 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `rexglue.exe` is uploaded even when the smoke test fails.
 
 **Verified (where)**
-* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green
-  (details above).
-* Linux container: 52 doctest cases / 612 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
-  Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
-  against the package.
-* Windows: CI jobs (tools) green. The ReXGlue Windows workflow: the first run on `main` failed at the SDK
-  checkout (long paths); after the fix, on the PR branch, **`rexglue.exe` built on the Windows runner in 4.5
-  minutes and was uploaded as an artifact** (LLVM 20.1.8 from Chocolatey); its smoke test then failed on the
-  empty-argument bug above, fixed here.
+* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green.
+* PR #3 (merged as `3a90395`): CI 10/10 on `138a4f6`; SDK validation run 39216946123 (five smoke cases incl.
+  the native runs of the switch-table and kernel-import programs, SDK package install, host build); Windows run
+  39216950997 (`rexglue.exe`, assembly cases with the SDK's Cygwin binutils, **native execution on Windows**,
+  `ttt2.exe` built against the installed SDK). The Windows workflow also ran green on `main` after the merge
+  (run 39218860764).
+* PR #4 branch: CI green on every head; SDK validation run 39219293142 (`d064da8`) green with the host boot
+  test under Xvfb; Windows run 39219295783 (`d064da8`, `build_host`): **`ttt2.exe` booted on the Windows
+  runner** on the kernel-import image and passed every boot-test check (`rexgpu-xenos.dll` staged).
+* Linux container: 52 doctest cases / 612 assertions, 15 ctest entries (new: `stfs_extract_all_synthetic`),
+  17 Python unit tests, Clang 18 and GCC 13 `-Werror`; the real host booted, crashed on purpose and exited on
+  purpose as described above; finder -> codegen -> host -> boot verified after the manifest change.
 
 **Not verified / open**
-* `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of
-  `rexglue-windows.yml` with `native_run` and `build_host`).
-* The crash reporter and the stall detector are compile-checked against the SDK (Linux host build) but have not
-  fired: only a real boot exercises them.
-* On Linux the host binary needs `librexruntime.so` next to it or on the library path (RPATH is `$ORIGIN`); on
-  Windows `rexglue_configure_target` copies the runtime DLLs next to the executable.
+* The stall detector has not fired yet (no program here stalls); the crash reporter has (illegal-instruction
+  case). The GPU plugin loads only when a GPU is present: never exercised in CI (no GPU; the boot test runs with
+  `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
+* `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the
+  count and the codegen report) comes with the owner's first run.
+* The owner pipeline's PowerShell 5.1 dry run in CI (`fc4e0b5`) and the dispatched SDK / Windows runs on
+  `3551f34` were still in progress when this was written; see PR #4 for their result.
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**
-* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4).
+* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4): the whole owner path is now
+  one command (`scripts\owner-pipeline.ps1 ... -Codegen -BuildHost -InstallSdk -ExtractGame`, checklist step 6),
+  followed by `recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game` and the triage tool
+  on the log.
+
+**Next task (resumable state)**
+* Merge PR #4 once its runs are green, restart the branch from `main`, then iterate on the owner's first-boot
+  report: implement each stub the triage report lists as a host override (TTT2 Web's reference is given per
+  stub), fix what the HOST CRASH block or the stall dump points at, repeat. Until the report arrives, the
+  remaining preparatory work is small: the Windows workflow could run `--expect-crash` too, and the stall
+  detector could be exercised by a license-free program that waits on an event forever.
 
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 
