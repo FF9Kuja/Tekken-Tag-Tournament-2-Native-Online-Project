@@ -190,7 +190,10 @@ same input and no raw key timing leaks into determinism. The input hook describe
 ## 5. Implementation order (after the game boots)
 
 1. `recomp/src/input/`: binding parser, profile load/save (default embedded), opposite-input policies, latch,
-   macro expansion: pure code with doctest unit tests (no game, no window).
+   macro expansion: pure code with doctest unit tests (no game, no window). **Done** (`input_core.{h,cpp}`,
+   `tests/test_input_core.cpp`): `Profile` / `DefaultProfile()` / `Serialize` / `Parse` / `FindConflicts` and
+   `KeyboardPad` (`KeyDown` / `KeyUp` / `Poll` -> `PadState`, `last_input()` -> `PlayerInput`, latency
+   statistics). The SDK-free core is compiled into the host but not yet driven by it.
 2. `KeyboardPadDriver` and the device assignment on the SDK's `InputDriver` interface; the host's
    `input_factory`; a license-free guest program that polls `XamInputGetState` and stores the button word, run in
    the headless harness with injected key events, so the whole path is tested in CI before the game.

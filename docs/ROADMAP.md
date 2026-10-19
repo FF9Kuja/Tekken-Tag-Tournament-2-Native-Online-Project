@@ -104,9 +104,11 @@ option (original 2-frame FIFO on/off, as TTT2Recomp offers); save data; resoluti
 offline, verified by the owner's test matrix.
 
 Input (requirements and design: `docs/INPUT.md`, ADR 0003; native execution in Milestones 3-4 keeps priority):
-1. [ ] `recomp/src/input/` core: binding parser, TOML profiles (default `tekken8-numpad`: WASD, Numpad 4/5/1/2 for
+1. [x] `recomp/src/input/` core: binding parser, TOML profiles (default `tekken8-numpad`: WASD, Numpad 4/5/1/2 for
    1/2/3/4, Numpad 6 = 1+2, Numpad 3 = 3+4, Tag = Numpad 8, B = Start, V = Back), opposite-direction policies
-   (neutral default), press latch, macro keys; doctest unit tests, no game needed.
+   (neutral default), press latch, macro keys, layout translation, `PlayerInput` word, latency statistics; 12
+   doctest cases (136 assertions) in the first-party CI on Linux and Windows, compiled into the host as well.
+   Not yet wired to the SDK: the game cannot use it until step 2.
 2. [ ] `KeyboardPadDriver` + device assignment on the SDK's `InputDriver` interface, installed by the host's
    `input_factory` next to the SDL3/XInput pad drivers; license-free guest program polling `XamInputGetState` in the
    headless harness with injected key events (CI).

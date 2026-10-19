@@ -41,6 +41,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `InputSystem`, TOML profiles in Tekken terms, neutral opposite-direction default, press latch, macro keys,
   `PlayerInput` words for the netcode); ADR 0003 records the decision; ROADMAP Milestone 5 lists the steps in
   order. Native game execution keeps priority; no input code was written yet.
+* **Input core, Milestone 5 step 1** (`recomp/src/input/input_core.{h,cpp}`, SDK-free): the owner's default
+  profile with Tag on Numpad 8, profile files (TOML subset, serialize/parse with line-numbered errors), key
+  conflicts, and `KeyboardPad`: presses latched between polls (a tap between two polls is reported once),
+  opposite-direction policies (neutral default; last input, first input, up/down priority), macro keys pressing
+  both limb buttons, the layout table to pad bits, `PlayerInput` words and press-age statistics. 12 doctest cases
+  / 136 assertions, compiled into the host too. Not wired to the SDK yet (step 2), so the game cannot read it.
 * Kernel-surface check repeated against a fresh TTT2 Web checkout (`4d6dd61`): its 135 `GUEST_IMPORT` functions
   (a macro parameter had been counted as a 136th name; `recomp/tools/ttt2web_kernel_functions.txt` fixed) are all
   implemented (130) or stubbed (5, overridden) by the pinned runtime, and the seven kernel variable imports its
@@ -60,6 +66,8 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   30-60 minute SDK build (`docs/DEPENDENCIES.md` records the artifact's contents and licences).
 
 **Verified (where)**
+* Input core: clang 18 and GCC 13 `-Werror` builds, 64 doctest cases / 749 assertions in all (12 / 136 new); the
+  host compiled the same source against the installed SDK package.
 * Linux container, PowerShell 7.4.6 under Xvfb, the real host built against the installed SDK package:
   kernel-import image -> "Ended: by itself; exit code 0; 0.2 s", log copied, triage "clean exit", script exit 0;
   stall image with `TTT2_WATCHDOG_MS=1000 -TimeoutSeconds 8` -> "still running after 8 s; sending the close

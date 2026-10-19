@@ -16,6 +16,7 @@ set(TTT2_SOURCES
     src/ttt2_app.cpp
     src/stub_counter.cpp
     src/kernel_overrides.cpp
+    src/input/input_core.cpp
 )
 
 if(WIN32)
