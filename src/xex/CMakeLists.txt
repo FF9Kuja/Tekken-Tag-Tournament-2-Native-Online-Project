@@ -2,6 +2,7 @@
 
 add_library(ttt2_xex STATIC
     xex2.cpp
+    basefile.cpp
 )
 add_library(ttt2::xex ALIAS ttt2_xex)
 

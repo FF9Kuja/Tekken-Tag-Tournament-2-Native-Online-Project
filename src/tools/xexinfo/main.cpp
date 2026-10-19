@@ -14,6 +14,7 @@
 #include "ttt2/core/format.hpp"
 #include "ttt2/core/hash.hpp"
 #include "ttt2/core/project_version.hpp"
+#include "ttt2/xex/basefile.hpp"
 #include "ttt2/xex/known_titles.hpp"
 #include "ttt2/xex/xex2.hpp"
 
@@ -24,15 +25,17 @@ struct Options {
   bool json = false;
   bool hash = true;
   bool headers = false;
+  bool image_hash = false;  // decrypt + decompress the basefile in memory and hash it
 };
 
 void print_usage() {
   std::fprintf(stderr,
-               "usage: ttt2-xexinfo <file.xex|file.xexp> [--json] [--no-hash] [--headers]\n"
+               "usage: ttt2-xexinfo <file.xex|file.xexp> [--json] [--no-hash] [--headers] [--image-hash]\n"
                "       ttt2-xexinfo --version\n\n"
                "Reads the plaintext XEX2 container headers of an Xbox 360 executable and\n"
                "reports title ID, version, media ID, imports and encryption/compression.\n"
-               "Nothing is decrypted; no game data is written anywhere.\n");
+               "--image-hash decrypts and decompresses the executable image in memory (retail key) and\n"
+               "prints its hashes; nothing is written to disk.\n");
 }
 
 std::string json_escape(std::string_view s) {
@@ -66,6 +69,9 @@ std::string json_escape(std::string_view s) {
 struct Hashes {
   std::string sha1;
   std::string sha256;
+  std::string image_sha1;  // of the decrypted + decompressed image (--image-hash)
+  std::string image_sha256;
+  std::string image_note;  // "PE image, N bytes" or the reason it could not be produced
 };
 
 void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t file_size,
@@ -157,6 +163,14 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
       std::printf("Matches:            %s\n", std::string(known->description).c_str());
       std::printf("                    (%s)\n", std::string(known->provenance).c_str());
     }
+    if (!hashes->image_note.empty()) std::printf("Image:              %s\n", hashes->image_note.c_str());
+    if (!hashes->image_sha1.empty()) {
+      std::printf("Image SHA-1:        %s\n", hashes->image_sha1.c_str());
+      std::printf("Image SHA-256:      %s\n", hashes->image_sha256.c_str());
+      if (const auto* known = match_known_executable(hashes->image_sha1, hashes->image_sha256)) {
+        std::printf("Image matches:      %s\n", std::string(known->description).c_str());
+      }
+    }
   }
   for (const auto& w : img.warnings) std::printf("Warning:            %s\n", w.c_str());
 }
@@ -210,6 +224,12 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     const auto* known = match_known_executable(hashes->sha1, hashes->sha256);
     std::printf("  \"known_match\": %s,\n",
                 known ? ("\"" + json_escape(known->description) + "\"").c_str() : "null");
+    if (!hashes->image_sha1.empty()) {
+      std::printf("  \"image_sha1\": \"%s\",\n  \"image_sha256\": \"%s\",\n", hashes->image_sha1.c_str(),
+                  hashes->image_sha256.c_str());
+    }
+    if (!hashes->image_note.empty())
+      std::printf("  \"image_note\": \"%s\",\n", json_escape(hashes->image_note).c_str());
   }
   std::printf("  \"warnings\": [");
   for (std::size_t i = 0; i < img.warnings.size(); ++i) {
@@ -230,6 +250,8 @@ int main(int argc, char** argv) {
       opt.hash = false;
     } else if (a == "--headers") {
       opt.headers = true;
+    } else if (a == "--image-hash") {
+      opt.image_hash = true;
     } else if (a == "--version") {
       std::printf("ttt2-xexinfo %s (%s)\n", ttt2::kProjectVersion, ttt2::kProjectGitDescribe);
       return 0;
@@ -267,6 +289,20 @@ int main(int argc, char** argv) {
   if (opt.hash) {
     hashes.sha1 = ttt2::hash::to_hex(ttt2::hash::Sha1::compute(data.value()));
     hashes.sha256 = ttt2::hash::to_hex(ttt2::hash::Sha256::compute(data.value()));
+  }
+  if (opt.image_hash) {
+    opt.hash = true;
+    auto image = ttt2::xex::load_basefile(parsed.value(), data.value());
+    if (!image) {
+      hashes.image_note = "not produced: " + image.error().message;
+    } else {
+      hashes.image_sha1 = ttt2::hash::to_hex(ttt2::hash::Sha1::compute(image.value()));
+      hashes.image_sha256 = ttt2::hash::to_hex(ttt2::hash::Sha256::compute(image.value()));
+      hashes.image_note =
+          (ttt2::xex::looks_like_pe_image(image.value()) ? "PE image, "
+                                                         : "NOT a PE image (wrong key or damaged file), ") +
+          std::to_string(image->size()) + " bytes";
+    }
   }
   if (opt.json) {
     print_json(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr);

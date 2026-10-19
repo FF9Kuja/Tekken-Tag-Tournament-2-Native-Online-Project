@@ -2,10 +2,12 @@
 # No dependencies beyond the C++ standard library.
 
 add_library(ttt2_core STATIC
+    aes.cpp
     sha1.cpp
     sha256.cpp
     hex.cpp
     file_io.cpp
+    byte_source.cpp
 )
 add_library(ttt2::core ALIAS ttt2_core)
 

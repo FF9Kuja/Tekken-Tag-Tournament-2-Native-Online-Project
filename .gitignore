@@ -139,3 +139,6 @@ Thumbs.db
 
 # doctest header: downloaded at configure time (third_party/doctest/CMakeLists.txt); a local copy is allowed but not committed
 third_party/doctest/doctest.h
+
+# ReXGlue SDK checkout (fetched by scripts/fetch-rexglue-sdk.sh)
+third_party/rexglue-sdk/src/

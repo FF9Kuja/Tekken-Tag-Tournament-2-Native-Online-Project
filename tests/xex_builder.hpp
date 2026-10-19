@@ -166,7 +166,8 @@ class XexBuilder {
 
   static std::vector<std::uint8_t> security_info(
       std::uint32_t image_size, std::uint32_t image_flags, std::uint32_t load_address, std::uint32_t region,
-      std::uint32_t media_types, const std::vector<std::pair<std::uint32_t, std::uint32_t>>& pages) {
+      std::uint32_t media_types, const std::vector<std::pair<std::uint32_t, std::uint32_t>>& pages,
+      const std::uint8_t* file_key = nullptr) {
     std::vector<std::uint8_t> s(0x184 + pages.size() * 0x18, 0);
     store_be32(s.data() + 0x000, static_cast<std::uint32_t>(s.size()));
     store_be32(s.data() + 0x004, image_size);
@@ -177,7 +178,11 @@ class XexBuilder {
     store_be32(s.data() + 0x128, 2);
     std::memset(s.data() + 0x12C, 0x33, 0x14);  // import table digest
     std::memset(s.data() + 0x140, 0x44, 0x10);  // xgd2 media id
-    std::memset(s.data() + 0x150, 0x55, 0x10);  // file key
+    if (file_key) {
+      std::memcpy(s.data() + 0x150, file_key, 0x10);
+    } else {
+      std::memset(s.data() + 0x150, 0x55, 0x10);  // file key
+    }
     store_be32(s.data() + 0x160, 0);
     std::memset(s.data() + 0x164, 0x66, 0x14);  // header digest
     store_be32(s.data() + 0x178, region);

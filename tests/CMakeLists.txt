@@ -2,7 +2,9 @@ add_executable(ttt2_tests
     test_main.cpp
     test_endian.cpp
     test_hash.cpp
+    test_aes.cpp
     test_xex2.cpp
+    test_basefile.cpp
 )
 target_link_libraries(ttt2_tests PRIVATE ttt2::core ttt2::xex doctest::doctest)
 target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
