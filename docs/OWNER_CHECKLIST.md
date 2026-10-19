@@ -18,9 +18,9 @@ whether the ReXGlue runtime implements, stubs or lacks it):
 
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
-# or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically
-# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result, and
-# -BuildHost -InstallSdk -ExtractGame to build and prepare the native host (step 6)
+# or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically.
+# The whole path to the first boot, with the SDK package downloaded and unzipped to D:\rexglue-sdk (step 6):
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
 ```
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
