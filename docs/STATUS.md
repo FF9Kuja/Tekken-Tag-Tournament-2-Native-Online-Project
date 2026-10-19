@@ -58,15 +58,17 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `Start-Process` ended the host with exit 0 in 8.3 s; Windows run 39232181325 (`42bd2b3`) green: the package
   relocated, the licence bundle added (23 components with licence files at that commit; 54 MB unpacked, 13.5 MB
   as the `rexglue-sdk-install-win-amd64` artifact), `ttt2.exe` built from the moved copy, every boot form passing.
-  The Windows workflow on `main` after the PR #6 merge (run 39230244565, `5acfb19`) was green too.
+  The Windows workflow on `main` after the PR #6 merge (run 39230244565, `5acfb19`) was green too. Windows run
+  39234438770 (`15e09bd`) green with the completed licence bundle: 25 entries (the SDK's own, 23 components'
+  files incl. `crypto/des` and `libmspack` one level down, and `NOTICES.txt` naming the nine header-only
+  components whose licence text lives in their sources: disasm, disruptorplus, dxbc, dxc, ffmpeg-overlay, pe,
+  renderdoc, stb, tiny-aes-c).
 
 **Not verified / open**
 * `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
   `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
 * A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
-  link (same MSVC ABI) but is unverified until the owner's run; the artifact's NOTICES.txt (components whose
-  licence text lives in their source headers) is produced by the step added after run 39232181325 and is
-  checked by the next Windows run.
+  link (same MSVC ABI) but is unverified until the owner's run.
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**
