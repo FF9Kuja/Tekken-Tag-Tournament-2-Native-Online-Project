@@ -77,7 +77,8 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    (implemented / stub / missing; `ttt2-xexinfo --imports`, `ttt2-validate`, `scripts/gen_runtime_exports.py`);
    the SDK's stubs log `<name> STUB` at warn level, which is the import trace. [x] stub-call counter in
    `Ttt2App` and the headless harness (`recomp/src/stub_counter.*`: which stubbed system calls the game reaches,
-   how often, logged on watchdog ticks and in full at exit). [x] stall detector (per-thread dump when the census
+   how often, logged on watchdog ticks and in full at exit). Prediction from TTT2 Web's 136-function runtime:
+   130 implemented in ReXGlue, 5 XAM UI/stats stubs (`docs/RESEARCH.md` 8a). [x] stall detector (per-thread dump when the census
    and the stub total stay unchanged for three watchdog ticks) and a host crash report (fault kind, host PC,
    fault address, guest thread, most recent stub calls) - compile-checked against the SDK, exercised only by a
    real boot.

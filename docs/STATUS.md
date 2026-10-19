@@ -40,6 +40,10 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   "Layout vs TTT2 Web: N of 8 helper addresses match", and only a full match makes the boundaries applicable;
   `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
   the variant codegen as a second pass only on a match (both reports are written for comparison).
+* **Predicted kernel coverage for TTT2** (`docs/RESEARCH.md` 8a): TTT2 Web, playable natively on its own CC0
+  runtime, implements 136 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
+  stats calls). The runtime-export generator now counts `REX_HOOK_RAW` hooks (11, e.g. `DbgPrint`) as
+  implemented, which it had classified as missing.
 * Two findings from the first CI runs of the host-build route, fixed and reproduced locally: on a fresh tree the
   SDK's generated CMake glue only picks the recompiled sources up when `generated/default` exists at configure
   time (the link failed with an undefined `PPCImageConfig`), so `build-host.ps1` and the SDK workflow run
@@ -130,7 +134,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   Title Update 3 package found") and the files written to `--work`. New `--no-patch` option keeps the runs
   identical with and without the Clang-only patcher.
 * **Runtime import coverage**: `scripts/gen_runtime_exports.py` reads the SDK's export declarations into
-  `src/xex/rexglue_runtime_exports.inc` (SDK 0.10.0: 460 implemented functions, 2406 logging stubs, 24 mapped
+  `src/xex/rexglue_runtime_exports.inc` (SDK 0.10.0: 471 implemented functions, 2406 logging stubs, 24 mapped
   variables); `ttt2-xexinfo --imports` and `ttt2-validate` now mark every import of an image as implemented /
   stub / missing in the pinned runtime and list the stubbed and missing names; `owner-pipeline.ps1` adds the scan
   to the report (step 5b). The owner's report will therefore show TTT2's runtime gaps before anything is run.

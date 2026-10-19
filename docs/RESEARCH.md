@@ -355,7 +355,8 @@ ReXGlue 0.10.0 `[[invalid_instructions]]` entries are addresses consulted only w
 `REX_EXPORT(__imp__Name, fn)` is a real implementation, `REX_EXPORT_STUB(__imp__Name)` a stub that logs
 `<name> STUB` at warn level and returns (`_RETURN` variants return a fixed value), and
 `SetVariableMapping(module, ordinal, ...)` maps a variable export into guest memory. Counted by
-`scripts/gen_runtime_exports.py` on 0.10.0: **460 implemented functions, 2406 stubs, 24 mapped variables** (the
+`scripts/gen_runtime_exports.py` on 0.10.0: **471 implemented functions (11 of them `REX_HOOK_RAW` hooks such as
+`DbgPrint` and the CRT printf family), 2406 stubs, 24 mapped variables** (the
 export tables know 922 kernel and 1735 XAM ordinals). Imports are resolved at compile time, so a function the
 runtime neither implements nor stubs does not link into the generated host; a variable the runtime does not map is
 filled with a marker (`0xD000BEEF | ordinal << 16`) and warned about at load (`xex_module.cpp`). The stubs are
@@ -363,6 +364,16 @@ therefore a free import trace: every unimplemented system call the game reaches 
 `<name> STUB`. `ttt2-xexinfo --imports` and `ttt2-validate` classify each import of the owner's image against
 these tables (`src/xex/rexglue_runtime_exports.inc`), so the report says which of TTT2's imports hit real code,
 stubs or nothing before anything is run.
+
+**TTT2's real kernel surface, from TTT2 Web.** TTT2 Web (CC0) reports itself *playable natively*: boot logos, intro
+movie, title screen, menus, character select and fights run on its own runtime. That runtime implements exactly
+136 kernel/XAM functions (`GUEST_IMPORT(...)` in its `runtime/kernel`), which is therefore a measured list of what
+TTT2 needs up to gameplay. Against the pinned ReXGlue runtime: **130 are implemented, 5 are logging stubs, none is
+missing**. The five stubs are XAM UI / stats calls (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`,
+`XamShowMarketplaceDownloadItemsUI`, `XamShowMarketplaceUI`, `XamUserCreateStatsEnumerator`), which TTT2 Web
+answers with "not available" results; they are the first candidates for host-side overrides if the stub counter
+shows the game reaching them. This is the strongest evidence so far that the SDK runtime can carry TTT2 to the
+menus without large kernel work; the owner's stub report will confirm or correct it.
 
 **Other facts measured.** `rexglue codegen` skips a project whose stamp is current ("up to date"); re-runs need
 `--ignore-stamp`. `--log-level trace` prints the detector's reasoning (`detectJumpTable:` lines). The runtime

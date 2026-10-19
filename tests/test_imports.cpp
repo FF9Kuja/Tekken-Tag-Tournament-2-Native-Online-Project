@@ -139,6 +139,7 @@ TEST_CASE("PE sections are read and the helper scan covers only executable ones"
 TEST_CASE("the runtime support tables classify exports as implemented, stub or missing") {
   CHECK(runtime_function_support("NtClose") == RuntimeSupport::kImplemented);
   CHECK(runtime_function_support("XamShowSigninUI") == RuntimeSupport::kImplemented);
+  CHECK(runtime_function_support("DbgPrint") == RuntimeSupport::kImplemented);  // a REX_HOOK_RAW, not a REX_EXPORT
   CHECK(runtime_function_support("AniStartBootAnimation") == RuntimeSupport::kStub);
   // Both hooked and stubbed in the SDK sources: the hook is what links, so it counts as implemented.
   CHECK(runtime_function_support("KeInitializeTimerEx") == RuntimeSupport::kImplemented);
