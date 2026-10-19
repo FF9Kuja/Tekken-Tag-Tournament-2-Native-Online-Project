@@ -6,7 +6,7 @@
 # imports (two overridden by recomp/src/kernel_overrides.cpp) and returns, which makes ReXApp quit.
 #
 #   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds]
-#                             [--expect-crash | --expect-stall] [--gpu]
+#                             [--expect-crash | --expect-stall | --expect-fatal] [--gpu] [--no-imports]
 #
 # Runs without GPU emulation (--gpu_plugin=none) and with SDL's dummy audio driver; on Linux without a
 # display it starts an Xvfb of its own. With --gpu the host is left to load the staged Xenos plugin
@@ -22,19 +22,27 @@
 # appears (at most the timeout, default 12 s), then the window is closed the way a player closes it
 # (SIGTERM, which SDL turns into a close request; WM_CLOSE through taskkill on Windows): the log must
 # hold the dump with per-thread lines and the kernel stub report the host writes on close, and the
-# host must exit with code 0. That is how the stall detector and the close path are tested. No game
-# content is involved.
+# host must exit with code 0. That is how the stall detector and the close path are tested. With
+# --expect-fatal (image: recomp/tests/ppc/tailcall_ttt2.s with only its codegen-time boundaries resolved)
+# the program calls a function no recompiled code starts at: the runtime's REX_FATAL line and the host's
+# own abort line must be logged and the host must exit with code 4 (Ttt2App::kExitCodeFatal) instead of
+# hanging in the C runtime's abort dialog. --no-imports drops the two kernel-override checks of the
+# normal expectations, for programs other than imports_ttt2.s. No game content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
 game="${2:?game data root}"
 limit="${3:-}"
 expect_crash=0
 expect_stall=0
+expect_fatal=0
 gpu=0
+imports=1
 for a in "$@"; do
     [ "$a" = "--expect-crash" ] && expect_crash=1
     [ "$a" = "--expect-stall" ] && expect_stall=1
+    [ "$a" = "--expect-fatal" ] && expect_fatal=1
     [ "$a" = "--gpu" ] && gpu=1
+    [ "$a" = "--no-imports" ] && imports=0
 done
 gpu_arg="--gpu_plugin=none"
 [ "$gpu" = 0 ] || gpu_arg="--gpu_plugin=xenos"
@@ -118,6 +126,12 @@ if [ "$expect_stall" = 1 ]; then
     check "Window closing" "the host took the close request"
     absent "ttt2: HOST CRASH" "no host crash"
     absent "ttt2: guest program ended" "the program did not end on its own"
+elif [ "$expect_fatal" = 1 ]; then
+    [ "$rc" = 4 ] && echo "ok   boot: exit code 4 after the runtime aborted" || { echo "FAIL boot: exit code $rc, expected 4 (runtime abort)"; status=1; }
+    check "\[FATAL\] Call to invalid or unregistered function at guest address" "the runtime's trap named the called address"
+    check "ttt2: the runtime aborted" "the host logged the abort and ended itself"
+    absent "ttt2: HOST CRASH" "no host crash"
+    [ "$rc" = 124 ] && echo "FAIL boot: the host kept running after the abort (timeout)" && status=1
 elif [ "$expect_crash" = 1 ]; then
     [ "$rc" = 3 ] && echo "ok   boot: exit code 3 after the crash" || { echo "FAIL boot: exit code $rc, expected 3 (crash)"; status=1; }
     check "ttt2: HOST CRASH" "the crash report was logged"
@@ -135,8 +149,10 @@ else
         check "ttt2: graphics backend none" "no GPU emulation, as requested"
     fi
     check "ttt2: main guest thread created" "the module was launched"
-    check "kernel override XamShowFriendsUI -> ERROR_SUCCESS" "XamShowFriendsUI reached the host override"
-    check "kernel override XamUserCreateStatsEnumerator -> ERROR_NO_SUCH_USER" "XamUserCreateStatsEnumerator reached the host override"
+    if [ "$imports" = 1 ]; then
+        check "kernel override XamShowFriendsUI -> ERROR_SUCCESS" "XamShowFriendsUI reached the host override"
+        check "kernel override XamUserCreateStatsEnumerator -> ERROR_NO_SUCH_USER" "XamUserCreateStatsEnumerator reached the host override"
+    fi
     check "ttt2: main guest thread exited" "the program returned from its entry point"
     check "ttt2: guest program ended; exiting" "the host ended after the guest exit"
     absent "ttt2: HOST CRASH" "no host crash"

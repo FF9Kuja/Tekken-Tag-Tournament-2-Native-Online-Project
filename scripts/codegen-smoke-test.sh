@@ -64,7 +64,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 [ -z "$sdk" ] || sdk="$(cd "$sdk" && pwd)"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2 "$work"/imports_ttt2
+rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -203,6 +203,62 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     # all three ordinals to __imp__ calls; one function (the entry point), no jump tables.
     run_case imports_ttt2 "$root/recomp/tests/ppc/imports_ttt2.s" 4 0 0 "--expect-imports 3"
 
+    # Function boundaries (tailcall_ttt2.s): the two shapes behind the 14 "target not in any function"
+    # errors on the owner's executable. Pass 1, codegen alone: exactly those two errors (measured with
+    # SDK 0.10.0; an SDK that resolves them on its own fails this check, which is worth knowing).
+    # Pass 2, recomp/tools/resolve_functions.py with the program's boundary table as the reference:
+    # one entry point (the thunk's target) and one whole function (the out-of-line block's) are
+    # verified and added, and codegen succeeds; --exec below runs the result, which traps on the
+    # third shape (a pointer-called leaf nothing registers) and is then resolved from the run's log.
+    name=tailcall_ttt2
+    dir="$work/$name"
+    mkdir -p "$dir"
+    if CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$root/recomp/tests/ppc/$name.s" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+        sym() { tr -d '\r' < "$dir/$name.xex.syms" | awk -v n="$1" '$4 == n {print $1}'; }
+        printf '[project]\nname = "%s"\nsdk_version = "0.10.0"\n\n[entrypoint]\nfile_path = "%s.xex"\nout_directory_path = "generated/default"\nincludes = ["%s_config.toml"]\n' \
+            "$name" "$name" "$name" > "$dir/${name}_manifest.toml"
+        printf 'skip_lr = false\nskip_msr = false\nctr_as_local = false\nxer_as_local = false\nreserved_as_local = false\ncr_as_local = false\nnon_argument_as_local = false\nnon_volatile_as_local = false\n' \
+            > "$dir/${name}_config.toml"
+        expect1="$(sym leaf_tail) from $(printf '0x%08X' $(($(sym adjustor_thunk) + 4)))"
+        expect2="$(sym ptr_back) from $(printf '0x%08X' $(($(sym ptr_ool) + 8)))"
+        if (cd "$dir" && "$rexglue" --log-level debug codegen "${name}_manifest.toml" > codegen1.log 2>&1); then
+            echo "FAIL $name: pass 1 codegen succeeded, which contradicts the measured SDK 0.10.0 behaviour (see $dir/codegen1.log)"
+            status=1
+        elif [ "$(grep -c "target not in any function" "$dir/codegen1.log")" = 2 ] \
+            && grep -q "$expect1: b " "$dir/codegen1.log" && grep -q "$expect2: b " "$dir/codegen1.log"; then
+            echo "ok   $name: pass 1 fails with the two unresolved calls ($expect1, $expect2), as measured"
+        else
+            echo "FAIL $name: pass 1 did not fail with exactly the expected unresolved calls (see $dir/codegen1.log)"
+            grep -A4 "ANALYSIS ERRORS" "$dir/codegen1.log" || tail -5 "$dir/codegen1.log"
+            status=1
+        fi
+        # The reference: the program's true boundaries (tailcall_ttt2.functions, label pairs) as a
+        # ReXGlue [functions] table, the way recomp/ttt2_functions.ttt2web.toml carries TTT2 Web's.
+        "$python" -I "$root/recomp/tests/ppc/functions_to_toml.py" "$dir/$name.xex.syms" \
+            "$root/recomp/tests/ppc/$name.functions" "$dir/${name}_reference.toml"
+        printf 'includes = ["%s_resolved.toml"]\n' "$name" >> "$dir/${name}_config.toml"
+        if "$python" -I "$root/recomp/tools/resolve_functions.py" codegen --rexglue "$rexglue" \
+                --manifest "$dir/${name}_manifest.toml" --image "$dir/$name.xex" --out "$dir/${name}_resolved.toml" \
+                --reference "$dir/${name}_reference.toml" --log "$dir/codegen.log" --report "$dir/RESOLVE.md" \
+                --json "$dir/resolve.json" --ignore-stamp > "$dir/resolve.log" 2>&1 \
+            && grep -q "codegen succeeded in round 2 with 2 resolved entries" "$dir/RESOLVE.md" \
+            && grep -q "^\"$(sym leaf_tail)\" = {}" "$dir/${name}_resolved.toml" \
+            && grep -q "^\"$(sym ptr_func)\" = { size = 0x30 }" "$dir/${name}_resolved.toml" \
+            && "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
+                --md "$dir/REPORT.md" --json "$dir/report.json" --quiet \
+                --expect-functions 7 --expect-switches 0 --expect-unimplemented 0 --fail-on-errors; then
+            echo "ok   $name: pass 2 resolved both (entry $(sym leaf_tail), function $(sym ptr_func)+0x30), codegen succeeded, 7 functions"
+        else
+            echo "FAIL $name: pass 2 with recomp/tools/resolve_functions.py (see $dir/resolve.log, $dir/RESOLVE.md)"
+            cat "$dir/resolve.log"
+            status=1
+        fi
+    else
+        echo "FAIL $name: could not build the test image (see $dir/pack.log)"
+        tail -5 "$dir/pack.log"
+        status=1
+    fi
+
     if [ "$exec_mode" = 1 ] && [ -n "$sdk" ]; then
         # Native execution through the ReXGlue runtime (recomp/tests/host). Each program stores words
         # at `results` (address from the packer's symbol map) and returns their sum.
@@ -251,6 +307,48 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         # and must get the host overrides' results (ERROR_SUCCESS, ERROR_NO_SUCH_USER = 1317), with the
         # override's first-call log line as the witness; RtlCompareMemory is the SDK's own (5 matching
         # bytes). Without the overrides the harness would count 2 stub calls and r3 would be garbage.
+        # Function boundaries. Run 1, the code of pass 2: the thunk's tail call and the out-of-line block
+        # work, and the call through ptr_table+4 must end in the runtime's trap for an unregistered
+        # function, naming ptr_leaf (shape C). recomp/tools/resolve_functions.py boot turns that log line
+        # into a verified entry, codegen runs again (pass 3) and run 2 must compute 1002 112 24 406 35.
+        dir="$work/tailcall_ttt2"
+        results="$(results_of "$dir/tailcall_ttt2.xex.syms"):5"
+        leaf="$(tr -d '\r' < "$dir/tailcall_ttt2.xex.syms" | awk '$4 == "ptr_leaf" {print $1}')"
+        rc=0
+        run_host tailcall_ttt2 "$dir/generated/default" "$results" "1002,112,24,406,35" > "$dir/exec1.log" 2>&1 || rc=$?
+        if [ "$rc" != 0 ] && grep -q "Call to invalid or unregistered function at guest address $leaf" "$dir/exec1.log"; then
+            echo "ok   exec: the pointer-called leaf $leaf is unregistered after codegen and traps at run time (exit $rc), as measured"
+        else
+            echo "FAIL exec: expected the runtime trap for $leaf (exit $rc, see $dir/exec1.log)"
+            tail -20 "$dir/exec1.log"
+            status=1
+        fi
+        if "$python" -I "$root/recomp/tools/resolve_functions.py" boot --image "$dir/tailcall_ttt2.xex" \
+                --boot-log "$dir/exec1.log" --codegen-log "$dir/codegen.log" --reference "$dir/tailcall_ttt2_reference.toml" \
+                --out "$dir/tailcall_ttt2_resolved.toml" --report "$dir/RESOLVE-BOOT.md" > "$dir/resolve-boot.log" 2>&1 \
+            && grep -q "^\"$leaf\" = {}" "$dir/tailcall_ttt2_resolved.toml" \
+            && "$python" -I "$root/recomp/tools/resolve_functions.py" codegen --rexglue "$rexglue" \
+                --manifest "$dir/tailcall_ttt2_manifest.toml" --image "$dir/tailcall_ttt2.xex" \
+                --out "$dir/tailcall_ttt2_resolved.toml" --reference "$dir/tailcall_ttt2_reference.toml" \
+                --log "$dir/codegen3.log" --report "$dir/RESOLVE3.md" --ignore-stamp > "$dir/resolve3.log" 2>&1 \
+            && grep -q "codegen succeeded in round 1 with 3 resolved entries" "$dir/RESOLVE3.md"; then
+            echo "ok   exec: the run's trap became a verified entry ($leaf); codegen again with 3 resolved entries"
+        else
+            echo "FAIL exec: resolving the runtime trap (see $dir/resolve-boot.log, $dir/RESOLVE-BOOT.md, $dir/resolve3.log)"
+            cat "$dir/resolve-boot.log" "$dir/resolve3.log" 2>/dev/null
+            status=1
+        fi
+        rc=0
+        run_host tailcall_ttt2 "$dir/generated/default" "$results" "1002,112,24,406,35" > "$dir/exec2.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec2.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec2.log"; then
+            echo "ok   exec: native run with the resolved function boundaries produced 1002 112 24 406 35, no kernel stubs reached"
+        else
+            echo "FAIL exec: native run of the resolved tailcall program (exit $rc, see $dir/exec2.log)"
+            tail -20 "$dir/exec2.log"
+            status=1
+        fi
+
         dir="$work/imports_ttt2"
         rc=0
         run_host imports_ttt2 "$dir/generated/default" "$(results_of "$dir/imports_ttt2.xex.syms"):3" "0,1317,5" info \
@@ -267,7 +365,7 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         fi
     fi
 else
-    echo "skip switch_ttt2 / insn_ttt2 / imports_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / insn_ttt2 / imports_ttt2 / tailcall_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

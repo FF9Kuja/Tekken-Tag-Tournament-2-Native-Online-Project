@@ -16,4 +16,9 @@ includes = [
   # written by recomp/tools/find_switch_tables.py on game/default.xex (scripts/build-host.ps1 and the
   # owner pipeline run it before codegen): the jump tables the SDK's own detector gets wrong
   "game/ttt2_switch_tables.toml",
+  # written by recomp/tools/resolve_functions.py, which runs codegen (scripts/build-host.ps1 and the
+  # owner pipeline call it instead of rexglue directly): the function entry points and boundaries the
+  # SDK's analysis misses on this image, each verified against the image and TTT2 Web's published
+  # table before it is added (git-ignored with the image; it starts empty and is image-specific)
+  "game/ttt2_resolved_functions.toml",
 ]

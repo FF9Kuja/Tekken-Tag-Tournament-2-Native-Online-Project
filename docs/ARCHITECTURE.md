@@ -88,6 +88,14 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   for data-as-code (addresses in ReXGlue), `[rexcrt]` for `memcpy`/`memset`/heap functions, `[[midasm_hook]]` for
   the netplay hooks, and all `*_as_local` optimizations OFF until the game boots (then enabled one at a time with
   determinism tests). `recomp/tools/codegen_report.py` **[implemented]** turns every codegen run into a report.
+* **Function boundaries ReXGlue misses [implemented]**: the SDK registers `bl` targets but never `b` targets, and
+  its gap fill leaves the code after a function's last branch uncovered, so leaf functions entered only by a tail
+  branch (and blocks cut off their function) make codegen fail with `UnresolvedCall`, and functions reached only
+  through pointers fail at run time. `recomp/tools/resolve_functions.py` runs codegen in a loop and turns each such
+  error, and each runtime trap from a boot log, into a `[functions]` entry only when the image's instruction stream
+  and a boundary reference agree (TTT2 Web's published table, accepted only when ReXGlue's own helper detection
+  matches its fingerprint, plus `.pdata`). The entries live in `recomp/game/ttt2_resolved_functions.toml`
+  (image-specific, git-ignored), which the default manifest includes; `docs/RESEARCH.md` 8b has the measurements.
 * **Post-codegen patch tools** (`recomp/tools/*.py`): rewrite the generated C++ to add dirty-page tracking on guest
   stores and the sound-library call boundary. Pure text transforms over local files; the tools are ours.
 * **Cross-check path**: XenonAnalyse / XenonRecomp (MIT) on the same image to compare function boundaries and

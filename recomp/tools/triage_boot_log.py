@@ -46,6 +46,9 @@ RE_ARENA = re.compile(r"Guest memory arena mapped: virtual base (0x[0-9a-fA-F]+)
 RE_VAR_IMPORT = re.compile(r"Variable import (\w+):(\S+) \((\w+)\) not implemented")
 RE_GPU_MISSING = re.compile(r"GPU plugin '([^']+)' not found")
 RE_NOT_TTT2 = re.compile(r"ttt2: this executable is not Tekken Tag Tournament 2")
+# The runtime's trap for an indirect call (bctrl / bctr through a pointer) to an address no recompiled
+# function starts at: REX_FATAL logs it and aborts the process.
+RE_INVALID_FUNC = re.compile(r"Call to invalid or unregistered function at guest address (0x[0-9A-Fa-f]+)")
 
 TTT2_TITLE_ID = "4E4D0859"
 
@@ -130,6 +133,7 @@ def triage(lines, ttt2web=None):
     first_av = None
     var_imports = []
     gpu_missing = []
+    invalid_calls = []
     errors = collections.Counter()
     first_error_text = {}
     levels = collections.Counter()
@@ -158,6 +162,11 @@ def triage(lines, ttt2web=None):
 
         if (mm := RE_ARENA.search(msg)):
             facts["arena"] = (int(mm.group(1), 16), int(mm.group(2), 16))
+        elif (mm := RE_INVALID_FUNC.search(msg)):
+            addr = norm_hex(mm.group(1))
+            if addr not in [c["address"] for c in invalid_calls]:
+                invalid_calls.append({"time": ts, "address": addr})
+            events.append((ts, f"FATAL: indirect call to {addr}, where no recompiled function starts"))
         elif (mm := RE_TITLE.search(msg)):
             facts.update(title_id=mm.group(1).upper(), version=mm.group(2), base_version=mm.group(3),
                          media_id=mm.group(4).upper())
@@ -225,6 +234,9 @@ def triage(lines, ttt2web=None):
     # Outcome.
     if crash:
         outcome = f"crash: {crash['kind']}"
+    elif invalid_calls:
+        outcome = (f"fatal: the game called {invalid_calls[0]['address']} through a pointer, where no recompiled "
+                   "function starts (the runtime aborts on such a call)")
     elif ended is not None:
         outcome = "clean exit: the program returned from its entry point and the host ended"
     elif stalls:
@@ -281,6 +293,14 @@ def triage(lines, ttt2web=None):
             recommendations.append("An illegal instruction in recompiled code is a REX_FATAL / trap: an unresolved call, an "
                                    "unimplemented instruction, a jump-table miss or a jump into data. Check the codegen "
                                    "report (REPORT.md) for unresolved targets and unimplemented sites first.")
+    for c in invalid_calls:
+        recommendations.append(
+            f"Indirect call to {c['address']}, where ReXGlue registered no function: it registers bl targets, .pdata, "
+            "RTTI vtables, lis/addi code pointers and its gap fill, so a function reached only through another pointer "
+            "(a vtable without RTTI, a callback table) is missing. recomp/tools/resolve_functions.py boot adds it as an "
+            "entry when the image has code there and TTT2 Web's table lists a function starting there (the owner "
+            "pipeline does this after -Boot and rebuilds); an address inside a function is a jump into its middle, "
+            "usually a jump table the switch-table finder did not recognise.")
     if access_violations:
         total = sum(access_violations.values())
         (op, addr), n = access_violations.most_common(1)[0]
@@ -329,6 +349,7 @@ def triage(lines, ttt2web=None):
         "access_violations": {"total": sum(access_violations.values()),
                               "first": {"time": first_av[0], "operation": first_av[1], "guest": first_av[2]} if first_av else None},
         "variable_imports_not_implemented": var_imports,
+        "invalid_calls": invalid_calls,
         "gpu_plugin_missing": gpu_missing,
         "errors": [{"message": first_error_text[k], "count": c} for k, c in errors.most_common(15)],
         "levels": dict(levels),
@@ -390,6 +411,11 @@ def render_markdown(t, source):
         lines += ["## Host kernel overrides reached", ""]
         for o in t["overrides"]:
             lines.append(f"* {o['name']} -> {o['result']} (first call at `{o['time']}`)")
+        lines.append("")
+    if t.get("invalid_calls"):
+        lines += ["## Calls to unregistered functions (runtime trap)", ""]
+        for c in t["invalid_calls"]:
+            lines.append(f"* `{c['time']}` indirect call to {c['address']}")
         lines.append("")
     if t["access_violations"]["total"]:
         av = t["access_violations"]

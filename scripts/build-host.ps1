@@ -14,7 +14,10 @@
 #   2b. Runs recomp\tools\find_switch_tables.py on the image: ReXGlue's own jump-table detector misses or
 #      miscompiles several of the shapes TTT2's compiler emits, so the manifests include the finder's
 #      recomp\game\ttt2_switch_tables.toml (git-ignored with the image; needs Python 3 on PATH).
-#   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml, then
+#   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml through
+#      recomp\tools\resolve_functions.py, which turns each "target not in any function" error into a
+#      function boundary verified against the image and TTT2 Web's published table (when the image's helper
+#      fingerprint matches it) and reruns codegen (recomp\game\resolve-REPORT.md says what it added), then
 #      configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
 #      CMAKE_PREFIX_PATH pointing at the package, and builds. The generated glue only picks the
 #      recompiled sources up when they exist at configure time, so codegen comes first; the build
@@ -104,11 +107,16 @@ $env:PATH = "$clangDir;$env:PATH"
 foreach ($tool in @("cmake", "ninja")) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool not found on PATH" }
 }
+Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml through recomp\tools\resolve_functions.py)..."
+& $python -I (Join-Path $root "recomp\tools\resolve_functions.py") codegen --rexglue $rexglue `
+    --manifest (Join-Path $root "recomp\ttt2_manifest.toml") --image $gameXex `
+    --out (Join-Path $gameDir "ttt2_resolved_functions.toml") --reference (Join-Path $root "recomp\ttt2_functions.ttt2web.toml") `
+    --log (Join-Path $gameDir "codegen.log") --report (Join-Path $gameDir "resolve-REPORT.md")
+if ($LASTEXITCODE -ne 0) {
+    throw "rexglue codegen failed (resolve_functions.py exit $LASTEXITCODE): see recomp\game\resolve-REPORT.md and recomp\game\codegen.log"
+}
 Push-Location (Join-Path $root "recomp")
 try {
-    Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml)..."
-    & $rexglue codegen ttt2_manifest.toml
-    if ($LASTEXITCODE -ne 0) { throw "rexglue codegen failed ($LASTEXITCODE)" }
     if (-not (Test-Path "generated\default\sources.cmake")) { throw "codegen produced no generated\default\sources.cmake" }
     cmake --preset $Preset "-DCMAKE_PREFIX_PATH=$SdkInstall"
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }

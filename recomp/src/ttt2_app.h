@@ -37,6 +37,9 @@ class Ttt2App : public rex::ReXApp {
   static constexpr std::uint32_t kRetailBaseVersion = 0x00000002u;  // 0.0.0.2, the retail disc
   /// Process exit code after an unhandled host exception (the HOST CRASH block is in the log).
   static constexpr int kExitCodeHostCrash = 3;
+  /// Process exit code after the runtime aborted (REX_FATAL: its "[FATAL] ..." line is in the log, e.g.
+  /// a call to an address no recompiled function starts at).
+  static constexpr int kExitCodeFatal = 4;
 
  protected:
   void OnConfigurePaths(rex::PathConfig& paths) override;
@@ -58,6 +61,10 @@ class Ttt2App : public rex::ReXApp {
   /// crash (kind, host PC, fault address, guest thread, recent stub calls), flushes the log, and
   /// ends the process with kExitCodeHostCrash (the SDK would otherwise re-execute the fault forever).
   static bool OnHostException(rex::arch::Exception* ex, void* data);
+  /// SIGABRT handler: REX_FATAL logs its reason and calls abort(), which on Windows would show the C
+  /// runtime's "abort() has been called" box and the error-reporting dialog and leave an unattended boot
+  /// hanging. Logs that the runtime aborted, flushes the log and ends the process with kExitCodeFatal.
+  static void OnAbort(int signal);
   void ReportCrash(rex::arch::Exception* ex);
 
   std::shared_ptr<ttt2::KernelStubCounter> stubs_;

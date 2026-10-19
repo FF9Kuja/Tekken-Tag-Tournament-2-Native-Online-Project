@@ -151,8 +151,12 @@ jobs:
           out/build/windows-msvc/bin/Release/ttt2_make_retail_xex.exe out/host-retail/plain.xex out/host-retail/default.xex
           out/build/windows-msvc/bin/Release/ttt2-xexinfo.exe out/host-retail/default.xex --write-plain recomp/game/default.xex --no-hash | tail -3
       - name: Build ttt2.exe against the relocated SDK package (codegen runs inside the build)
+        # build-host.ps1 runs codegen through recomp\tools\resolve_functions.py; on this image the first round
+        # must succeed (no unresolved calls), which the resolver's report states.
         if: inputs.build_host
-        run: scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
+        run: |
+          scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
+          if (-not (Select-String -Path recomp\game\resolve-REPORT.md -Pattern "codegen succeeded in round 1" -Quiet)) { throw "the resolver did not report a first-round success" }
       - name: Boot ttt2.exe on the license-free image (no GPU plugin) and check its log
         # The real host on Windows: window, runtime, recompiled code, Ttt2App hooks and the kernel
         # overrides; the program ends and the host must exit with code 0 (scripts/host-boot-test.sh).
@@ -204,7 +208,12 @@ jobs:
           for program in crash stall; do
             scripts/make-ppc-test-xex.sh "recomp/tests/ppc/${program}_ttt2.s" recomp/game/default.xex
             python -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json "out/host-switch_tables-$program.json"
-            (cd recomp && "$rexglue" codegen --ignore-stamp ttt2_manifest.toml && cmake --build --preset win-amd64-release)
+            # codegen through the function-boundary resolver, as build-host.ps1 runs it
+            python -I recomp/tools/resolve_functions.py codegen --rexglue "$rexglue" --manifest recomp/ttt2_manifest.toml \
+              --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml \
+              --reference recomp/ttt2_functions.ttt2web.toml --log "out/host-codegen-$program.log" \
+              --report "out/host-resolve-$program.md" --ignore-stamp
+            (cd recomp && cmake --build --preset win-amd64-release)
             scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game "--expect-$program"
           done
       - name: Run the owner's boot step on the stalling program (the timeout closes the window)
@@ -221,6 +230,49 @@ jobs:
           $md = Get-Content out\run-host-stall\boot-triage.md -Raw
           if ($md -notmatch "\*\*stall: .*closed afterwards\*\*") { throw "the triage did not report the stall and the close" }
           Get-Content out\run-host-stall\boot-report.txt
+      - name: Function-boundary cycle on ttt2.exe, part 1 (resolved codegen; the runtime trap ends the run with code 4)
+        # recomp/tests/ppc/tailcall_ttt2.s with its boundary table as the reference: codegen through the resolver adds
+        # the two entries its errors call for; the host then calls a leaf only a pointer reaches, which nothing
+        # registered: the runtime's trap must end the process with exit code 4 (Ttt2App's abort handler), not a dialog.
+        if: inputs.build_host
+        shell: bash
+        run: |
+          export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
+          rexglue="$PWD/out/rexglue-sdk-install/bin/rexglue.exe"
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/tailcall_ttt2.s recomp/game/default.xex
+          python -I recomp/tests/ppc/functions_to_toml.py recomp/game/default.xex.syms recomp/tests/ppc/tailcall_ttt2.functions out/tailcall-reference.toml
+          python -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-tailcall.json
+          python -I recomp/tools/resolve_functions.py codegen --rexglue "$rexglue" --manifest recomp/ttt2_manifest.toml \
+            --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml \
+            --reference out/tailcall-reference.toml --log out/host-codegen-tailcall.log --report out/host-resolve-tailcall.md --ignore-stamp
+          grep -q "codegen succeeded in round 2 with 2 resolved entries" out/host-resolve-tailcall.md
+          (cd recomp && cmake --build --preset win-amd64-release)
+          scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --expect-fatal
+      - name: Function-boundary cycle, part 2 (the owner's boot step on it; the triage names the called address)
+        if: inputs.build_host
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          scripts\run-host.ps1 -GameRoot recomp\game -Work out\run-host-fatal -TimeoutSeconds 60 -NoGpu
+          if ($LASTEXITCODE -ne 4) { throw "run-host.ps1 exit code $LASTEXITCODE, expected 4 (the runtime aborted)" }
+          $md = Get-Content out\run-host-fatal\boot-triage.md -Raw
+          if ($md -notmatch "fatal: the game called 0x[0-9A-F]+ through a pointer") { throw "the triage did not report the call to an unregistered function: $md" }
+          $global:LASTEXITCODE = 0
+      - name: Function-boundary cycle, part 3 (resolve from the boot log, rebuild, run to the end)
+        if: inputs.build_host
+        shell: bash
+        run: |
+          rexglue="$PWD/out/rexglue-sdk-install/bin/rexglue.exe"
+          python -I recomp/tools/resolve_functions.py boot --image recomp/game/default.xex \
+            --boot-log "$(ls -t out/run-host-fatal/boot-logs/*.log | head -1)" --codegen-log out/host-codegen-tailcall.log \
+            --reference out/tailcall-reference.toml --out recomp/game/ttt2_resolved_functions.toml --report out/host-resolve-tailcall-boot.md
+          grep -q "all 1 called addresses verified (1 new entries)" out/host-resolve-tailcall-boot.md
+          python -I recomp/tools/resolve_functions.py codegen --rexglue "$rexglue" --manifest recomp/ttt2_manifest.toml \
+            --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml \
+            --reference out/tailcall-reference.toml --log out/host-codegen-tailcall2.log --report out/host-resolve-tailcall2.md --ignore-stamp
+          grep -q "codegen succeeded in round 1 with 3 resolved entries" out/host-resolve-tailcall2.md
+          (cd recomp && cmake --build --preset win-amd64-release)
+          scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --no-imports
       - name: Upload the host boot log and the boot-step reports
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4
@@ -230,6 +282,8 @@ jobs:
             recomp/out/build/win-amd64-release/logs/
             out/run-host/
             out/run-host-stall/
+            out/run-host-fatal/
+            out/host-resolve*.md
           if-no-files-found: ignore
       - name: Upload the host build listing
         if: always() && inputs.build_host
