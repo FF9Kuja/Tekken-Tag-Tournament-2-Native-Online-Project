@@ -2,6 +2,44 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 6: PR #12 merged; switch dispatches made exact before the owner's rerun
+
+**Completed**
+* **PR #12 merged into `main`** (merge commit `4814479`): the function-boundary resolver
+  (`recomp/tools/resolve_functions.py`), the runtime trap handling (exit code 4, triage, pipeline step 9b) and the
+  child-PowerShell fix. Verified on the PR head `198186a`: CI (runs 39317087036, 39317138117), SDK validation on
+  Linux (39317093509: smoke test with native execution, the real host's trap / resolve / rebuild / clean-exit cycle)
+  and the Windows workflow with `build_host` (39317098464: the same cycle with `ttt2.exe`, `run-host.ps1` and the
+  triage). On `main` afterwards: CI 39319511810 and the Windows workflow with `build_host` 39319532916, green.
+* **Switch dispatches (this PR).** The owner's run left 18 dispatches the finder could not read, and any `bctr`
+  without our table goes to ReXGlue's own detector: on `switch_ttt2.s` 6 of the 7 switches it makes are certain
+  miscompiles (they test the loaded target; every dispatch traps), and a `bctr` it does not recognise becomes an
+  indirect call that traps on a case label. The finder (`recomp/tools/find_switch_tables.py`) now symbolically
+  executes the code before each `bctr` exactly: a complete model of which registers each instruction writes (the
+  previous one missed `rld*` and every update-form load/store), the bounds branch's direction (`bge` gives max
+  entries, `ble`/`blt` give none), new shapes (table address before the bounds check, bias folded into the table,
+  `clrlslwi`/`clrldi`/`sldi`/`rldic`/`mulli`, `add` + D-form load, signed halfword offsets, two-level tables,
+  mask-bounded tables), and other paths into a dispatch (branch targets, table labels, function starts) checked: one
+  before the bounds check restarts the analysis, one after it must read the same entry, or the site is reported.
+  Unread dispatches get their reason and disassembled code in the JSON. `recomp/tools/audit_switches.py` (pipeline
+  step 6c, `build-host.ps1`) rebuilds each instruction address in the generated code and checks every `bctr`: the
+  finder's tables as written, the SDK detector's switches with a verdict (certain miscompile / suspect / consistent /
+  unverified), the unread dispatches with their code (`work\switch-audit.md`). The boot resolver names an unread
+  dispatch in the function a trap lands in (step 9b passes the finder's report).
+* **Verification (license-free inputs, `docs/RESEARCH.md` 8c):** `tests/python/test_find_switch_tables.py` runs
+  every reported table in a small PowerPC interpreter for every index and every alternate entry path (encoders
+  checked against GNU as; named shapes, negative cases, 300 seeded random dispatches in CI); locally 172,500 random
+  dispatches during development, the final version's last 50,000 with no failure; against the previous finder on 10,000: nothing it
+  found correctly is lost, 242 of its tables were wrong on another path, 6,875 new ones found. `switch_ttt2.s`: the
+  9 tables are identical to the previous finder's. New `recomp/tests/ppc/switch_shapes.s` through the real codegen:
+  9 tables read and emitted as written, S10 (another path with another table) reported, the native run computes
+  `13 24 32 44 51 62 71 80 83 92 0`; the audit: 0 mapping problems, 6 certain miscompiles in the SDK-only
+  `switch_ttt2` build. Local runs: the smoke test with `--exec` (all checks), 75 Python tests, 24 ctests, hygiene.
+
+**Not verified yet:** the owner's executable. The rerun will show how many of the 18 the finder now reads, how
+ReXGlue emitted the other `bctr` sites (the audit's verdicts), and then whether codegen completes with the resolver
+(PR #12), the host builds and the first boot.
+
 ## 2026-10-19 - Session 5: PR #6 merged, the owner's boot step as one command
 
 **Compatibility status of the owner's copy (reported 2026-10-19)**

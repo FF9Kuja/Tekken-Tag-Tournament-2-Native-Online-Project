@@ -65,7 +65,11 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
    code after a function's last branch; `docs/RESEARCH.md` 8b). [x] `recomp/tools/resolve_functions.py` resolves
    such errors, and the runtime's calls to unregistered functions from a boot log, with entries verified against
    the image and TTT2 Web's table; the pipeline, `build-host.ps1` and the SDK workflows run codegen through it.
-   [ ] The owner's rerun: codegen complete, then the host build and the first boot (Milestone 4).
+   [x] The switch-table finder follows the dispatch code exactly (more shapes, a complete register-write model,
+   other paths into a dispatch checked; `docs/RESEARCH.md` 8c) and `recomp/tools/audit_switches.py` (pipeline step
+   6c) checks every `bctr` the codegen emitted, naming the SDK detector's certain miscompiles and listing the
+   dispatches still unread with their code. [ ] The owner's rerun: codegen complete, the audit's numbers, then the
+   host build and the first boot (Milestone 4).
 5. [ ] Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others
    (the tools already refuse other titles/versions; the owner's hashes complete the table).
 6. [x] Diagnostic pipeline: codegen logs, validation reports (`codegen_report.py`, `ttt2-validate --json`,
@@ -75,9 +79,10 @@ Exit: codegen of the TU3 image completes with zero validation errors (or every r
 generated code compiles (**needs Windows for the host link**; a Linux compile-only check of the generated TUs is
 possible).
 
-**Measured so far (SDK 0.10.0, license-free inputs, session 3):** the SDK's own jump-table detector misses all
-byte/halfword-offset tables and switches on the wrong register for several absolute shapes; manual
-`[[switch_tables]]` entries from our finder are therefore mandatory for TTT2 and are the path the pipeline uses.
+**Measured so far (SDK 0.10.0, license-free inputs, sessions 3 and 6):** the SDK's own jump-table detector misses all
+byte/halfword-offset tables and switches on the wrong register for several absolute shapes (on `switch_ttt2.s`, 6
+of the 7 switches it makes are certain miscompiles); manual `[[switch_tables]]` entries from our finder are
+therefore mandatory for TTT2 and are the path the pipeline uses.
 
 ## Milestone 4 - Native runtime  (started)
 

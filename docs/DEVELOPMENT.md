@@ -110,9 +110,19 @@ use to put a license-free program into the retail form) round-tripped. All input
   (functions, imports, jump tables, unimplemented sites, analysis errors, instruction mix) as REPORT.md / JSON
   with counts and addresses only; `--expect-*` options turn it into a check. Unit tests: `tests/python`
   (`python3 -I -m unittest discover -s tests/python`).
-* `recomp/tools/find_switch_tables.py <image.xex> --toml tables.toml` - finds switch jump tables by symbolic
-  execution and writes ReXGlue `[[switch_tables]]` entries; include the file from the codegen config. Needed
-  because SDK 0.10.0's own detector misses offset tables and picks wrong registers (`docs/RESEARCH.md` 8a).
+* `recomp/tools/find_switch_tables.py <image.xex> --toml tables.toml [--json report.json]` - finds switch jump
+  tables by exact symbolic execution of the code before each `bctr` and writes ReXGlue `[[switch_tables]]`
+  entries; include the file from the codegen config. Needed because SDK 0.10.0's own detector misses offset tables
+  and picks wrong registers (`docs/RESEARCH.md` 8a, 8c). Other paths into a dispatch (branch targets, table labels,
+  function starts) are checked; a dispatch it cannot read is reported with the reason and its disassembled code in
+  the JSON. Tests: `tests/python/test_find_switch_tables.py` executes every reported table with a small PowerPC
+  interpreter (named shapes, negative cases, 300 seeded random dispatches; encoders checked against GNU as), and
+  `recomp/tests/ppc/switch_ttt2.s` / `switch_shapes.s` run end to end in `scripts/codegen-smoke-test.sh --exec`.
+* `recomp/tools/audit_switches.py --image X --generated recomp/generated/default --finder report.json` - checks
+  how the codegen emitted every `bctr` (the finder's tables as written; switches only the SDK's detector found,
+  verified with the finder's model: certain miscompile, suspect, consistent or unverified; the unread dispatches
+  with their code). Exit 1 when the generated code contradicts the finder. Tests: `tests/python/test_audit_switches.py`
+  and the smoke test's checks on both switch programs (including the SDK-only build of `switch_ttt2.s`).
 * `scripts/check_instruction_coverage.py [--expect-missing 2]` - compares `recomp/ttt2_instructions.txt` with
   the SDK's instruction builders.
 * `recomp/tools/import_ttt2web_functions.py <TTT2.toml> --out recomp/ttt2_functions.ttt2web.toml` - converts

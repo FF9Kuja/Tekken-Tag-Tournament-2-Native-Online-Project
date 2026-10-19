@@ -31,6 +31,9 @@
 #      function) into a [functions] entry in recomp\game\ttt2_resolved_functions.toml, but only after checking
 #      the branch in the image and finding the same boundary in TTT2 Web's published table, which it uses only
 #      when the image's helper fingerprint matches; then it reruns codegen. Its report is <work>\resolve-REPORT.md;
+#   6c. audits how the codegen emitted every bctr (recomp\tools\audit_switches.py, <work>\switch-audit.md): the
+#      finder's tables as written, the SDK detector's own switches checked against the finder's model (certain
+#      miscompiles named), and the dispatches the finder could not read, with their few instructions each;
 #   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
 #      SDK package (scripts\build-host.ps1 -Game <prepared image>): -SdkInstall <dir> names the package (the
 #      unzipped rexglue-sdk-install-win-amd64 artifact of the Windows workflow, whose bin\rexglue.exe is then used
@@ -52,6 +55,8 @@
 # instead of running the later steps on missing files.
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
 # counts and addresses only; game files stay in the work folder and recomp\game (both git-ignored).
+# <work>\switch-audit.md adds the disassembled dispatch code (a few instructions each) of the switches the
+# finder could not read, for their analysis; it is a local diagnostic like the report, never committed.
 # Send the report file, never the work folder.
 param(
     [Parameter(Mandatory = $true)][string]$Iso,
@@ -352,6 +357,35 @@ function Invoke-Codegen([int]$pass) {
     $reportJson = Join-Path $Work "codegen-report.json"
     Run $script:python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $script:codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet") | Out-Null
     if (Test-Path $reportMd) { Get-Content $reportMd | ForEach-Object { Log $_ } } else { Log "PROBLEM: no codegen report was written (codegen_report.py exit $($script:lastExit))" }
+
+    # How ReXGlue emitted every bctr: the finder's tables must come out as written; a switch only the SDK's
+    # own detector found is checked against the finder's model of its dispatch code (a certain miscompile
+    # traps when the game reaches it); the dispatches the finder could not read are listed with their code.
+    Section "6c. Switch dispatch audit (recomp\tools\audit_switches.py)"
+    $auditMd = Join-Path $Work "switch-audit.md"
+    $auditJson = Join-Path $Work "switch-audit.json"
+    foreach ($old in @($auditMd, $auditJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
+    Run $script:python @("-I", "recomp\tools\audit_switches.py", "--image", "recomp\game\default.xex",
+        "--generated", "recomp\generated\default", "--finder", $tablesJson, "--md", $auditMd, "--json", $auditJson) | Out-Null
+    if ($script:lastExit -eq 1) {
+        Log "PROBLEM: the generated code contradicts the finder's switch tables (see $auditMd)"
+    } elseif ($script:lastExit -ne 0) {
+        Log "PROBLEM: the switch audit did not run (exit $($script:lastExit))"
+    }
+    if (Test-Path $auditMd) {
+        # the summary and the verdicts; the unread dispatches' code stays in the file
+        foreach ($line in (Get-Content $auditMd)) {
+            if ($line -like "## Dispatches the finder could not read*") { break }
+            Log $line
+        }
+        Log "The dispatches the finder could not read, with their code: $auditMd"
+    }
+    if (Test-Path $auditJson) {
+        $audit = Get-Content $auditJson -Raw | ConvertFrom-Json
+        if ($audit.counts.sdk_only_miscompiles -gt 0) {
+            Log "PROBLEM: $($audit.counts.sdk_only_miscompiles) switch(es) from the SDK's own detector are certain miscompiles: the game traps if it reaches one (listed above)"
+        }
+    }
     if ($pass -gt 1) { return }
 
     # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
@@ -472,6 +506,8 @@ if ($Boot) {
         foreach ($l in $newLogs) { $resolveArgs += @("--boot-log", $l.FullName) }
         $resolveArgs += @("--codegen-log", $cgLog, "--reference", "recomp\ttt2_functions.ttt2web.toml",
                           "--out", "recomp\game\ttt2_resolved_functions.toml", "--report", $bootMd, "--json", $bootJson)
+        $switchJson = Join-Path $Work "switch_tables.json"
+        if (Test-Path $switchJson) { $resolveArgs += @("--switch-json", $switchJson) }
         $py = $(if ($script:python) { $script:python } else { Find-Python })
         if (-not $py) { Log "PROBLEM: Python 3 not found on PATH; the boot log cannot be resolved"; break }
         Run $py $resolveArgs | Out-Null
@@ -495,6 +531,7 @@ if ($Boot) {
 Section "Done"
 Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work, recomp\game or recomp\out."
 if ($Codegen -and (Test-Path (Join-Path $Work "resolve-REPORT.md"))) { Log "Also send $(Join-Path $Work 'resolve-REPORT.md') (addresses only; it is in this report too)." }
+if ($Codegen -and (Test-Path (Join-Path $Work "switch-audit.md"))) { Log "Also send $(Join-Path $Work 'switch-audit.md') (addresses, and the few instructions of each switch dispatch the finder could not read)." }
 if ($plain) { Log "The prepared image $plain is the game executable in decrypted form: keep it private like the disc image." }
 if ($Boot -and (Test-Path $triageMd)) { Log "Also send $triageMd and the log copy in $(Join-Path $Work 'boot-logs') (names, addresses and counts only)." }
 $bootResolve = @(Get-ChildItem -Path $Work -Filter "resolve-boot-*.md" -ErrorAction SilentlyContinue)

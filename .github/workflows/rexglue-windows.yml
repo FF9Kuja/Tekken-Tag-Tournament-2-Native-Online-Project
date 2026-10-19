@@ -152,11 +152,13 @@ jobs:
           out/build/windows-msvc/bin/Release/ttt2-xexinfo.exe out/host-retail/default.xex --write-plain recomp/game/default.xex --no-hash | tail -3
       - name: Build ttt2.exe against the relocated SDK package (codegen runs inside the build)
         # build-host.ps1 runs codegen through recomp\tools\resolve_functions.py; on this image the first round
-        # must succeed (no unresolved calls), which the resolver's report states.
+        # must succeed (no unresolved calls), which the resolver's report states. It then audits every bctr
+        # (recomp\tools\audit_switches.py): this program has none, and the audit must say so cleanly.
         if: inputs.build_host
         run: |
           scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
           if (-not (Select-String -Path recomp\game\resolve-REPORT.md -Pattern "codegen succeeded in round 1" -Quiet)) { throw "the resolver did not report a first-round success" }
+          if (-not (Select-String -Path recomp\game\switch-audit.md -Pattern "Address-mapping problems \| 0 \|" -Quiet)) { throw "the switch audit did not run cleanly" }
       - name: Boot ttt2.exe on the license-free image (no GPU plugin) and check its log
         # The real host on Windows: window, runtime, recompiled code, Ttt2App hooks and the kernel
         # overrides; the program ends and the host must exit with code 0 (scripts/host-boot-test.sh).

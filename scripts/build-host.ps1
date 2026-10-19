@@ -17,7 +17,8 @@
 #   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml through
 #      recomp\tools\resolve_functions.py, which turns each "target not in any function" error into a
 #      function boundary verified against the image and TTT2 Web's published table (when the image's helper
-#      fingerprint matches it) and reruns codegen (recomp\game\resolve-REPORT.md says what it added), then
+#      fingerprint matches it) and reruns codegen (recomp\game\resolve-REPORT.md says what it added),
+#      audits how every bctr was emitted (recomp\tools\audit_switches.py, recomp\game\switch-audit.md), then
 #      configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
 #      CMAKE_PREFIX_PATH pointing at the package, and builds. The generated glue only picks the
 #      recompiled sources up when they exist at configure time, so codegen comes first; the build
@@ -115,6 +116,11 @@ Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml t
 if ($LASTEXITCODE -ne 0) {
     throw "rexglue codegen failed (resolve_functions.py exit $LASTEXITCODE): see recomp\game\resolve-REPORT.md and recomp\game\codegen.log"
 }
+# How the codegen emitted every bctr (informative; recomp\game\switch-audit.md): the finder's tables as
+# written, the SDK detector's own switches checked against the finder's model, the unread dispatches.
+& $python -I (Join-Path $root "recomp\tools\audit_switches.py") --image $gameXex --generated (Join-Path $root "recomp\generated\default") `
+    --finder (Join-Path $gameDir "switch_tables.json") --md (Join-Path $gameDir "switch-audit.md") --json (Join-Path $gameDir "switch-audit.json")
+if ($LASTEXITCODE -ne 0) { Write-Host "PROBLEM: the switch audit reports a contradiction or did not run (exit $LASTEXITCODE): see recomp\game\switch-audit.md" }
 Push-Location (Join-Path $root "recomp")
 try {
     if (-not (Test-Path "generated\default\sources.cmake")) { throw "codegen produced no generated\default\sources.cmake" }

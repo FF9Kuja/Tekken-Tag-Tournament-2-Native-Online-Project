@@ -1,5 +1,6 @@
 """Unit tests for recomp/tools/resolve_functions.py on synthetic images and codegen logs."""
 import importlib.util
+import json
 import os
 import struct
 import tempfile
@@ -289,6 +290,19 @@ class BootTests(unittest.TestCase):
         self.assertEqual(d["decision"], "unverified")
         self.assertIn("middle of a function", d["evidence"])
         self.assertIn("not code", MOD.decide_runtime(0x82001800, ("x.log", 3), img, ref)["evidence"])
+
+    def test_unread_switch_dispatch_named_for_a_jump_into_its_function(self):
+        img = image(DecideTests.WORDS)
+        ref = ref_of({0x82001010: 8, 0x82001400: 0x48})
+        sw = self.path("switch_tables.json", json.dumps({"unresolved_sites": [
+            {"bctr": "0x82001410", "kind": "bounded", "reason": "x"}, {"bctr": "0x82001600", "kind": "bounded", "reason": "y"}]}))
+        ds = [MOD.decide_runtime(0x82001420, ("x.log", 3), img, ref), MOD.decide_runtime(0x82001010, ("x.log", 4), img, ref)]
+        MOD.note_unread_dispatches(ds, sw, img, ref)
+        self.assertEqual(ds[0]["unread_dispatches"], [0x82001410])
+        self.assertIn("holds the switch dispatch 0x82001410 that the switch-table finder could not read", ds[0]["evidence"])
+        self.assertNotIn("unread_dispatches", ds[1])
+        MOD.note_unread_dispatches(ds[:1], self.path("bad.json", "{"), img, ref)
+        self.assertIn("could not be read", ds[0]["evidence"])
         self.assertIn("no boundary reference", MOD.decide_runtime(0x82001010, ("x.log", 3), img, None)["evidence"])
 
     def args(self, logs, out, reference, codegen_log=None):

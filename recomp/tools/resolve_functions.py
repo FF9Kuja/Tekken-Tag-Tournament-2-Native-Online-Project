@@ -385,6 +385,31 @@ def decide_runtime(target, origin, image, ref):
                         f"{hx(prev) if prev is not None else '-'} below, {hx(nxt) if nxt is not None else '-'} above)"}
 
 
+def note_unread_dispatches(decisions, switch_json, image, ref):
+    """Adds the switch dispatches the finder could not read to unverified decisions in the same function:
+    an indirect jump there is most likely one of that switch's case labels, not a missing function."""
+    try:
+        with open(switch_json, encoding="utf-8") as f:
+            sites = [int(u["bctr"], 16) for u in json.load(f).get("unresolved_sites", [])]
+    except (OSError, ValueError, KeyError) as e:
+        for d in decisions:
+            if d["decision"] == "unverified":
+                d["evidence"] += f" (the switch report {switch_json} could not be read: {e})"
+        return
+    for d in decisions:
+        if d["decision"] != "unverified":
+            continue
+        f = ref.containing(d["target"]) if ref is not None else None
+        lo, hi = (f[0], f[0] + f[1]) if f else (d["target"] - 0x2000, d["target"] + 0x2000)
+        near = [b for b in sites if lo <= b < hi]
+        if near:
+            d["unread_dispatches"] = near
+            d["evidence"] += ("; the same " + ("function" if f else "code (within 8 KB)") + " holds the switch dispatch"
+                              + ("es " if len(near) > 1 else " ") + ", ".join(hx(b) for b in near)
+                              + " that the switch-table finder could not read (switch-audit.md lists the code): the "
+                              "address is most likely one of its case labels")
+
+
 def build_reference(image, reference_path, log_helpers):
     """The lookup table (reference file when its fingerprint matches, plus .pdata) and its status."""
     ref = Reference()
@@ -603,6 +628,8 @@ def cmd_boot(args):
     ref, status = build_reference(image, args.reference, helpers)
     state["reference"] = status
     decisions = [decide_runtime(t, origin, image, ref) for t, origin in sorted(targets.items())]
+    if getattr(args, "switch_json", None):
+        note_unread_dispatches(decisions, args.switch_json, image, ref)
     before = set(entries)
     added, conflicts = apply_decisions(entries, decisions)
     repeated = [d for d in decisions if d["decision"] == "entry" and d["entry"] in before]
@@ -727,6 +754,8 @@ def main(argv):
     bt.add_argument("--boot-log", action="append", required=True, help="host log file (repeatable)")
     bt.add_argument("--codegen-log", help="codegen log of the build, for the reference's helper fingerprint")
     bt.add_argument("--out", help="[functions] file to add verified entries to")
+    bt.add_argument("--switch-json", help="find_switch_tables.py --json report: names the switch dispatch it could "
+                                          "not read when a called address lies in the same function")
     args = ap.parse_args(argv[1:])
     try:
         if args.command == "boot":
