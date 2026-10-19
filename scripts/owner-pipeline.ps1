@@ -182,6 +182,24 @@ if ($Codegen) {
             $reportJson = Join-Path $Work "codegen-report.json"
             Run python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet") | Out-Null
             if (Test-Path $reportMd) { Get-Content $reportMd | ForEach-Object { Log $_ } }
+
+            # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
+            # same layout as TTT2 Web's (all eight save/restore helper addresses match); compare the reports.
+            $helperScan = & $xexinfo $patched --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() }
+            if ($helperScan -match "Layout vs TTT2 Web: 8 of 8") {
+                Log "Layout matches TTT2 Web: recompiling again with its 18k function boundaries (ttt2_manifest.ttt2web.toml)"
+                Push-Location recomp
+                try {
+                    $codegenLog2 = Join-Path $Work "codegen-ttt2web.log"
+                    & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.ttt2web.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog2
+                    Log "(rexglue exit code $LASTEXITCODE for the TTT2 Web variant)"
+                } finally { Pop-Location }
+                $reportMd2 = Join-Path $Work "codegen-ttt2web-REPORT.md"
+                Run python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\ttt2web", "--log", $codegenLog2, "--project", "ttt2", "--md", $reportMd2, "--json", (Join-Path $Work "codegen-ttt2web-report.json"), "--quiet") | Out-Null
+                if (Test-Path $reportMd2) { Get-Content $reportMd2 | ForEach-Object { Log $_ } }
+            } else {
+                Log "Layout does not match TTT2 Web's published helper addresses: its function boundaries are not used."
+            }
         }
     }
 }

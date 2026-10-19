@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "ttt2/core/expected.hpp"
+#include "ttt2/xex/known_titles.hpp"
 #include "ttt2/xex/xex2.hpp"
 
 namespace ttt2::xex {
@@ -106,5 +107,11 @@ struct HelperHit {
 /// helpers (savegprlr/restgprlr/savefpr/restfpr/savevmx/restvmx 14, savevmx/restvmx 64).
 [[nodiscard]] std::vector<HelperHit> scan_save_restore_helpers(std::span<const std::uint8_t> image,
                                                                std::uint32_t load_address);
+
+/// How many of the eight scanned helpers were found exactly once at the address a published set
+/// (known_titles.hpp) gives; 8 means the image has that project's layout and its other addresses
+/// (function boundaries, switch tables) apply to it.
+[[nodiscard]] std::size_t count_published_helper_matches(const std::vector<HelperHit>& hits,
+                                                         const PublishedHelpers& set) noexcept;
 
 }  // namespace ttt2::xex

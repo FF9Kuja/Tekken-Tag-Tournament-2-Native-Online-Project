@@ -36,6 +36,7 @@ private/
 # --- Code generated from the game executable (ReXGlue / XenonRecomp output) ---
 # codegen output (the SDK-generated rexglue.cmake next to it IS committed)
 **/generated/default/
+**/generated/ttt2web/
 recomp.*.cpp
 codegen.d
 codegen.build.stamp

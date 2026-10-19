@@ -227,6 +227,11 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
         std::printf("%s\n", h.addresses.size() > 1 ? "  (ambiguous)" : "");
       }
     }
+    for (const auto& set : kPublishedHelpers) {
+      const std::size_t n = count_published_helper_matches(scan->helpers, set);
+      std::printf("Layout vs %s: %zu of 8 helper addresses match%s\n", std::string(set.project).c_str(), n,
+                  n == 8 ? " (same layout: its published function boundaries apply)" : "");
+    }
   }
   for (const auto& w : img.warnings) std::printf("Warning:            %s\n", w.c_str());
 }

@@ -175,12 +175,21 @@ void describe_image(Report& rep, const std::string& prefix, const ttt2::xex::Xex
     rep.add(prefix + " imports", "not resolved: " + summary.error().message);
   }
   if (xex.security) {
-    for (const auto& h : ttt2::xex::scan_save_restore_helpers(*image, xex.security->load_address)) {
+    const auto hits = ttt2::xex::scan_save_restore_helpers(*image, xex.security->load_address);
+    for (const auto& h : hits) {
       std::string v;
       for (const auto a : h.addresses) v += (v.empty() ? "" : " ") + ("0x" + ttt2::hex_u32(a));
       if (h.addresses.empty()) v = "not found";
       if (h.addresses.size() > 1) v += " (ambiguous)";
       rep.add(prefix + " " + std::string(h.name), v);
+    }
+    // The published helper sets are layout fingerprints: a full match means that project's function
+    // boundaries and switch tables apply to this image (recomp/ttt2_functions.ttt2web.toml).
+    for (const auto& set : ttt2::xex::kPublishedHelpers) {
+      const std::size_t n = ttt2::xex::count_published_helper_matches(hits, set);
+      rep.add(prefix + " layout vs " + std::string(set.project),
+              std::to_string(n) + " of 8 helper addresses match" +
+                  (n == 8 ? " (same layout: its published function boundaries apply)" : ""));
     }
   }
 }

@@ -226,6 +226,16 @@ Expected<ImportSummary> resolve_imports(const Xex2Image& xex, std::span<const st
   return out;
 }
 
+std::size_t count_published_helper_matches(const std::vector<HelperHit>& hits,
+                                           const PublishedHelpers& set) noexcept {
+  std::size_t matches = 0;
+  for (const auto& h : hits) {
+    const std::uint32_t published = published_helper(set, h.name);
+    if (published != 0 && h.addresses.size() == 1 && h.addresses[0] == published) ++matches;
+  }
+  return matches;
+}
+
 std::vector<HelperHit> scan_save_restore_helpers(std::span<const std::uint8_t> image,
                                                  std::uint32_t load_address) {
   std::vector<HelperHit> hits;
