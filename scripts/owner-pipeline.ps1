@@ -3,6 +3,7 @@
 #   scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
+#                              [-BuildHost] [-InstallSdk] [-ExtractGame]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -14,7 +15,11 @@
 #      the kernel/XAM imports (marking which ones the pinned ReXGlue runtime implements, stubs or lacks)
 #      and the save/restore helper addresses (ttt2-xexinfo --imports --helpers);
 #   6. with -Codegen, copies the patched executable to recomp\game\default.xex, runs
-#      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py.
+#      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
+#   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
+#      SDK package (scripts\build-host.ps1; -InstallSdk builds and installs the SDK first, which takes
+#      a long time); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
+#      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`).
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
 # counts and addresses only; game files stay in the work folder and recomp\game (both git-ignored).
 # Send the report file, never the work folder.
@@ -26,7 +31,10 @@ param(
     [string]$Preset = "windows-clang-cl",
     [switch]$SkipBuild,
     [switch]$Codegen,
-    [string]$Rexglue = ""
+    [string]$Rexglue = "",
+    [switch]$BuildHost,
+    [switch]$InstallSdk,
+    [switch]$ExtractGame
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -178,7 +186,30 @@ if ($Codegen) {
     }
 }
 
+# --- 7. host build and game data ----------------------------------------------------------------
+if ($BuildHost) {
+    Section "7. Build the native host (ttt2.exe) against the installed ReXGlue SDK"
+    if (-not $patchedOk) {
+        Log "skipped: no patched executable"
+    } else {
+        $hostArgs = @("-Game", $patched)
+        if ($InstallSdk) { $hostArgs += "-InstallSdk" }
+        $hostOut = & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() }
+        $hostCode = $LASTEXITCODE
+        foreach ($o in $hostOut) { Log $o }
+        if ($hostCode -ne 0) { Log "(host build exit code $hostCode)" }
+        $listing = "recomp\out\build\win-amd64-release\host-listing.txt"
+        if (Test-Path $listing) { Log "Host binaries:"; Get-Content $listing | ForEach-Object { Log "  $_" } }
+    }
+}
+if ($ExtractGame) {
+    Section "8. Extract the disc into $Work\game (the host's game data root)"
+    $gameRoot = Join-Path $Work "game"
+    Run $isoTool @("extract-all", $Iso, $gameRoot) | Out-Null
+    Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
+}
+
 Section "Done"
-Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work or recomp\game."
+Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work, recomp\game or recomp\out."
 $lines | Set-Content -Path $Report -Encoding UTF8
 Write-Host "`nReport: $Report"

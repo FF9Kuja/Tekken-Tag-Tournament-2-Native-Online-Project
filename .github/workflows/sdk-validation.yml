@@ -40,6 +40,20 @@ jobs:
         # --exec also builds recomp/tests/host against the SDK runtime and runs the switch-table program
         # natively (fails with the SDK's own tables, passes with the finder's, reaches no kernel stubs).
         run: scripts/codegen-smoke-test.sh third_party/rexglue-sdk/src/out/linux-amd64/rexglue third_party/rexglue-sdk/src out/codegen-smoke --exec
+      - name: Install the SDK as a CMake package and build the game host against it
+        # The player's build path (scripts/build-host.ps1 on Windows): the SDK installed with
+        # `--target install`, recomp/ configured with CMAKE_PREFIX_PATH, codegen running inside the
+        # build on the license-free switch-table program standing in for the game image.
+        run: |
+          cmake -S third_party/rexglue-sdk/src -B third_party/rexglue-sdk/src/build/linux -DREXGLUE_BUILD_TESTS=OFF
+          cmake --build third_party/rexglue-sdk/src/build/linux --parallel
+          cmake --install third_party/rexglue-sdk/src/build/linux --prefix "$PWD/out/sdk-install"
+          mkdir -p recomp/game
+          cp out/codegen-smoke/switch_ttt2/switch_ttt2.xex recomp/game/default.xex
+          cmake -S recomp -B out/host-linux -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+                -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/out/sdk-install"
+          cmake --build out/host-linux --parallel
+          ls -la out/host-linux/ttt2
       - name: "Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)"
         run: python3 -I scripts/check_instruction_coverage.py --expect-missing 2
       - name: Upload codegen reports

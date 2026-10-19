@@ -69,6 +69,7 @@ official.qrc
 
 # --- Build output and intermediates ---
 /out/
+/recomp/out/
 /build/
 /build-*/
 /cmake-build-*/
