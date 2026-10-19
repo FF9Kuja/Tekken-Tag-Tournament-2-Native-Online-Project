@@ -37,6 +37,15 @@ the Linux jobs; the Windows jobs will get it once their first run shows a clean 
   ttt2-xexinfo "D:\TTT2\TU_174Q22P_0000008000000.00000000000O2" --headers   # (after STFS extraction: Milestone 3)
   ```
 
+* `ttt2-iso info|list|identify|extract <image.iso> ...` - reads an Xbox 360 disc image in place (XGD3/XGD2/XGD1
+  or an extracted partition); `identify` finds `default.xex`, parses and hashes it (`--image-hash` also hashes
+  the decrypted image); `extract` copies one file out.
+* `ttt2-stfs info|identify|extract <package> ...` - reads a title-update package (LIVE/PIRS/CON); `identify`
+  reports the contained `.xexp`'s source -> target version.
+* `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex>` - applies a title update (Clang builds only; needs
+  `scripts/fetch-xenonrecomp.sh` or `.ps1` first).
+* The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`.
+
 ## Repository hygiene
 
 `python3 scripts/check_repo_hygiene.py` scans tracked files for game content, generated code and secrets; CI runs

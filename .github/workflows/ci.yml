@@ -34,14 +34,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build clang g++ cmake
+      - name: Fetch pinned XenonRecomp sources (ttt2-xexpatch, Clang only)
+        if: matrix.compiler == 'clang'
+        run: scripts/fetch-xenonrecomp.sh
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} -DTTT2_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }} --parallel
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
-      - name: Tool smoke test
-        run: ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo --version
+      - name: Tool smoke tests
+        run: |
+          ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo --version
+          ./out/build/${{ matrix.preset }}/bin/ttt2-iso --version
+          ./out/build/${{ matrix.preset }}/bin/ttt2-stfs --version
+          if [ -x ./out/build/${{ matrix.preset }}/bin/ttt2-xexpatch ]; then ./out/build/${{ matrix.preset }}/bin/ttt2-xexpatch --version; fi
+      - name: Hygiene check on the build tree (no game content may appear)
+        run: python3 scripts/check_repo_hygiene.py
 
   windows-msvc:
     name: Windows MSVC (VS 2022)
@@ -65,6 +74,8 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Fetch pinned XenonRecomp sources (ttt2-xexpatch)
+        run: scripts\fetch-xenonrecomp.ps1
       - name: Configure
         run: cmake --preset windows-clang-cl
       - name: Build

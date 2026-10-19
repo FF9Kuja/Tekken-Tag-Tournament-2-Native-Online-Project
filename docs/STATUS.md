@@ -2,6 +2,34 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 2: synchronisation attempt and Milestone 3 pipeline tools
+
+**Completed**
+* Milestone 3 ingestion pipeline (all clean-room, synthetic-fixture tested, Clang 18 + GCC 13 `-Werror`):
+  `ttt2-iso` (XDVDFS disc images: info/list/identify/extract), `ttt2-stfs` (title-update packages:
+  info/identify/extract), XEX basefile decryption (AES-128 from FIPS-197, session key from the retail key) and
+  basic decompression, `ttt2-xexinfo --image-hash`, and `ttt2-xexpatch` (title-update delta patches via the
+  pinned MIT XenonUtils patcher; Clang-only).
+* ReXGlue SDK pinned (v0.10.0) with fetch/build scripts (sh + PowerShell); XenonRecomp pinned likewise.
+* `docs/OWNER_CHECKLIST.md`: the exact commands for the owner's files; CI extended; a weekly/manual SDK
+  validation workflow added.
+
+**Verified (where)**
+* Linux container: 42 doctest cases / 473 assertions, 7 ctest entries, both compilers.
+* STFS layout cross-check: an independent reader known to work on the real TTT2 title updates reads this
+  project's synthetic packages and recovers every file byte for byte.
+* `ttt2-xexpatch` builds from the pinned sources and rejects non-patch inputs; it could not be run on a real
+  `.xexp` (no title update here, by design).
+
+**Blocked / pending**
+* **Push still blocked** after the owner's permission update: git push through the session proxy -> 403 (app
+  installation check), GitHub API writes -> 403 ("not accessible by integration" / "write access not permitted
+  through this proxy"). Reads work and the proxy's own token reports push permission on the repository, so the
+  missing piece is the Claude GitHub App installation on this repository (or a fresh session after it is
+  installed). All commits are local and in the bundle handed to the owner.
+* Windows CI, the real-file pipeline run and the recompilation of the TU3 image wait on the push and on the
+  owner's files respectively.
+
 ## 2026-10-18 - Session 1: Milestones 1 and 2
 
 **Completed**

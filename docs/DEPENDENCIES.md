@@ -16,6 +16,16 @@ Microsoft is a dependency: game content is supplied by the player at install tim
 | Python | 3.10+ | PSF | developer tool | scripts (hygiene check, later patch tools) |
 | GitHub Actions: actions/checkout, ilammy/msvc-dev-cmd | v4 / v1 | MIT | CI | checkout, MSVC environment |
 
+## Used by the Milestone 3 tools (fetched on demand, pinned, never vendored)
+
+| Dependency | Pin | License | How | Purpose |
+|---|---|---|---|---|
+| XenonRecomp `XenonUtils` (hedge-dev) | `ddd128b` (`third_party/xenonrecomp/PIN`) | MIT; `xex_patcher.cpp` derived from Xenia Canary (BSD-3) | `scripts/fetch-xenonrecomp.{sh,ps1}`; only `xex_patcher.cpp` + `memory_mapped_file.cpp` compiled | `.xexp` delta patching in `ttt2-xexpatch` (Clang-only) |
+| libmspack `lzxd.c` | XenonRecomp submodule | LGPL-2.1 | compiled into `ttt2_xexpatcher` (static); sources of the combined work are public, satisfying relinking | LZX delta decoding |
+| tiny-AES-c | XenonRecomp submodule | Unlicense | compiled into `ttt2_xexpatcher` | AES for the patcher |
+| TinySHA1 | in XenonRecomp tree | MIT | header | digests in the patcher |
+| ReXGlue SDK | `c94f5eb` = v0.10.0 (`third_party/rexglue-sdk/PIN`) | BSD-3 | `scripts/fetch-rexglue-sdk.{sh,ps1}` + `scripts/build-rexglue-linux.sh` | codegen tool (`rexglue`) and, later, the runtime |
+
 ## Planned (Milestone 3+)
 
 | Dependency | License | Planned use | Notes |

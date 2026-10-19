@@ -27,16 +27,16 @@ steps that cannot run in the Linux development container. Status legend: done / 
 
 Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations documented.
 
-1. Vendor the ReXGlue SDK as a pinned submodule (the `recomp/` skeleton from `rexglue init` is already in the
-   tree); script the Linux build of the `rexglue` tool (Clang 20 + package list in `docs/DEVELOPMENT.md`).
+1. [x] ReXGlue SDK pinned (`third_party/rexglue-sdk/PIN`, fetch + Linux build scripts; the `recomp/` skeleton
+   from `rexglue init` is in the tree). [ ] Windows build recipe for the `rexglue` tool.
 2. License-free validation in CI: (a) the SDK's PPC instruction tests through `scripts/sdk-recompile-tests.sh`
    (works on Linux, verified); (b) a small XEX2/PE packer so Clang-built PowerPC test programs get the `.pdata`
    directory `rexglue codegen` requires, then codegen smoke tests with expected function counts; (c) an
    instruction-coverage check for the ~70 instructions TTT2 Web lists.
-3. Ingestion tools: STFS reader (TU3), XDVDFS reader (ISO), XEX decrypt/decompress, XEXP patching
-   (first via XenonUtils `XexPatcher`, MIT) -> patched image + hashes. Extend `ttt2-xexinfo`/`known_titles` with
-   verified hashes once the owner runs the tools on their copy (**needs the owner's files; run locally, report
-   hashes only**).
+3. [x] Ingestion tools (session 2): XDVDFS reader + `ttt2-iso`, STFS reader + `ttt2-stfs`, XEX decrypt /
+   basic decompress + `ttt2-xexinfo --image-hash`, XEXP patching via `ttt2-xexpatch` (XenonUtils, MIT, Clang-only).
+   [ ] Run them on the owner's copy (`docs/OWNER_CHECKLIST.md`) and record the verified hashes in
+   `known_titles.hpp` (**needs the owner's files; run locally, report hashes only**).
 4. Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): measure unresolved calls,
    missing instructions, jump tables found vs. the 526-535 expected; iterate the config; port TTT2 Web's
    switch-table finder (CC0) if needed; cross-check with XenonAnalyse.
