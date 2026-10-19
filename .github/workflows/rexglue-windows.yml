@@ -156,7 +156,8 @@ jobs:
         # (recomp\tools\audit_switches.py): this program has none, and the audit must say so cleanly.
         if: inputs.build_host
         run: |
-          scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
+          scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install -Jobs 2 6>&1 | Tee-Object -FilePath out\build-host.log
+          if (-not (Select-String -Path out\build-host.log -Pattern "Host build took [0-9.,]+ minutes" -Quiet)) { throw "build-host.ps1 did not report its build time" }
           if (-not (Select-String -Path recomp\game\resolve-REPORT.md -Pattern "codegen succeeded in round 1" -Quiet)) { throw "the resolver did not report a first-round success" }
           if (-not (Select-String -Path recomp\game\switch-audit.md -Pattern "Address-mapping problems \| 0 \|" -Quiet)) { throw "the switch audit did not run cleanly" }
       - name: Boot ttt2.exe on the license-free image (no GPU plugin) and check its log

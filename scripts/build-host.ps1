@@ -2,7 +2,7 @@
 # consumed as an installed CMake package (the SDK's own distribution model).
 #
 #   scripts\build-host.ps1 [-Game <patched default.xex>] [-SdkInstall <dir>] [-Preset win-amd64-release]
-#                          [-InstallSdk]
+#                          [-InstallSdk] [-Jobs <n>]
 #
 # What it does:
 #   1. -Game copies the player's own, Title-Update-3-patched executable to recomp\game\default.xex
@@ -25,6 +25,8 @@
 #      re-runs it whenever the manifest's inputs change.
 #   4. Prints the executable and the DLLs copied next to it, and writes host-listing.txt into the
 #      build directory (names and sizes only).
+# -Jobs <n> compiles at most n files at once (default: Ninja's choice, about one per CPU thread). The real game
+# is about 300 generated files of up to 1 MB each; when the compiler runs out of memory, a lower number helps.
 # Requirements: LLVM clang 20+ on PATH (winget install LLVM.LLVM), CMake 3.25+, Ninja, Visual Studio
 # 2022 C++ workload (Windows SDK headers). Output: recomp\out\build\<preset>\ttt2.exe (git-ignored).
 # No game content leaves the machine: the generated code and the game image stay in ignored folders.
@@ -32,7 +34,8 @@ param(
     [string]$Game = "",
     [string]$SdkInstall = "",
     [string]$Preset = "win-amd64-release",
-    [switch]$InstallSdk
+    [switch]$InstallSdk,
+    [int]$Jobs = 0
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -126,8 +129,10 @@ try {
     if (-not (Test-Path "generated\default\sources.cmake")) { throw "codegen produced no generated\default\sources.cmake" }
     cmake --preset $Preset "-DCMAKE_PREFIX_PATH=$SdkInstall"
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
-    cmake --build --preset $Preset
+    $buildWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    if ($Jobs -gt 0) { cmake --build --preset $Preset --parallel $Jobs } else { cmake --build --preset $Preset }
     if ($LASTEXITCODE -ne 0) { throw "host build failed ($LASTEXITCODE)" }
+    Write-Host ("Host build took {0:N1} minutes" -f $buildWatch.Elapsed.TotalMinutes)
     $buildDir = Join-Path (Get-Location).Path "out\build\$Preset"
 } finally {
     Pop-Location

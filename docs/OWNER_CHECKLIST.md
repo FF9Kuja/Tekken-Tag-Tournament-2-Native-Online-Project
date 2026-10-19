@@ -287,6 +287,13 @@ ends and runs the triage described below. When the window stays black or freezes
 (the host writes its kernel stub report on the way out) and the script carries on; `-BootTimeout 60` (or
 `run-host.ps1 -TimeoutSeconds 60`) closes it for you after 60 seconds.
 
+**The first build of the whole game takes a while.** ReXGlue writes the game's roughly 50,000 functions as about 300
+C++ files of up to 1 MB, and Clang compiles them with optimisation; expect tens of minutes on a fast PC, more on a
+slower one, and keep a few GB of disk space free (the report prints the free space before the build and how long
+codegen and the build took). Ninja compiles about one file per CPU thread at a time; if the build fails because the
+compiler ran out of memory (the report then prints a `HINT:` line), rerun the same command with `-BuildJobs 4` (or
+`-BuildJobs 2`). Later builds only recompile what changed.
+
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
 only useful for log-gathering; the game cannot draw that way). The host exits by itself when the game's main
