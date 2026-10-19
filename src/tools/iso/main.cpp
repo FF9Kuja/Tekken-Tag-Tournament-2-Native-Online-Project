@@ -105,6 +105,12 @@ int cmd_identify(ttt2::xdvdfs::Image& disc, bool image_hash) {
   if (const auto* known = match_known_executable(sha1, sha256)) {
     std::printf("Matches:            %s\n", std::string(known->description).c_str());
     std::printf("                    (%s)\n", std::string(known->provenance).c_str());
+    if (known->media_id != 0 && parsed->execution_info) {
+      const auto media = parsed->execution_info->media_id;
+      std::printf("Media ID check:     %s\n",
+                  media == known->media_id ? "same disc master as the recorded copy"
+                                           : "differs from the recorded copy (a different pressing of the same executable)");
+    }
   } else {
     std::printf("Matches:            no known executable (send these hashes with your report)\n");
   }

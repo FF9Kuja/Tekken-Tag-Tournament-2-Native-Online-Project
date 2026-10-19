@@ -140,8 +140,10 @@ Verified from source and README:
   instances. The game's original delay-based netcode runs unchanged; **no rollback**.
 * **Game facts:** title ID `4E4D0859`; required Title Update 3 is `TU_174Q22P_0000008000000.00000000000O2`
   (targets version 0.0.3.2; TU1 `...82` -> 0.0.1.2, TU2 `...G2` -> 0.0.2.2); retail base `Default.xex` SHA-1
-  `a942090b7c293d0ce63346ed8a2974448135d0dd`; TU3-patched decrypted image SHA-1 `66adbc1a7744ec840a3ae8e51f8aeb677140d789`
-  (both **reported**); XGD3 redump ISO game partition at `0x2080000` (XGD2 `0xFD90000`); 45 top-level disc files
+  `a942090b7c293d0ce63346ed8a2974448135d0dd` (**confirmed 2026-10-19** by the owner's disc through `ttt2-iso
+  identify`: media ID `5D762D06`, version 0.0.0.2, normal retail AES-128-CBC, basic compression); TU3-patched
+  decrypted image SHA-1 `66adbc1a7744ec840a3ae8e51f8aeb677140d789` (still **reported** only: the owner has no
+  Title Update 3 yet); XGD3 redump ISO game partition at `0x2080000` (XGD2 `0xFD90000`); 45 top-level disc files
   of which 26 are LZX containers (magic `0x0FF512ED/EE`) expanded at install to sizes from `nrfo.bin`;
   TU3's `data100.bin` + `data100.ofs` become the `update:` device; ~13 GB installed.
 * **Gameplay facts relevant to rollback:** the game adds **2 frames of input delay in every offline mode** through

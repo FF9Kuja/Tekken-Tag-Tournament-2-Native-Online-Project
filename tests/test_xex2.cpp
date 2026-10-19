@@ -327,7 +327,11 @@ TEST_CASE("every truncation of a valid image is handled without crashing") {
 }
 
 TEST_CASE("known executable lookup") {
-  CHECK(match_known_executable("a942090b7c293d0ce63346ed8a2974448135d0dd", "") != nullptr);
+  const auto* retail = match_known_executable("a942090b7c293d0ce63346ed8a2974448135d0dd", "");
+  REQUIRE(retail != nullptr);
+  CHECK(retail->title_id == 0x4E4D0859u);
+  CHECK(retail->media_id == 0x5D762D06u);  // the owner's disc, 2026-10-19
+  CHECK(retail->provenance.find("confirmed") != std::string_view::npos);
   CHECK(match_known_executable("", "ee138a4fe8d32a0edc131451377f4377041a49626153fa992db24f5420a7f15c") !=
         nullptr);
   CHECK(match_known_executable("", "") == nullptr);

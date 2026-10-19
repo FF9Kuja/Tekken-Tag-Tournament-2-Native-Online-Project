@@ -1,6 +1,6 @@
 # One-command pipeline for the owner's own game files (Windows, PowerShell 5.1 or 7).
 #
-#   scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
+#   scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" [-TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"]
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
 #                              [-BuildHost] [-SdkInstall <dir>] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
@@ -9,14 +9,17 @@
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
 #   2. identifies the disc image (ttt2-iso identify --image-hash);
 #   3. identifies the title update (ttt2-stfs identify); -TitleUpdate may be a folder, in which case
-#      the package whose Default.xexp targets 0.0.3.2 is picked, as TTT2Recomp's installer does;
-#   4. extracts default.xex and Default.xexp into the work folder;
+#      the package whose Default.xexp targets 0.0.3.2 is picked, as TTT2Recomp's installer does.
+#      Without -TitleUpdate the pipeline runs in BASE-IMAGE MODE: steps 3 and 5 are skipped and every later
+#      step works on the retail executable 0.0.0.2 from the disc, clearly labelled in the report (the base
+#      game is the image TTT2 Web recompiled; Title Update 3 can be added later);
+#   4. extracts default.xex (and Default.xexp when a title update is given) into the work folder;
 #   5. applies the title update with ttt2-xexpatch (Clang builds only) and hashes the result, then lists
 #      the kernel/XAM imports (marking which ones the pinned ReXGlue runtime implements, stubs or lacks)
 #      and the save/restore helper addresses (ttt2-xexinfo --imports --helpers);
-#   6. with -Codegen, copies the patched executable to recomp\game\default.xex, runs the switch-table
-#      finder on it (recomp\game\ttt2_switch_tables.toml, which the manifests include), runs
-#      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
+#   6. with -Codegen, copies the image (patched, or the base executable) to recomp\game\default.xex, runs
+#      the switch-table finder on it (recomp\game\ttt2_switch_tables.toml, which the manifests include),
+#      runs `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
 #   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
 #      SDK package (scripts\build-host.ps1): -SdkInstall <dir> names the package (the unzipped
 #      rexglue-sdk-install-win-amd64 artifact of the Windows workflow, whose bin\rexglue.exe is then used
@@ -31,7 +34,7 @@
 # Send the report file, never the work folder.
 param(
     [Parameter(Mandatory = $true)][string]$Iso,
-    [Parameter(Mandatory = $true)][string]$TitleUpdate,
+    [string]$TitleUpdate = "",
     [string]$Work = "work",
     [string]$Report = "",
     [string]$Preset = "windows-clang-cl",
@@ -49,7 +52,8 @@ $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $root = (Get-Location).Path
 if (-not (Test-Path $Iso)) { throw "disc image not found: $Iso" }
-if (-not (Test-Path $TitleUpdate)) { throw "title update not found: $TitleUpdate" }
+if ($TitleUpdate -ne "" -and -not (Test-Path $TitleUpdate)) { throw "title update not found: $TitleUpdate" }
+$baseMode = ($TitleUpdate -eq "")
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
 $Work = (Resolve-Path $Work).Path
 if ($Report -eq "") { $Report = Join-Path $Work "report.txt" }
@@ -90,6 +94,7 @@ Log ("Machine:   " + [System.Environment]::OSVersion.VersionString + ", PowerShe
 $gitDescribe = (& git describe --always --dirty --tags 2>$null)
 Log ("Checkout:  " + $(if ($gitDescribe) { $gitDescribe } else { "(not a git checkout)" }))
 Log ("Preset:    " + $Preset)
+Log ("Mode:      " + $(if ($baseMode) { "BASE IMAGE - no Title Update 3 given; the retail executable 0.0.0.2 is used throughout" } else { "Title Update 3 applied to the retail executable" }))
 
 # --- 1. tools ---------------------------------------------------------------------------------
 Section "1. Build the tools"
@@ -122,37 +127,47 @@ $isoIdentify = Run $isoTool @("identify", $Iso, "--image-hash")
 
 # --- 3. title update --------------------------------------------------------------------------
 Section "3. Title update"
-$tuFile = $TitleUpdate
-if ((Get-Item $TitleUpdate).PSIsContainer) {
-    Log "Folder given; looking for the Tekken Tag Tournament 2 Title Update 3 package..."
-    $tuFile = $null
-    foreach ($candidate in Get-ChildItem -Path $TitleUpdate -File -Recurse | Where-Object { $_.Length -lt 256MB }) {
-        $out = Invoke-Tool { & $stfsTool identify $candidate.FullName 2>&1 | ForEach-Object { $_.ToString() } }
-        if ($LASTEXITCODE -eq 0 -and ($out -match "Identified:\s+Tekken Tag Tournament 2 Title Update 3")) {
-            $tuFile = $candidate.FullName
-            Log "Found:     $tuFile"
-            break
+$tuFile = $null
+if ($baseMode) {
+    Log "skipped: no -TitleUpdate given (base-image mode). The retail executable 0.0.0.2 from the disc is used for"
+    Log "every later step; docs\OWNER_CHECKLIST.md explains how to obtain Title Update 3 legitimately and rerun."
+} else {
+    $tuFile = $TitleUpdate
+    if ((Get-Item $TitleUpdate).PSIsContainer) {
+        Log "Folder given; looking for the Tekken Tag Tournament 2 Title Update 3 package..."
+        $tuFile = $null
+        foreach ($candidate in Get-ChildItem -Path $TitleUpdate -File -Recurse | Where-Object { $_.Length -lt 256MB }) {
+            $out = Invoke-Tool { & $stfsTool identify $candidate.FullName 2>&1 | ForEach-Object { $_.ToString() } }
+            if ($LASTEXITCODE -eq 0 -and ($out -match "Identified:\s+Tekken Tag Tournament 2 Title Update 3")) {
+                $tuFile = $candidate.FullName
+                Log "Found:     $tuFile"
+                break
+            }
         }
+        if (-not $tuFile) { Log "No package identified as Title Update 3 in $TitleUpdate"; $lines | Set-Content $Report; throw "title update not found; see $Report" }
     }
-    if (-not $tuFile) { Log "No package identified as Title Update 3 in $TitleUpdate"; $lines | Set-Content $Report; throw "title update not found; see $Report" }
+    Log "File:      $tuFile ($([math]::Round((Get-Item $tuFile).Length / 1MB, 2)) MB)"
+    $tuIdentify = Run $stfsTool @("identify", $tuFile)
 }
-Log "File:      $tuFile ($([math]::Round((Get-Item $tuFile).Length / 1MB, 2)) MB)"
-$tuIdentify = Run $stfsTool @("identify", $tuFile)
 
 # --- 4. extract -------------------------------------------------------------------------------
-Section "4. Extract default.xex and Default.xexp into $Work"
+Section $(if ($baseMode) { "4. Extract default.xex into $Work" } else { "4. Extract default.xex and Default.xexp into $Work" })
 $baseXex = Join-Path $Work "base.xex"
 $patchXexp = Join-Path $Work "Default.xexp"
 Run $isoTool @("extract", $Iso, "default.xex", $baseXex) | Out-Null
-Run $stfsTool @("extract", $tuFile, "Default.xexp", $patchXexp) | Out-Null
 Run $xexinfo @($baseXex, "--image-hash") | Out-Null
-Run $xexinfo @($patchXexp) | Out-Null
+if (-not $baseMode) {
+    Run $stfsTool @("extract", $tuFile, "Default.xexp", $patchXexp) | Out-Null
+    Run $xexinfo @($patchXexp) | Out-Null
+}
 
 # --- 5. patch ---------------------------------------------------------------------------------
 Section "5. Apply the title update"
 $patched = Join-Path $Work "default_tu3.xex"
 $patchedOk = $false
-if (Test-Path $patchTool) {
+if ($baseMode) {
+    Log "skipped: base-image mode (no Title Update 3)"
+} elseif (Test-Path $patchTool) {
     $patchOut = Run $patchTool @($baseXex, $patchXexp, $patched)
     if ($LASTEXITCODE -eq 0 -and (Test-Path $patched)) {
         $patchedOk = $true
@@ -162,6 +177,12 @@ if (Test-Path $patchTool) {
     Log "ttt2-xexpatch.exe not built (preset $Preset): the patch tool needs the windows-clang-cl preset"
     Log "(install the 'C++ Clang tools for Windows' component, then rerun with -Preset windows-clang-cl)."
 }
+# The image the later steps recompile and boot: the patched executable, or in base-image mode the retail one.
+# A failed patch attempt leaves no image (recompiling the base by accident would mislead the report).
+$image = $null
+$imageLabel = ""
+if ($patchedOk) { $image = $patched; $imageLabel = "Title Update 3 image (0.0.3.2)" }
+elseif ($baseMode) { $image = $baseXex; $imageLabel = "base retail executable 0.0.0.2 (no Title Update 3)" }
 
 # --- 5b. imports and helpers -------------------------------------------------------------------
 Section "5b. Imports (with the ReXGlue runtime's support for each) and save/restore helpers"
@@ -172,9 +193,11 @@ Run $xexinfo @($scanned, "--imports", "--helpers", "--no-hash") | Out-Null
 # --- 6. codegen -------------------------------------------------------------------------------
 if ($Codegen) {
     Section "6. Recompile with rexglue codegen"
-    if (-not $patchedOk) {
-        Log "skipped: no patched executable"
+    if (-not $image) {
+        Log "skipped: no image to recompile (the title update was given but could not be applied)"
     } else {
+        Log "Image:     $imageLabel"
+
         if ($Rexglue -eq "" -and $SdkInstall -ne "" -and (Test-Path (Join-Path $SdkInstall "bin\rexglue.exe"))) {
             $Rexglue = (Resolve-Path (Join-Path $SdkInstall "bin\rexglue.exe")).Path
         }
@@ -188,8 +211,8 @@ if ($Codegen) {
             Log "the artifact of the 'ReXGlue codegen tool (Windows)' workflow."
         } else {
             New-Item -ItemType Directory -Force -Path "recomp\game" | Out-Null
-            Copy-Item $patched "recomp\game\default.xex" -Force
-            Log "Copied the patched executable to recomp\game\default.xex (git-ignored)."
+            Copy-Item $image "recomp\game\default.xex" -Force
+            Log "Copied the $imageLabel to recomp\game\default.xex (git-ignored)."
             # Jump tables: the SDK's own detector misses or miscompiles several of the shapes TTT2's compiler
             # emits (measured), so the symbolic finder runs first and the manifests include its output.
             Section "6a. Switch jump tables (recomp\tools\find_switch_tables.py; the manifests include the result)"
@@ -212,7 +235,7 @@ if ($Codegen) {
 
             # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
             # same layout as TTT2 Web's (all eight save/restore helper addresses match); compare the reports.
-            $helperScan = Invoke-Tool { & $xexinfo $patched --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() } }
+            $helperScan = Invoke-Tool { & $xexinfo $image --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() } }
             if ($helperScan -match "Layout vs TTT2 Web: 8 of 8") {
                 Log "Layout matches TTT2 Web: recompiling again with its 18k function boundaries (ttt2_manifest.ttt2web.toml)"
                 Push-Location recomp
@@ -234,10 +257,11 @@ if ($Codegen) {
 # --- 7. host build and game data ----------------------------------------------------------------
 if ($BuildHost) {
     Section "7. Build the native host (ttt2.exe) against the installed ReXGlue SDK"
-    if (-not $patchedOk) {
-        Log "skipped: no patched executable"
+    if (-not $image) {
+        Log "skipped: no image to build from (the title update was given but could not be applied)"
     } else {
-        $hostArgs = @("-Game", $patched)
+        Log "Image:     $imageLabel"
+        $hostArgs = @("-Game", $image)
         if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
         if ($InstallSdk) { $hostArgs += "-InstallSdk" }
         $hostOut = Invoke-Tool { & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() } }
@@ -253,9 +277,13 @@ if ($ExtractGame) {
     $gameRoot = Join-Path $Work "game"
     Run $isoTool @("extract-all", $Iso, $gameRoot) | Out-Null
     # The title update's own files (next to game\, where the host mounts them as update:).
-    $updateRoot = Join-Path $Work "update"
-    Run $stfsTool @("extract-all", $tuFile, $updateRoot) | Out-Null
-    Log "Title update files extracted to $updateRoot; the host picks that folder up as update: when it sits next to game\."
+    if ($baseMode) {
+        Log "No title update: nothing to extract into $Work\update (the host runs the base game without update: data)."
+    } else {
+        $updateRoot = Join-Path $Work "update"
+        Run $stfsTool @("extract-all", $tuFile, $updateRoot) | Out-Null
+        Log "Title update files extracted to $updateRoot; the host picks that folder up as update: when it sits next to game\."
+    }
     Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
 }
 

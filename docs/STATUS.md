@@ -4,6 +4,22 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 
 ## 2026-10-19 - Session 5: PR #6 merged, the owner's boot step as one command
 
+**Compatibility status of the owner's copy (reported 2026-10-19)**
+* `ttt2-iso.exe identify`, built by the owner with Visual Studio 2022, on the owner's disc image: title ID
+  `4E4D0859`, media ID `5D762D06`, version `0.0.0.2`, normal retail AES-128-CBC encryption, basic compression,
+  and the "Matches" line for the USA/Europe retail disc. The match is decided by the SHA-1 of `default.xex`, so
+  TTT2Recomp's published hash `a942090b...` is now confirmed by a real copy (`known_titles.hpp` records the
+  confirmation and the media ID; `identify` prints a media-ID check against it). The owner's copy is the image
+  TTT2 Web recompiled. **Validated on the real files so far: disc identification only.** Not yet: the Title
+  Update 3 steps (the owner does not have the update), the recompilation, the host build, the first boot.
+* Consequence: the pipeline gained a base-image mode (no `-TitleUpdate`): steps 3 and 5 are skipped and the
+  switch-table finder, codegen, host build, extraction and boot run on the retail executable 0.0.0.2, labelled
+  as such in the report; the host logs the base version as a known case instead of a warning. TTT2 Web's
+  function boundaries were produced for this image, so the second codegen pass applies to it. The CI dry run
+  exercises the base mode on the synthetic fixtures (PowerShell 5.1). Title Update 3 remains the target for
+  online play (both players need the same version); the checklist documents the legitimate way to obtain it
+  (the owner's console with the disc, Xbox Live's update service, the file copied off the console's storage).
+
 **Completed**
 * **PR #6 merged into `main`** (merge commit `5acfb19`): `host-boot-test.sh --gpu` and the Windows workflow's
   informative GPU step, which passed on the runner's software D3D12 adapter (run 39227512735; see session 4).

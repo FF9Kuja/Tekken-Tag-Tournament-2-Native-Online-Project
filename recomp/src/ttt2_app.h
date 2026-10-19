@@ -33,7 +33,8 @@ class Ttt2App : public rex::ReXApp {
 
   /// The executable this host was recompiled from: Tekken Tag Tournament 2 with Title Update 3.
   static constexpr std::uint32_t kExpectedTitleId = 0x4E4D0859u;
-  static constexpr std::uint32_t kExpectedVersion = 0x00000302u;  // 0.0.3.2
+  static constexpr std::uint32_t kExpectedVersion = 0x00000302u;  // 0.0.3.2, Title Update 3
+  static constexpr std::uint32_t kRetailBaseVersion = 0x00000002u;  // 0.0.0.2, the retail disc
   /// Process exit code after an unhandled host exception (the HOST CRASH block is in the log).
   static constexpr int kExitCodeHostCrash = 3;
 
