@@ -10,7 +10,11 @@ set(TTT2_XENONRECOMP_DIR "${PROJECT_SOURCE_DIR}/third_party/xenonrecomp/src"
 set(_xu "${TTT2_XENONRECOMP_DIR}/XenonUtils")
 set(_tp "${TTT2_XENONRECOMP_DIR}/thirdparty")
 
-if(EXISTS "${_xu}/xex_patcher.cpp" AND EXISTS "${_tp}/libmspack/libmspack/mspack/lzxd.c"
+# XenonRecomp's headers compile only with Clang (be<T> members inside anonymous aggregates are
+# rejected by GCC; MSVC is unsupported upstream), so the tool is Clang-only as well.
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(STATUS "ttt2-xexpatch: skipped - XenonUtils needs Clang (compiler is ${CMAKE_CXX_COMPILER_ID})")
+elseif(EXISTS "${_xu}/xex_patcher.cpp" AND EXISTS "${_tp}/libmspack/libmspack/mspack/lzxd.c"
    AND EXISTS "${_tp}/tiny-AES-c/aes.c" AND EXISTS "${_tp}/TinySHA1/TinySHA1.hpp")
     enable_language(C)
     add_library(ttt2_xexpatcher STATIC

@@ -49,6 +49,7 @@ configure_file(cmake/project_version.hpp.in
 add_subdirectory(src/core)
 add_subdirectory(src/xex)
 add_subdirectory(src/xdvdfs)
+add_subdirectory(src/stfs)
 
 if(TTT2_BUILD_TOOLS)
     add_subdirectory(src/tools)
