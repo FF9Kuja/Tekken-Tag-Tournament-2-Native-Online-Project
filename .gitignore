@@ -142,3 +142,6 @@ third_party/doctest/doctest.h
 
 # ReXGlue SDK checkout (fetched by scripts/fetch-rexglue-sdk.sh)
 third_party/rexglue-sdk/src/
+
+# XenonRecomp checkout (fetched by scripts/fetch-xenonrecomp.sh)
+third_party/xenonrecomp/src/
