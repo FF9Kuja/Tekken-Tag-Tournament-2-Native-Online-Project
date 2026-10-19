@@ -64,7 +64,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 [ -z "$sdk" ] || sdk="$(cd "$sdk" && pwd)"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2
+rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -193,6 +193,68 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         grep "FAIL" "$dir/REPORT2.md" 2>/dev/null || tail -5 "$dir/codegen2.log"
         status=1
     fi
+    # recomp/tools/audit_switches.py rebuilds the address of every bctr in the generated code: pass 2
+    # must emit the finder's 9 tables exactly as written; in the SDK-only code (no finder tables) it must
+    # find the SDK's 7 switches and call 6 of them certain miscompiles (they switch on the loaded target).
+    audit="$root/recomp/tools/audit_switches.py"
+    "$python" -I -c "import json,sys; d=json.load(open(sys.argv[1])); d['tables']=[]; json.dump(d, open(sys.argv[2], 'w'))" \
+        "$dir/switch_tables.json" "$dir/switch_tables-none.json"
+    if "$python" -I "$audit" --image "$dir/switch_ttt2.xex" --generated "$dir/generated/default" --finder "$dir/switch_tables.json" \
+            --md "$dir/AUDIT.md" --json "$dir/audit.json" > "$dir/audit.log" 2>&1 \
+        && grep -q "9 bctr sites; 9 of 9 finder tables emitted as written; 0 SDK-only switches" "$dir/audit.log" \
+        && grep -q "0 mapping problems" "$dir/audit.log" \
+        && "$python" -I "$audit" --image "$dir/switch_ttt2.xex" --generated "$dir/generated-sdk-only/default" \
+            --finder "$dir/switch_tables-none.json" --md "$dir/AUDIT-sdk-only.md" > "$dir/audit-sdk-only.log" 2>&1 \
+        && grep -q "7 SDK-only switches (6 certain miscompiles)" "$dir/audit-sdk-only.log"; then
+        echo "ok   switch_ttt2: audit: the finder's 9 tables emitted as written; the SDK alone: 7 switches, 6 certain miscompiles"
+    else
+        echo "FAIL switch_ttt2: switch audit (see $dir/audit.log, $dir/audit-sdk-only.log)"
+        cat "$dir/audit.log" "$dir/audit-sdk-only.log" 2>/dev/null
+        status=1
+    fi
+
+    # Shapes the symbolic finder follows beyond switch_ttt2.s (switch_shapes.s): it must read the 9
+    # executed dispatches and report S10, which another path enters with another table, instead of
+    # guessing. With the finder's tables the codegen emits those 9 as written; the SDK's own detector
+    # adds a switch at S10, which the audit must call suspect. --exec runs the program below.
+    name=switch_shapes
+    dir="$work/$name"
+    mkdir -p "$dir"
+    if CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$root/recomp/tests/ppc/$name.s" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+        printf '[project]\nname = "%s"\nsdk_version = "0.10.0"\n\n[entrypoint]\nfile_path = "%s.xex"\nout_directory_path = "generated/default"\nincludes = ["%s_config.toml"]\n' \
+            "$name" "$name" "$name" > "$dir/${name}_manifest.toml"
+        printf 'skip_lr = false\nskip_msr = false\nctr_as_local = false\nxer_as_local = false\nreserved_as_local = false\ncr_as_local = false\nnon_argument_as_local = false\nnon_volatile_as_local = false\nincludes = ["%s_tables.toml"]\n' \
+            "$name" > "$dir/${name}_config.toml"
+        s10="$(printf '0x%08X' $(($(tr -d '\r' < "$dir/$name.xex.syms" | awk '$4 == "sh_shared_tail" {print $1}') + 28)))"
+        if "$python" -I "$root/recomp/tools/find_switch_tables.py" "$dir/$name.xex" --toml "$dir/${name}_tables.toml" \
+                --json "$dir/switch_tables.json" > "$dir/finder.log" 2>&1 \
+            && grep -q "9 switch tables" "$dir/finder.log" \
+            && grep -q "unresolved bctr $s10 (bounded: another path enters the dispatch" "$dir/finder.log"; then
+            echo "ok   $name: finder read the 9 dispatches and reported S10 ($s10: another path enters with another table)"
+        else
+            echo "FAIL $name: finder results (see $dir/finder.log)"
+            cat "$dir/finder.log"
+            status=1
+        fi
+        if (cd "$dir" && "$rexglue" --log-level debug codegen "${name}_manifest.toml" > codegen.log 2>&1) \
+            && "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
+                --md "$dir/REPORT.md" --json "$dir/report.json" --quiet \
+                --expect-functions 11 --expect-switches 10 --expect-unimplemented 0 --fail-on-errors \
+            && "$python" -I "$audit" --image "$dir/$name.xex" --generated "$dir/generated/default" \
+                --finder "$dir/switch_tables.json" --md "$dir/AUDIT.md" --json "$dir/audit.json" > "$dir/audit.log" 2>&1 \
+            && grep -q "10 bctr sites; 9 of 9 finder tables emitted as written; 1 SDK-only switches (0 certain miscompiles)" "$dir/audit.log" \
+            && grep -q "| $s10 | .* | suspect: .*another path enters" "$dir/AUDIT.md"; then
+            echo "ok   $name: codegen emitted the finder's 9 tables as written (11 functions, no errors); the SDK's switch at S10 is suspect"
+        else
+            echo "FAIL $name: codegen, report or audit (see $dir/codegen.log, $dir/REPORT.md, $dir/audit.log)"
+            grep "FAIL" "$dir/REPORT.md" 2>/dev/null; cat "$dir/audit.log" 2>/dev/null
+            status=1
+        fi
+    else
+        echo "FAIL $name: could not build the test image (see $dir/pack.log)"
+        tail -5 "$dir/pack.log"
+        status=1
+    fi
 
     # every instruction of recomp/ttt2_instructions.txt must appear translated, except macchwu/maclhwu:
     # SDK 0.10.0 decodes those opcode-4 words as VMX128 (vsldoi128), so they neither translate nor trap.
@@ -303,6 +365,19 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             status=1
         fi
 
+        dir="$work/switch_shapes"
+        rc=0
+        run_host switch_shapes "$dir/generated/default" "$(results_of "$dir/switch_shapes.xex.syms"):11" \
+            "13,24,32,44,51,62,71,80,83,92,0" > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log"; then
+            echo "ok   exec: the new dispatch shapes ran natively with the finder's tables: 13 24 32 44 51 62 71 80 83 92 0"
+        else
+            echo "FAIL exec: native run of switch_shapes (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
+
         # Kernel imports: XamShowFriendsUI and XamUserCreateStatsEnumerator are stubs in the runtime
         # and must get the host overrides' results (ERROR_SUCCESS, ERROR_NO_SUCH_USER = 1317), with the
         # override's first-call log line as the witness; RtlCompareMemory is the SDK's own (5 matching
@@ -365,7 +440,7 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         fi
     fi
 else
-    echo "skip switch_ttt2 / insn_ttt2 / imports_ttt2 / tailcall_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / tailcall_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

@@ -16,10 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/check_repo_hygiene.py
-      - name: Python tool unit tests (codegen report on synthetic output)
+      - name: Python tool unit tests (synthetic images and outputs; the switch finder's tables checked by execution)
         run: python3 -I -m unittest discover -s tests/python -v
-      - name: Switch-table finder and packer compile
-        run: python3 -I -m py_compile recomp/tools/find_switch_tables.py scripts/ppc_elf_to_xex.py scripts/check_instruction_coverage.py scripts/gen_xbox_exports.py
+      - name: Switch-table finder, switch audit and packer compile
+        run: python3 -I -m py_compile recomp/tools/find_switch_tables.py recomp/tools/audit_switches.py scripts/ppc_elf_to_xex.py scripts/check_instruction_coverage.py scripts/gen_xbox_exports.py
 
   linux:
     name: Linux ${{ matrix.compiler }}

@@ -37,6 +37,16 @@ Web's table (used only because your helper fingerprint matches it 8 of 8), then 
 13 entry points and one function boundary, nothing else. When a boot later stops on a call to an unregistered
 function (the runtime logs `[FATAL] Call to invalid or unregistered function at guest address ...`), the pipeline
 verifies that address the same way, rebuilds and boots again (step 9b, up to `-BootRounds 3`).
+Your run also reported 18 switch dispatches the finder could not read. Any `bctr` the finder leaves is handled
+by ReXGlue's own jump-table detector, which on our test program switches on the wrong register in 6 of its 7
+tables (the game would trap there), or becomes an indirect call that traps if the game reaches it. Before your
+rerun the finder was rebuilt to follow the dispatch code exactly (`docs/RESEARCH.md` 8c): more shapes (the table
+address loaded before the bounds check, a bias folded into the table address, masked or 64-bit index arithmetic,
+`add` + `lwz`, two-level tables, `bge` bounds), a complete model of which registers each instruction writes, and a
+check that no other path into the dispatch reads a different table. It still never guesses. A new step 6c audits
+how the codegen emitted every `bctr` of your executable and writes `work\switch-audit.md`: the finder's tables as
+written, every switch only ReXGlue's detector found with a verdict (certain miscompile, consistent, or unverified),
+and the dispatches the finder still cannot read, each with its few instructions so the next fix can be exact.
 **Rerun the same command** (below). **Not yet done with your files:** the Title Update 3 steps (you do not have the
 update yet), a complete recompilation, the host build and the first boot; validated on the real game so far:
 identification, the import/helper analysis, the plain image, the switch-table finder and ReXGlue's analysis up to
@@ -228,8 +238,23 @@ evidence); the codegen logs of failed rounds are kept as `work\codegen.round<N>.
 python -I recomp\tools\resolve_functions.py verify --image recomp\game\default.xex --log work\codegen.log --reference recomp\ttt2_functions.ttt2web.toml --report work\resolve-REPORT.md
 ```
 
-**Send `work\report.txt`, `work\resolve-REPORT.md`, `work\codegen-REPORT.md`, `work\codegen.log` and
-`work\switch_tables.json`.** They contain function counts, addresses, names and error messages: no game bytes. `recomp\game\ttt2_switch_tables.toml`
+**Switch dispatch audit (step 6c).** After codegen, `recomp\tools\audit_switches.py` rebuilds the address of every
+`bctr` in the generated code and compares it with the finder's report. The report gets the summary: the finder's
+tables emitted as written (anything else is a `PROBLEM:` line), the switches only ReXGlue's own detector found with
+a verdict each (a certain miscompile traps when the game reaches it; the summary names how many), and how many
+dispatches the finder could not read (each becomes an indirect call that traps if reached, or an unverified SDK
+switch). `work\switch-audit.md` adds, for each of those, the few instructions of its dispatch code. When a boot
+later stops on a call into the middle of a function, step 9b names an unread dispatch in that function: the address
+is then most likely one of its case labels, not a missing function. By hand:
+
+```powershell
+python -I recomp\tools\audit_switches.py --image recomp\game\default.xex --generated recomp\generated\default --finder work\switch_tables.json --md work\switch-audit.md
+```
+
+**Send `work\report.txt`, `work\resolve-REPORT.md`, `work\codegen-REPORT.md`, `work\codegen.log`,
+`work\switch_tables.json` and `work\switch-audit.md`.** They contain function counts, addresses, names and error
+messages; `switch-audit.md` and `switch_tables.json` also list the few disassembled instructions of each dispatch
+the finder could not read (for its analysis; they stay private between us and are never committed). `recomp\game\ttt2_switch_tables.toml`
 is addresses only too and stays on your PC with the image (git-ignored). The generated C++ in
 `recomp\generated\default\` stays on your PC as well (git-ignored and refused by the hygiene check).
 

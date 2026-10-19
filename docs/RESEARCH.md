@@ -463,6 +463,71 @@ and the native results (the headless harness), and the real host's trap (exit co
 host's own log and the clean run after the rebuild; the SDK workflows repeat the cycle on Linux and on Windows
 (`ttt2.exe`, with the owner's boot step and triage).
 
+## 8c. Switch dispatches made exact (session 6, before the owner's rerun)
+
+**Why.** The owner's run left 18 dispatches with a bounds check that the finder could not read (12 after a compare,
+6 after a byte load). A `bctr` without a `[[switch_tables]]` entry goes to ReXGlue's own detector
+(`FunctionScanner::detect_jump_table`, used both by block discovery and by late detection while the code is
+written); when it finds nothing the `bctr` becomes `REX_CALL_INDIRECT_FUNC(ctr)`, which traps at run time on a
+case label ("Call to invalid or unregistered function"). Its `MissingJumpTable` validation category is never
+raised, and it logs at trace level except when it finds a table load and a `lis` but cannot complete the pattern
+(an error line; the owner's log has none), so its decisions do not show in a debug log. Measured on
+`recomp/tests/ppc/switch_ttt2.s` by the new audit (below): of the 7 switches the detector makes there on its own,
+**6 are certain miscompiles** (the `switch` tests the register holding the loaded target, so no case number ever
+matches and every dispatch reaches `default: __builtin_trap()`), and 1 is consistent with its table. The previous
+finder also had blind spots of its own: its register model treated the 64-bit rotates (`rld*`) and update-form
+loads and stores as writing nothing, `sradi` with the high shift bit as writing rD, and it trusted facts across
+code where another path can enter.
+
+**The finder now (`recomp/tools/find_switch_tables.py`).** It symbolically executes the straight-line code that
+ends at each `bctr` (up to 64 instructions, back to the last instruction that does not fall through, never across a
+function start). Every register value is a constant, `(S << k) + c` for an unknown value S, a table entry
+(`A + (S << k)` read with 1, 2 or 4 bytes, zero- or sign-extended, shifted, plus a base) or a second-level read of a
+table entry. Instructions are modelled exactly where that is possible (add/addi/addis/subf, the mask forms of
+`rlwinm`/`rldic*`, `mulli` by a power of two, `extsw`/`extsb`/`extsh`, every load and its update form); every other
+instruction gives its destination registers fresh unknowns, a call (`bl`) the volatile ones, and an instruction the
+write model does not know all of them. Index ranges come from a compare and the direction of the branch that leaves
+on out-of-range values (`bgt`: max + 1 entries, `bge`: max; a conditional return works the same; the not-taken path
+is followed), from a byte load (256 entries, then cut where the labels leave the function, as before) or from a mask
+(`clrlwi`, `andi.` with 2^n - 1). Shapes this adds: the table address loaded before the bounds check, a bias folded
+into the table address, `clrlslwi`/`clrldi`/`sldi`/`rldic`/`mulli` index arithmetic, `add` then a D-form load,
+signed halfword offsets, two-level tables (a byte index table selecting a jump table entry), mask-bounded tables.
+**Other paths into the dispatch:** branch targets from the same function, the labels of tables with a known length,
+and function starts inside the analysed code are join points. A join point at or before the bounds check restarts
+the analysis there (facts from before it are dropped); one after it must read the same table entry for the same
+switch-register value (assuming, like the main path, that the value is a case number), or the site is reported
+instead. For each dispatch it still cannot read, the JSON report names the reason and lists the disassembled code.
+
+**How it was verified (no game code involved).** `tests/python/test_find_switch_tables.py`: instruction encoders
+checked against GNU as, a small PowerPC interpreter that executes every reported table for every index value (the
+switch register at the `bctr` must select the label the CTR holds) and every alternate entry path, named shape tests,
+negative tests (an unmodelled instruction, a call clobbering the table register, an update load moving the table
+register, a branch in the wrong direction or one that also tests CTR, the tightest of two bounds, a vtable call),
+and 300 seeded random dispatches in CI. Run locally during development: 172,500 random dispatches; the final
+version ran the last 50,000 with no failure. Against the previous finder on 10,000 random
+dispatches: every table it found correctly is still found, it reported 242 tables that are wrong on another path
+(the new finder reports those sites), and the new one finds 6,875 it missed. On `switch_ttt2.s` the 9 tables are
+byte-identical to the previous finder's. `recomp/tests/ppc/switch_shapes.s` (9 new shapes plus S10, a dispatch that
+another path enters with another table) goes through the real codegen in the smoke test: the finder reads the 9 and
+reports S10 (the previous finder read 2: one a row too long, the other S10, wrong on that path); codegen emits the 9
+as written; the native run computes `13 24 32 44 51 62 71 80 83 92 0`.
+
+**The audit (`recomp/tools/audit_switches.py`, pipeline step 6c).** It rebuilds each instruction's address in the
+generated code (ReXGlue writes one `// <mnemonic>` comment per instruction, blocks in address order, a `loc_` label
+at each branch target; every `bctr` is checked against the image) and compares each `bctr` with the finder's
+report: the finder's tables must be emitted as written; a switch only the SDK found is checked with the finder's
+model (a certain miscompile when it tests a value read from the table or a case goes elsewhere than the table entry
+for its number; suspect when another path enters; consistent when every case matches); the dispatches the finder
+could not read are listed with their form (indirect call: traps if reached) and code. On the smoke programs: 0
+address-mapping problems; `switch_ttt2` 9 of 9 as written, its SDK-only build 7 switches and 6 certain miscompiles;
+`switch_shapes` 9 of 9 as written plus the SDK's switch at S10, called suspect. The boot step uses the finder's report
+too: when the runtime traps on an address inside a function that holds an unread dispatch, it says so (the address
+is then most likely a case label, not a missing function).
+
+**Not yet measured:** the owner's executable. Expected from the owner's report (its tables' labels: only one lies
+within 8 instructions of a `bctr`, at or before its compare): the 596 tables stay, some of the 18 resolve, and the
+audit shows the rest, with the SDK detector's verdicts on all other `bctr` sites.
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source
