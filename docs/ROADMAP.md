@@ -66,7 +66,9 @@ byte/halfword-offset tables and switches on the wrong register for several absol
 ## Milestone 4 - Native runtime  (started)
 
 1. [x] `recomp/src/ttt2_app.{h,cpp}` (`Ttt2App` on the SDK; compile-checked on Linux against the SDK with a
-   license-free program as the game). [ ] Windows build via CMake preset + CI (host only, no game code).
+   license-free program as the game). [x] Player-side build path: `scripts/build-host.ps1` builds `ttt2.exe`
+   against the SDK installed as a CMake package (verified on Linux here; `sdk-validation.yml` repeats it in CI,
+   `rexglue-windows.yml build_host` on Windows). [ ] First Windows CI run of that job green.
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime

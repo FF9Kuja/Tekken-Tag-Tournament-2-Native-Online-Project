@@ -42,9 +42,10 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   ttt2-xexinfo "D:\TTT2\TU_174Q22P_0000008000000.00000000000O2" --headers   # (after STFS extraction: Milestone 3)
   ```
 
-* `ttt2-iso info|list|identify|extract <image.iso> ...` - reads an Xbox 360 disc image in place (XGD3/XGD2/XGD1
-  or an extracted partition); `identify` finds `default.xex`, parses and hashes it (`--image-hash` also hashes
-  the decrypted image); `extract` copies one file out.
+* `ttt2-iso info|list|identify|extract|extract-all <image.iso> ...` - reads an Xbox 360 disc image in place
+  (XGD3/XGD2/XGD1 or an extracted partition); `identify` finds `default.xex`, parses and hashes it
+  (`--image-hash` also hashes the decrypted image); `extract` copies one file out; `extract-all` writes the whole
+  tree into a directory (the game data root the native host runs from; entry names are sanitised).
 * `ttt2-stfs info|identify|extract <package> ...` - reads a title-update package (LIVE/PIRS/CON); `identify`
   reports the contained `.xexp`'s source -> target version.
 * `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]` - applies a title update (Clang builds only; needs
@@ -61,6 +62,12 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
   SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+* `scripts/build-host.ps1 [-Game default_tu3.xex] [-SdkInstall DIR] [-InstallSdk]` builds the native host
+  `ttt2.exe` from `recomp/` against the ReXGlue SDK installed as a CMake package (the SDK's own consumption
+  model: `cmake --build ... --target install`, then `find_package(rexglue)` through `CMAKE_PREFIX_PATH`);
+  codegen runs inside the build. The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
+  `rexglue-windows.yml` (`build_host` input), with the license-free switch-table program standing in for the
+  game image, so the player's build path has CI evidence without any game data.
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)
 
@@ -96,10 +103,11 @@ it on every push. Install it as a pre-commit hook with `scripts/install-git-hook
 
 `.github/workflows/ci.yml`: hygiene check and Python unit tests; Linux clang and gcc (`-Werror`); Windows MSVC (VS
 2022 generator) and clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also smoke-test the
-tools. `sdk-validation.yml` (weekly/manual) builds the SDK, runs the codegen checks and the native run of the
-switch-table program through the headless host (`--exec`); `rexglue-windows.yml` (weekly/manual) builds
-`rexglue.exe` on Windows and, with the `native_run` input, also builds the headless host on Windows and runs the
-program there (the first native-execution evidence on the target platform; slow).
+tools. `sdk-validation.yml` (weekly/manual) builds the SDK, runs the codegen checks, the native run of the
+switch-table program through the headless host (`--exec`), and builds the game host against the installed SDK
+package; `rexglue-windows.yml` (weekly/manual) builds `rexglue.exe` on Windows and, with the `native_run` and
+`build_host` inputs, also builds the headless host and runs the program there, and builds `ttt2.exe` the way a
+player does (slow: both build the whole runtime).
 
 ## Working with the ReXGlue SDK on Linux (Milestone 3 preview)
 

@@ -121,6 +121,28 @@ contain function counts, addresses, names and error messages: no game bytes. `re
 is addresses only too and will be committed once reviewed. The generated C++ in `recomp\generated\default\`
 stays on your PC (it is git-ignored and refused by the hygiene check).
 
+## Step 6 - build the native host and attempt the first boot
+
+The host is `ttt2.exe`: your recompiled code plus the ReXGlue runtime, built the way every player will build it.
+It needs the SDK installed as a CMake package once (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`
+does it, or let the pipeline do it with `-InstallSdk`) and the whole disc extracted into a folder, which is the
+`game_data_root` the host runs from:
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame
+# by hand instead:
+scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
+.\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
+recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
+```
+
+Expect the first boot to fail somewhere: the point is the log. The host prints `ttt2: executable title 4E4D0859
+version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds and, when the main thread exits
+or you close the window, a **kernel stub report**: every system call the game reached that the runtime only
+stubs, with counts. **Send the console log** (copy the text, or redirect: `ttt2.exe --game_data_root work\game
+> work\boot.log 2>&1`). It contains names, addresses and counts only. Also say what you saw on screen, if
+anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
+
 ## If something fails
 
 Copy the exact error text. The tools never write game data anywhere except where you point `extract` and

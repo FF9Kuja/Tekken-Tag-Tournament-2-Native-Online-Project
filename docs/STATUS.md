@@ -2,6 +2,53 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
+
+**Completed**
+* **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
+  clang and gcc, Windows MSVC and clang-cl, hygiene + Python tools (CI), and the SDK validation workflow on a
+  GitHub runner: SDK built with Clang 20, 1458 PPC instruction test cases / 5725 assertions, all codegen smoke
+  cases, and the **native run of the switch-table program through the headless host** (fails with the SDK's own
+  tables, passes with the finder's, no kernel stubs reached). Two CI fixes were needed: `lld` was not installed
+  in the Linux CI jobs (`ld.lld: not found`), and the smoke test let the packer fall back to the runner's
+  unversioned clang 18; the packer now accepts `$LD`, `ld.lld`, `ld.lld-<major>` or the clang driver's own lld,
+  and the smoke test hands it its compiler.
+* **Player-side host build path** (`scripts/build-host.ps1`): the SDK installed as a CMake package
+  (`cmake --build ... --target install`, the SDK's own distribution model) and `recomp/` configured with
+  `CMAKE_PREFIX_PATH`; `rexglue codegen` runs inside the build, so no generated file is touched by hand.
+  Verified on Linux here with the license-free switch-table program as the game image: `find_package(rexglue)`
+  finds the package, codegen runs, `ttt2` links (11 build steps). `sdk-validation.yml` repeats exactly that
+  sequence in CI; `rexglue-windows.yml` gains a `build_host` input that runs it on Windows.
+* **`ttt2-iso extract-all <image> <dir>`**: whole-disc extraction (sanitised names, streamed files), the game
+  data root the host runs from (`ttt2.exe --game_data_root <dir>`); end-to-end ctest on the synthetic image
+  (3 files in 1 directory, byte-identical `default.xex`).
+* **Owner pipeline**: `-BuildHost` (+ `-InstallSdk`) builds `ttt2.exe` from the patched executable, `-ExtractGame`
+  extracts the disc into `work\game`; `docs/OWNER_CHECKLIST.md` step 6 describes the first boot attempt and
+  what to send (the console log with the kernel stub report; never the game folder).
+* Windows workflow fixes from its first run on `main`: the SDK checkout failed with "Filename too long"
+  (vulkan-loader fuzzer test data beyond 260 characters) - `fetch-rexglue-sdk.ps1` now clones with
+  `core.longpaths=true`; the LLVM install falls back to the latest package when the pinned version is missing;
+  `rexglue.exe` is uploaded even when the smoke test fails.
+
+**Verified (where)**
+* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green
+  (details above).
+* Linux container: 51 doctest cases / 604 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
+  Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
+  against the package.
+* Windows: CI jobs (tools) green; the ReXGlue Windows workflow's first run on `main` reached the LLVM install
+  (pinned 20.1.8 installs) and failed at the SDK checkout (fixed as above, to be re-run after this PR).
+
+**Not verified / open**
+* `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of
+  `rexglue-windows.yml` with `native_run` and `build_host`).
+* On Linux the host binary needs `librexruntime.so` next to it or on the library path (RPATH is `$ORIGIN`); on
+  Windows `rexglue_configure_target` copies the runtime DLLs next to the executable.
+* Everything on license-free programs; the real image still waits for the owner's run.
+
+**Blocked / pending**
+* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4).
+
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 
 **Completed**
