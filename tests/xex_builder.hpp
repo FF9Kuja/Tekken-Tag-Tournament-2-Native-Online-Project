@@ -103,6 +103,41 @@ class XexBuilder {
     return b;
   }
 
+  /// Body of a FILE_FORMAT_INFO header for normal (LZX) or delta compression: window size and
+  /// one zero block record (without the size prefix).
+  static std::vector<std::uint8_t> file_format_normal(std::uint16_t encryption, std::uint16_t compression,
+                                                      std::uint32_t window_size) {
+    std::vector<std::uint8_t> b(4 + 4 + 24, 0);
+    store_be16(b.data(), encryption);
+    store_be16(b.data() + 2, compression);
+    store_be32(b.data() + 4, window_size);
+    return b;
+  }
+
+  /// Body of a DELTA_PATCH_DESCRIPTOR (0x4C bytes with the size prefix, so 0x48 here) whose
+  /// header window copies `headers_source_size` bytes from `headers_source_offset` of the base.
+  struct DeltaDescriptor {
+    std::uint32_t target_version;
+    std::uint32_t source_version;
+    std::uint32_t size_of_target_headers;
+    std::uint32_t headers_source_offset;
+    std::uint32_t headers_source_size;
+    std::uint32_t headers_target_offset;
+  };
+  static std::vector<std::uint8_t> delta_descriptor(const DeltaDescriptor& d,
+                                                    const std::uint8_t* source_digest = nullptr) {
+    std::vector<std::uint8_t> b(0x48, 0);
+    store_be32(b.data() + 0x0, d.target_version);
+    store_be32(b.data() + 0x4, d.source_version);
+    if (source_digest) std::memcpy(b.data() + 0x8, source_digest, 0x14);
+    std::memset(b.data() + 0x1C, 0x99, 0x10);  // image key source
+    store_be32(b.data() + 0x2C, d.size_of_target_headers);
+    store_be32(b.data() + 0x30, d.headers_source_offset);
+    store_be32(b.data() + 0x34, d.headers_source_size);
+    store_be32(b.data() + 0x38, d.headers_target_offset);
+    return b;
+  }
+
   /// Body of an IMPORT_LIBRARIES header (without the size prefix).
   struct ImportLib {
     std::string name;
@@ -110,6 +145,7 @@ class XexBuilder {
     std::uint32_t version;
     std::uint32_t version_min;
     std::uint16_t import_count;
+    std::vector<std::uint32_t> records{};  ///< explicit record addresses (else 0x82000000 + 4k)
   };
   static std::vector<std::uint8_t> import_libraries(const std::vector<ImportLib>& libs) {
     std::vector<std::uint8_t> strings;
@@ -124,16 +160,18 @@ class XexBuilder {
     b.insert(b.end(), strings.begin(), strings.end());
     for (std::size_t i = 0; i < libs.size(); ++i) {
       const auto& l = libs[i];
-      std::vector<std::uint8_t> e(0x28 + static_cast<std::size_t>(l.import_count) * 4, 0);
+      const std::uint16_t count =
+          l.records.empty() ? l.import_count : static_cast<std::uint16_t>(l.records.size());
+      std::vector<std::uint8_t> e(0x28 + static_cast<std::size_t>(count) * 4, 0);
       store_be32(e.data(), static_cast<std::uint32_t>(e.size()));
       std::memset(e.data() + 4, 0xDD, 0x14);  // next import digest
       store_be32(e.data() + 0x18, l.id);
       store_be32(e.data() + 0x1C, l.version);
       store_be32(e.data() + 0x20, l.version_min);
       store_be16(e.data() + 0x24, static_cast<std::uint16_t>(i));
-      store_be16(e.data() + 0x26, l.import_count);
-      for (std::uint16_t k = 0; k < l.import_count; ++k)
-        store_be32(e.data() + 0x28 + k * 4, 0x82000000u + k * 4);
+      store_be16(e.data() + 0x26, count);
+      for (std::uint16_t k = 0; k < count; ++k)
+        store_be32(e.data() + 0x28 + k * 4, l.records.empty() ? 0x82000000u + k * 4u : l.records[k]);
       b.insert(b.end(), e.begin(), e.end());
     }
     return b;

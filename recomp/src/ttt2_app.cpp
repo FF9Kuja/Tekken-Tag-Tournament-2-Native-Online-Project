@@ -1,0 +1,173 @@
+#include "ttt2_app.h"
+
+#include <rex/logging.h>
+#include <rex/runtime.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/user_module.h>
+#include <rex/system/util/object_table.h>
+#include <rex/system/xex_module.h>
+#include <rex/system/xthread.h>
+
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+
+namespace {
+
+std::string version_string(std::uint32_t v) {
+  return std::to_string(v >> 28) + "." + std::to_string((v >> 24) & 0xF) + "." +
+         std::to_string((v >> 8) & 0xFFFF) + "." + std::to_string(v & 0xFF);
+}
+
+}  // namespace
+
+Ttt2App::~Ttt2App() {
+  StopWatchdog();
+}
+
+void Ttt2App::OnConfigurePaths(rex::PathConfig& paths) {
+  // The game data root is the player's extracted disc (game: / d:); the update root holds the
+  // Title Update 3 data files (update:). When the launcher did not pass an update root, look for an
+  // `update` folder next to the game folder, which is where the owner checklist puts it.
+  if (paths.update_data_root.empty() && !paths.game_data_root.empty()) {
+    const auto sibling = paths.game_data_root.parent_path() / "update";
+    std::error_code ec;
+    if (std::filesystem::is_directory(sibling, ec)) paths.update_data_root = sibling;
+  }
+  REXLOG_INFO("ttt2: game data root   {}", paths.game_data_root.string());
+  REXLOG_INFO("ttt2: update data root {}", paths.update_data_root.empty()
+                                               ? "(none: Title Update 3 data not mounted)"
+                                               : paths.update_data_root.string());
+  REXLOG_INFO("ttt2: user data root   {}", paths.user_data_root.string());
+  REXLOG_INFO("ttt2: cache root       {}", paths.cache_root.string());
+}
+
+void Ttt2App::OnPreSetup(rex::RuntimeConfig& config) {
+  REXLOG_INFO("ttt2: graphics backend {}", config.graphics             ? "provided by the host"
+                                           : config.gpu_plugin.empty() ? "none"
+                                                                       : config.gpu_plugin);
+  if (const char* period = std::getenv("TTT2_WATCHDOG_MS")) {
+    watchdog_period_ms_ = static_cast<std::uint32_t>(std::strtoul(period, nullptr, 10));
+  }
+}
+
+void Ttt2App::OnPostInitLogging() {
+  // Every kernel export the runtime only stubs logs "<name> STUB" when called; counting those lines
+  // gives the list of system calls the game reaches that the runtime does not implement.
+  stubs_ = std::make_shared<ttt2::KernelStubCounter>();
+  stubs_->set_level(spdlog::level::warn);
+  rex::AddSink(stubs_);
+}
+
+void Ttt2App::OnPostLoadXexImage() {
+  auto module = runtime()->kernel_state()->GetExecutableModule();
+  if (!module) {
+    REXLOG_WARN("ttt2: no executable module after loading the XEX");
+    return;
+  }
+  const auto* xex = module->xex_module();
+  if (const auto* info = xex->opt_execution_info()) {
+    const std::uint32_t title_id = info->title_id;
+    const std::uint32_t version = info->version_value;
+    const std::uint32_t base_version = info->base_version_value;
+    REXLOG_INFO("ttt2: executable title {:08X} version {} (base {}), media {:08X}", title_id,
+                version_string(version), version_string(base_version),
+                static_cast<std::uint32_t>(info->media_id));
+    if (title_id != kExpectedTitleId) {
+      REXLOG_WARN(
+          "ttt2: this executable is not Tekken Tag Tournament 2 (title {:08X}); the recompiled code will not "
+          "match it",
+          title_id);
+    } else if (version != kExpectedVersion) {
+      REXLOG_WARN(
+          "ttt2: executable version {} is not Title Update 3 ({}); the recompiled code was generated from "
+          "the TU3 image",
+          version_string(version), version_string(kExpectedVersion));
+    }
+  } else {
+    REXLOG_WARN("ttt2: the executable has no execution info header");
+  }
+  REXLOG_INFO("ttt2: image base {:08X} size {:X} entry {:08X}", xex->base_address(), xex->image_size(),
+              xex->entry_point());
+  if (const auto* libs = xex->import_libraries()) {
+    for (const auto& lib : *libs) {
+      REXLOG_INFO("ttt2: imports {} entries from {}", lib.imports.size(), lib.name);
+    }
+  }
+}
+
+void Ttt2App::OnPostLaunchModule(rex::system::XThread* thread) {
+  main_thread_ = thread;
+  REXLOG_INFO("ttt2: main guest thread created (id {}), starting", thread ? thread->thread_id() : 0u);
+  StartWatchdog();
+}
+
+void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
+  REXLOG_INFO("ttt2: main guest thread exited (id {})", thread ? thread->thread_id() : 0u);
+  WatchdogTick();
+  StopWatchdog();
+  LogStubReport("main thread exit");
+}
+
+void Ttt2App::OnShutdown() {
+  StopWatchdog();
+  LogStubReport("shutdown");
+  if (stubs_) {
+    rex::RemoveSink(stubs_);
+    stubs_.reset();
+  }
+}
+
+void Ttt2App::LogStubReport(const char* when) {
+  // The complete list, most-called first: what Milestone 4 has to implement next. Names and counts.
+  if (!stubs_) return;
+  const auto hits = stubs_->Snapshot();
+  REXLOG_INFO("ttt2: kernel stub report at {}: {} calls to {} distinct stubs", when, stubs_->total_calls(),
+              hits.size());
+  constexpr std::size_t kMaxLines = 200;
+  for (std::size_t i = 0; i < hits.size() && i < kMaxLines; ++i) {
+    REXLOG_INFO("ttt2:   {:<48} {:>9} calls (first seen as stub call #{})", hits[i].name, hits[i].calls,
+                hits[i].first_seen);
+  }
+  if (hits.size() > kMaxLines) REXLOG_INFO("ttt2:   ... {} more", hits.size() - kMaxLines);
+}
+
+void Ttt2App::StartWatchdog() {
+  if (watchdog_period_ms_ == 0 || watchdog_.joinable()) return;
+  watchdog_stop_ = false;
+  watchdog_ = std::thread([this] {
+    while (!watchdog_stop_) {
+      for (std::uint32_t waited = 0; waited < watchdog_period_ms_ && !watchdog_stop_; waited += 50) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      if (!watchdog_stop_) WatchdogTick();
+    }
+  });
+}
+
+void Ttt2App::StopWatchdog() {
+  watchdog_stop_ = true;
+  if (watchdog_.joinable()) watchdog_.join();
+}
+
+void Ttt2App::WatchdogTick() {
+  // Periodic census of the guest threads: TTT2 starts about twenty (nuscMain, nuscFileAsyncRequest,
+  // ... per TTT2 Web), so a boot that stalls shows up here as a frozen population long before
+  // anything is drawn. Names and counts only.
+  auto* rt = runtime();
+  if (!rt || !rt->kernel_state()) return;
+  auto threads = rt->kernel_state()->object_table()->GetObjectsByType<rex::system::XThread>();
+  std::size_t running = 0;
+  std::string names;
+  for (const auto& t : threads) {
+    if (t->is_running()) ++running;
+    if (names.size() < 400) {
+      if (!names.empty()) names += ", ";
+      names += t->name().empty() ? ("#" + std::to_string(t->thread_id())) : t->name();
+    }
+  }
+  REXLOG_INFO("ttt2: watchdog: {} guest threads ({} running); main thread {}: {}; kernel stubs: {}",
+              threads.size(), running, main_thread_ && main_thread_->is_running() ? "running" : "not running",
+              names, stubs_ ? stubs_->Summary(5) : std::string("not counted"));
+}

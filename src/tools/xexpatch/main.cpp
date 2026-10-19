@@ -2,10 +2,13 @@
 // writes the patched executable with its image decrypted and decompressed (no encryption, no
 // compression in the output headers), which is what the recompiler consumes.
 //
-//   ttt2-xexpatch <base.xex> <patch.xexp> <out.xex>
+//   ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]
 //
-// The patcher is XenonUtils' XexPatcher (see CMakeLists.txt for licensing). Both inputs are the
-// player's own files; the output stays on the player's disk and is never redistributed.
+// Before patching, the plaintext headers of both files are checked against each other (title ID,
+// versions, descriptor windows: ttt2/xex/patch_check.hpp); a pair that cannot match is refused
+// with the reasons unless --force is given. The patcher is XenonUtils' XexPatcher (see
+// CMakeLists.txt for licensing). Both inputs are the player's own files; the output stays on the
+// player's disk and is never redistributed.
 
 #include <xex_patcher.h>
 
@@ -21,6 +24,7 @@
 #include "ttt2/core/project_version.hpp"
 #include "ttt2/xex/basefile.hpp"
 #include "ttt2/xex/known_titles.hpp"
+#include "ttt2/xex/patch_check.hpp"
 #include "ttt2/xex/xex2.hpp"
 
 namespace {
@@ -75,10 +79,20 @@ int main(int argc, char** argv) {
     std::printf("ttt2-xexpatch %s (%s)\n", ttt2::kProjectVersion, ttt2::kProjectGitDescribe);
     return 0;
   }
-  if (argc != 4) {
-    std::fprintf(stderr, "usage: ttt2-xexpatch <base.xex> <patch.xexp> <out.xex>\n");
+  bool force = false;
+  std::vector<const char*> files;
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i]) == "--force") {
+      force = true;
+    } else {
+      files.push_back(argv[i]);
+    }
+  }
+  if (files.size() != 3) {
+    std::fprintf(stderr, "usage: ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]\n");
     return 1;
   }
+  argv = const_cast<char**>(files.data()) - 1;  // argv[1..3] below are the three files
   auto base = ttt2::read_file(argv[1]);
   if (!base) return fail(base.error().message);
   auto patch = ttt2::read_file(argv[2]);
@@ -90,10 +104,16 @@ int main(int argc, char** argv) {
   const auto patch_info = ttt2::xex::parse(patch.value());
   if (!patch_info) return fail(std::string("patch: ") + patch_info.error().message);
   describe("patch:", patch_info.value());
-  if (!patch_info->is_delta_patch()) return fail("the second file is not a delta patch (.xexp)");
-  if (base_info->execution_info && patch_info->execution_info &&
-      base_info->execution_info->title_id != patch_info->execution_info->title_id) {
-    return fail("title ID mismatch between the base executable and the patch");
+  const auto compat =
+      ttt2::xex::check_patch_compatibility(base_info.value(), base.value(), patch_info.value());
+  for (const auto& n : compat.notes) std::printf("check:  %s\n", n.c_str());
+  for (const auto& e : compat.errors) std::printf("check:  REFUSED: %s\n", e.c_str());
+  if (!compat.compatible) {
+    if (!force)
+      return fail(
+          "this title update cannot be applied to this base executable (see the reasons above; --force to "
+          "try anyway)");
+    std::printf("check:  continuing despite the problems above (--force)\n");
   }
 
   std::vector<std::uint8_t> out;

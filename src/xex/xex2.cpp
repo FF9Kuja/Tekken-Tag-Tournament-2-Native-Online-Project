@@ -180,6 +180,16 @@ void parse_import_libraries(const ByteReader& r, std::size_t off, std::size_t si
     lib.import_count = *r.u16be(pos + 0x26);
     lib.name = name_index < names.size() ? names[name_index]
                                          : ("<bad name index " + std::to_string(name_index) + ">");
+    // The record addresses follow the 0x28-byte header, inside this library's declared size.
+    const std::size_t records_end = std::min<std::size_t>(end, pos + lib_size);
+    for (std::size_t k = 0; k < lib.import_count && k < options.max_table_entries; ++k) {
+      const std::size_t rec = pos + kImportLibraryHeaderSize + k * 4;
+      if (rec + 4 > records_end) {
+        img.warnings.push_back("import library " + lib.name + " declares more records than it holds");
+        break;
+      }
+      lib.record_addresses.push_back(*r.u32be(rec));
+    }
     img.import_libraries.push_back(std::move(lib));
     if (lib_size < kImportLibraryHeaderSize) {
       img.warnings.push_back("import library entry has an invalid size");
@@ -219,11 +229,21 @@ void parse_delta_patch(const ByteReader& r, std::size_t off, std::size_t size, X
     return;
   }
   DeltaPatchInfo d;
+  d.descriptor_size = static_cast<std::uint32_t>(size);
   d.target_version = Version::from_u32(*r.u32be(off + 0x4));
   d.source_version = Version::from_u32(*r.u32be(off + 0x8));
   copy_bytes(r, off + 0xC, d.source_digest);
   copy_bytes(r, off + 0x20, d.source_image_key);
   d.size_of_target_headers = *r.u32be(off + 0x30);
+  if (size >= 0x4C && r.in_bounds(off, 0x4C)) {
+    d.delta_headers_source_offset = *r.u32be(off + 0x34);
+    d.delta_headers_source_size = *r.u32be(off + 0x38);
+    d.delta_headers_target_offset = *r.u32be(off + 0x3C);
+    d.delta_image_source_offset = *r.u32be(off + 0x40);
+    d.delta_image_source_size = *r.u32be(off + 0x44);
+    d.delta_image_target_offset = *r.u32be(off + 0x48);
+    d.has_delta_windows = true;
+  }
   img.delta_patch = d;
 }
 

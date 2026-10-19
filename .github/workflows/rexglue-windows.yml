@@ -1,0 +1,73 @@
+name: ReXGlue codegen tool (Windows)
+
+# Builds the pinned ReXGlue SDK's codegen tool on a Windows runner with the recipe the SDK's own
+# CI uses (LLVM clang + Ninja, win-amd64 preset), runs the license-free codegen smoke test on it
+# and uploads rexglue.exe as an artifact, so the recipe in scripts/build-rexglue-windows.ps1 is
+# proven on real Windows and the owner can download the tool instead of building it. Manual and
+# weekly: the SDK build takes a long time. No game content is involved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: "Also build the headless host against the SDK runtime and run the switch-table program natively (adds an hour or more)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "41 5 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  rexglue-win-amd64:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM 20, CMake and Ninja
+        run: choco install llvm --version=20.1.8 -y --no-progress; choco install cmake ninja -y --no-progress
+      - name: Fetch the pinned SDK
+        run: scripts\fetch-rexglue-sdk.ps1
+      - name: Build rexglue.exe
+        run: scripts\build-rexglue-windows.ps1
+      - name: Locate the tool
+        id: tool
+        shell: bash
+        run: |
+          exe=$(find third_party/rexglue-sdk/src/out -name rexglue.exe -not -path '*CMakeFiles*' | head -1)
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+          "$exe" --version
+      - name: Codegen smoke test (license-free PowerPC programs)
+        shell: bash
+        env:
+          CC: clang
+          CXX: clang++
+          NATIVE_RUN: ${{ inputs.native_run && 'true' || 'false' }}
+        run: |
+          # make-ppc-test-xex.sh uses clang/ld.lld (LLVM is multi-target) for C sources and the SDK's
+          # Windows binutils (.exe) for assembly sources. With native_run the SDK source tree is passed
+          # too and --exec builds recomp/tests/host (the runtime) and runs the program on Windows.
+          export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
+          if [ "$NATIVE_RUN" = true ]; then
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec
+          else
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
+          fi
+      - name: Upload rexglue.exe
+        # Even when the smoke test fails: the tool itself is the deliverable the owner downloads.
+        if: always() && steps.tool.outputs.exe != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: rexglue-win-amd64
+          path: ${{ steps.tool.outputs.exe }}
+          retention-days: 90
+      - name: Upload smoke-test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codegen-smoke-reports
+          path: |
+            out/codegen-smoke/**/REPORT.md
+            out/codegen-smoke/**/report.json
+            out/codegen-smoke/**/codegen.log

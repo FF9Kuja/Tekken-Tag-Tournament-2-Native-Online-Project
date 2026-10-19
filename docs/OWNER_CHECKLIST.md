@@ -10,6 +10,21 @@ only things to send back are the text the tools print (title IDs, versions, hash
   `Content\0000000000000000\4E4D0859\000B0000\` folder, or wherever your dump keeps it).
 * Windows 10/11 with Visual Studio 2022 (Desktop development with C++) and git, **or** WSL/Ubuntu.
 
+## The short way: one command
+
+`scripts\owner-pipeline.ps1` runs steps 1-4 (and 5 with `-Codegen`) and writes a text report that holds only
+hashes, versions, counts, addresses and the names of the kernel/XAM functions the game imports (each marked with
+whether the ReXGlue runtime implements, stubs or lacks it):
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
+# or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically
+# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result
+```
+
+**Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
+the same thing by hand; `ttt2-validate.exe "D:\path\TTT2.iso" "D:\path\TU_..." --work work` does steps 2-4 alone.
+
 ## Step 1 - build the tools (once)
 
 Windows (PowerShell, in the repository folder):
@@ -76,12 +91,35 @@ out/build/linux-clang/bin/ttt2-xexinfo work/default_tu3.xex --image-hash
 Expected: `output: ... version 0.0.3.2`, `image: PE image, N bytes, SHA-1 ...`. **Send the printed lines.** The
 `work\` folder holds your game files; `.xex`/`.xexp` are git-ignored, but keep it out of any commit anyway.
 
-## Step 5 - (next milestone) run the recompiler
+## Step 5 - run the recompiler and report what it found
 
-Once the hashes above are confirmed, the next instructions will cover fetching the ReXGlue SDK
-(`scripts\fetch-rexglue-sdk.ps1`), building its codegen tool, and running `rexglue codegen` on
-`work\default_tu3.xex` through `recomp\ttt2_manifest.toml`. The generated code stays on your PC; the report to
-send back will again be counts and logs only.
+You need `rexglue.exe` (the ReXGlue codegen tool). Either download it from the latest run of the
+"ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`), or build it:
+
+```powershell
+# needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja and Visual Studio 2022's C++ workload; 30-60 minutes
+scripts\fetch-rexglue-sdk.ps1
+scripts\build-rexglue-windows.ps1          # prints the path of rexglue.exe
+```
+
+Then let the pipeline script do the rest (it copies `work\default_tu3.xex` to `recomp\game\default.xex`, runs
+`rexglue codegen` on `recomp\ttt2_manifest.toml`, and summarises the generated code):
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe"
+```
+
+Also run the switch-table finder on the patched executable; it writes the `[[switch_tables]]` entries the
+recompiler needs (SDK 0.10.0 misses or miscompiles several table shapes on its own, see `docs/RESEARCH.md` 8a):
+
+```powershell
+python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\ttt2_switch_tables.toml --json work\switch_tables.json
+```
+
+**Send `work\report.txt`, `work\codegen-REPORT.md`, `work\codegen.log` and `work\switch_tables.json`.** They
+contain function counts, addresses, names and error messages: no game bytes. `recomp\ttt2_switch_tables.toml`
+is addresses only too and will be committed once reviewed. The generated C++ in `recomp\generated\default\`
+stays on your PC (it is git-ignored and refused by the hygiene check).
 
 ## If something fails
 
