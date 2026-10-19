@@ -5,10 +5,14 @@
 # recomp/tests/ppc/imports_ttt2.s as recomp/game/default.xex for this: its entry point calls kernel
 # imports (two overridden by recomp/src/kernel_overrides.cpp) and returns, which makes ReXApp quit.
 #
-#   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds] [--expect-crash | --expect-stall]
+#   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds]
+#                             [--expect-crash | --expect-stall] [--gpu]
 #
 # Runs without GPU emulation (--gpu_plugin=none) and with SDL's dummy audio driver; on Linux without a
-# display it starts an Xvfb of its own. Expects exit code 0 within the timeout and these lines in the
+# display it starts an Xvfb of its own. With --gpu the host is left to load the staged Xenos plugin
+# (D3D12 on Windows, a software adapter on a GPU-less runner): the normal expectations apply with
+# "graphics backend xenos", and a plugin that fails to load or to set up fails the test; the first
+# exercise of the graphics path before the owner's machine. Expects exit code 0 within the timeout and these lines in the
 # newest log file next to the executable: the executable identification, both override first-call
 # lines, the main guest thread's exit and the host's own exit line; a HOST CRASH block fails the test.
 # With --expect-crash (image: recomp/tests/ppc/crash_ttt2.s, a program that writes to the null page)
@@ -26,10 +30,14 @@ game="${2:?game data root}"
 limit="${3:-}"
 expect_crash=0
 expect_stall=0
+gpu=0
 for a in "$@"; do
     [ "$a" = "--expect-crash" ] && expect_crash=1
     [ "$a" = "--expect-stall" ] && expect_stall=1
+    [ "$a" = "--gpu" ] && gpu=1
 done
+gpu_arg="--gpu_plugin=none"
+[ "$gpu" = 0 ] || gpu_arg="--gpu_plugin=xenos"
 case "$limit" in ""|--*) limit=60; [ "$expect_stall" = 0 ] || limit=12 ;; esac
 [ "$expect_stall" = 0 ] || export TTT2_WATCHDOG_MS=1000
 [ -f "$exe" ] || { echo "host-boot-test: $exe not found"; exit 2; }
@@ -61,9 +69,9 @@ cleanup() { [ -z "$xvfb_pid" ] || kill "$xvfb_pid" 2>/dev/null || true; }
 trap cleanup EXIT
 
 rc=0
-# --gpu_plugin=none keeps Ttt2App from selecting the staged Xenos plugin: no GPU emulation here.
+# --gpu_plugin=none keeps Ttt2App from selecting the staged Xenos plugin (no GPU emulation) unless --gpu.
 if [ "$expect_stall" = 1 ]; then
-    "$exe" --game_data_root "$game" --gpu_plugin=none --log_level info > "$stdout_log" 2>&1 &
+    "$exe" --game_data_root "$game" "$gpu_arg" --log_level info > "$stdout_log" 2>&1 &
     pid=$!
     waited=0
     while [ "$waited" -lt "$limit" ] && ! grep -qs "ttt2: possible stall" "$logs"/*.log 2>/dev/null; do
@@ -88,7 +96,7 @@ if [ "$expect_stall" = 1 ]; then
     fi
     wait "$pid" 2>/dev/null || rc=$?
 else
-    timeout "$limit" "$exe" --game_data_root "$game" --gpu_plugin=none --log_level info > "$stdout_log" 2>&1 || rc=$?
+    timeout "$limit" "$exe" --game_data_root "$game" "$gpu_arg" --log_level info > "$stdout_log" 2>&1 || rc=$?
 fi
 log="$(ls -t "$logs"/*.log 2>/dev/null | head -1)"
 echo "host-boot-test: exit code $rc, log ${log:-<none>}"
@@ -118,7 +126,14 @@ elif [ "$expect_crash" = 1 ]; then
 else
     [ "$rc" = 0 ] && echo "ok   boot: exit code 0" || { echo "FAIL boot: exit code $rc, expected 0"; status=1; }
     check "ttt2: executable title" "the image was identified"
-    check "ttt2: graphics backend none" "no GPU emulation, as requested"
+    if [ "$gpu" = 1 ]; then
+        check "ttt2: graphics backend xenos" "the Xenos GPU plugin was selected"
+        absent "Failed to load GPU plugin" "the GPU plugin loaded"
+        absent "GPU plugin .* not found" "the GPU plugin was staged next to the executable"
+        absent "Graphics presentation setup failed" "the graphics presentation was set up"
+    else
+        check "ttt2: graphics backend none" "no GPU emulation, as requested"
+    fi
     check "ttt2: main guest thread created" "the module was launched"
     check "kernel override XamShowFriendsUI -> ERROR_SUCCESS" "XamShowFriendsUI reached the host override"
     check "kernel override XamUserCreateStatsEnumerator -> ERROR_NO_SUCH_USER" "XamUserCreateStatsEnumerator reached the host override"

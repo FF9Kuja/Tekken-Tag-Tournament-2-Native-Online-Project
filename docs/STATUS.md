@@ -137,6 +137,15 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   purpose as described above; finder -> codegen -> host -> boot verified after the manifest change.
 
 **Not verified / open**
+* The graphics path: `host-boot-test.sh --gpu` lets the host load the staged Xenos plugin. Here (no Vulkan
+  device) the plugin loads and the SDK then fails to create a Vulkan instance ("ErrorIncompatibleDriver",
+  "Graphics presentation setup failed"), after which the app exits without launching the module - the expected
+  outcome on a GPU-less box, and the first evidence that the plugin file, its exports and the load path work. The
+  Windows workflow runs the form as a non-blocking step; on the runner's software D3D12 adapter it **passed**
+  (PR #6, run 39227512735: `rexgpu-xenos.dll` loaded, "graphics backend xenos", the D3D12 presentation was set
+  up, the module ran, both overrides were reached, exit 0) - the first exercise of the whole graphics path,
+  windows and swap chain included, though nothing was drawn (the test program draws nothing). The GPU path on a
+  real adapter with the real game is still the owner's first boot.
 * The stall detector fired natively on a license-free program that spins forever (`recomp/tests/ppc/stall_ttt2.s`,
   `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
   1 s watchdog period); the crash reporter fired on the illegal-instruction case and on `crash_ttt2.s` (a write
@@ -145,13 +154,13 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   window the way a player does (a quit signal / `taskkill`) and found that the SDK's close path hard-exits
   without `OnShutdown`, so the full kernel stub report was lost exactly when the owner closes a frozen window;
   `Ttt2App::OnWindowCloseRequested` now writes it on the way out (verified: report, "Window closing", exit 0,
-  7 s for the whole test). The GPU plugin loads only when
-  a GPU is present: never exercised in CI (no GPU; the boot test runs with
-  `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
+  7 s for the whole test). The blocking boot tests run with `--gpu_plugin=none`; the `--gpu` form above is
+  the only run with graphics so far, on a software adapter and a program that draws nothing.
 * `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the
   count and the codegen report) comes with the owner's first run.
-* The owner pipeline's PowerShell 5.1 dry run in CI (`fc4e0b5`) and the dispatched SDK / Windows runs on
-  `3551f34` were still in progress when this was written; see PR #4 for their result.
+* PR #4 merged as `4478a34` (CI 10/10, SDK validation and Windows runs green on its head, PowerShell 5.1 dry run
+  included), PR #5 (stub report on window close, stall test through the real close path) as `e7f4084`; the Windows
+  workflow ran green on `main` after each merge (runs 39224566733, 39227258710).
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**
@@ -161,11 +170,11 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   on the log.
 
 **Next task (resumable state)**
-* Merge PR #4 once its runs are green, restart the branch from `main`, then iterate on the owner's first-boot
-  report: implement each stub the triage report lists as a host override (TTT2 Web's reference is given per
-  stub), fix what the HOST CRASH block or the stall dump points at, repeat. Until the report arrives, the
-  remaining preparatory work is small (the Windows workflow could run the crash and stall forms of the boot
-  test too).
+* PR #6 (`--gpu` boot-test form, informative Windows GPU step) is green and ready to merge; after the merge
+  restart the branch from `main` and iterate on the owner's first-boot report: implement each stub the triage
+  report lists as a host override (TTT2 Web's reference is given per stub), fix what the HOST CRASH block or the
+  stall dump points at, repeat. Until the report arrives, the preparatory work left is small: both workflows
+  already run the normal, crash, stall and (Windows, informative) GPU forms of the boot test.
 
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 

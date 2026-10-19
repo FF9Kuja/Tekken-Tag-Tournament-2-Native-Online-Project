@@ -110,7 +110,11 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   (image: `recomp/tests/ppc/stall_ttt2.s`, a program that spins forever) it runs with a 1 s watchdog period until
   the "possible stall" dump appears, then closes the window the way a player does (SIGTERM, which SDL turns into a
   close request; `taskkill` on Windows) and expects the per-thread dump, the kernel stub report the host writes on
-  close, and exit code 0. Both workflows run all three forms, rebuilding the host on each image.
+  close, and exit code 0. Both workflows run all three forms, rebuilding the host on each image. `--gpu` lets the
+  host load the staged Xenos plugin instead of running without GPU emulation (expects "graphics backend xenos" and
+  no load or presentation-setup failure); the Windows workflow runs it as a non-blocking, informative step on the
+  runner's software D3D12 adapter. On a Linux box without a Vulkan device the plugin loads but the instance
+  creation fails ("ErrorIncompatibleDriver"), which the form reports.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
