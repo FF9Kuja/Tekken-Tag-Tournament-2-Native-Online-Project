@@ -75,7 +75,10 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    (implemented / stub / missing; `ttt2-xexinfo --imports`, `ttt2-validate`, `scripts/gen_runtime_exports.py`);
    the SDK's stubs log `<name> STUB` at warn level, which is the import trace. [x] stub-call counter in
    `Ttt2App` and the headless harness (`recomp/src/stub_counter.*`: which stubbed system calls the game reaches,
-   how often, logged on watchdog ticks and in full at exit). [ ] stall dumps (as both references built).
+   how often, logged on watchdog ticks and in full at exit). [x] stall detector (per-thread dump when the census
+   and the stub total stay unchanged for three watchdog ticks) and a host crash report (fault kind, host PC,
+   fault address, guest thread, most recent stub calls) - compile-checked against the SDK, exercised only by a
+   real boot.
 3. Iterate on boot failures with the owner's test reports (**needs Windows + GPU + game files**): threads, waits,
    vblank/DPC timing, XAM UI/content calls, TLS, file I/O through the SDK VFS (`game:`, `update:`).
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.

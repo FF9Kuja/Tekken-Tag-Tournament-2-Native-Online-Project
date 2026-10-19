@@ -33,5 +33,5 @@ programs in `tests/ppc/`, see `docs/DEVELOPMENT.md`.
 | `tests/ppc/*.c`, `*.s` | license-free PowerPC test programs: smoke, jump-table shapes (`switch_ttt2.s`), the TTT2 instruction list (`insn_ttt2.s`) |
 | `tests/host/` | headless host: runs a recompiled test program through the runtime, checks its results and reports the kernel stubs it reached |
 | `ttt2_instructions.txt` | the 66 instructions TTT2 needs beyond XenonRecomp's original set (from TTT2 Web, CC0) |
-| `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog, kernel stub report |
+| `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog with stall detector, kernel stub report, host crash report |
 | `src/stub_counter.{h,cpp}`, `src/stub_name.hpp` | counts the runtime's `<name> STUB` warnings per export (also used by the headless harness) |

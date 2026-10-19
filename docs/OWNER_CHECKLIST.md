@@ -136,12 +136,14 @@ scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\bui
 recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
 ```
 
-Expect the first boot to fail somewhere: the point is the log. The host prints `ttt2: executable title 4E4D0859
-version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds and, when the main thread exits
-or you close the window, a **kernel stub report**: every system call the game reached that the runtime only
-stubs, with counts. **Send the console log** (copy the text, or redirect: `ttt2.exe --game_data_root work\game
-> work\boot.log 2>&1`). It contains names, addresses and counts only. Also say what you saw on screen, if
-anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
+Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
+`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`) and prints it to the console: `ttt2: executable title
+4E4D0859 version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds, a **possible stall**
+dump when nothing changes for 15 seconds (every guest thread with its state), a **kernel stub report** when the
+main thread exits or you close the window (every system call the game reached that the runtime only stubs, with
+counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the guest thread, the most recent stub
+calls). **Send the newest file from that `logs\` folder.** It contains names, addresses and counts only. Also say
+what you saw on screen, if anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails
 

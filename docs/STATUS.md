@@ -25,6 +25,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * **Owner pipeline**: `-BuildHost` (+ `-InstallSdk`) builds `ttt2.exe` from the patched executable, `-ExtractGame`
   extracts the disc into `work\game`; `docs/OWNER_CHECKLIST.md` step 6 describes the first boot attempt and
   what to send (the console log with the kernel stub report; never the game folder).
+* **First-boot diagnostics in the host**: a last-chance crash reporter (`rex::arch::ExceptionHandler`, installed
+  after the runtime's MMIO handler) logs the fault kind, host PC, fault address, the guest thread and the most
+  recent kernel stub calls, flushes the log and lets the normal crash path continue; the watchdog logs a
+  per-thread dump (state, priority, suspend count, wait result) when the thread census and the stub total stay
+  unchanged for three ticks while the main thread runs. The stub counter keeps a ring of the last 16 calls. The
+  owner checklist now points at the host's `logs\` folder (the SDK writes `logs/` next to the executable).
 * Windows workflow fixes from its first run on `main`: the SDK checkout failed with "Filename too long"
   (vulkan-loader fuzzer test data beyond 260 characters) - `fetch-rexglue-sdk.ps1` now clones with
   `core.longpaths=true`; the LLVM install falls back to the latest package when the pinned version is missing;
@@ -42,6 +48,8 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 **Not verified / open**
 * `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of
   `rexglue-windows.yml` with `native_run` and `build_host`).
+* The crash reporter and the stall detector are compile-checked against the SDK (Linux host build) but have not
+  fired: only a real boot exercises them.
 * On Linux the host binary needs `librexruntime.so` next to it or on the library path (RPATH is `$ORIGIN`); on
   Windows `rexglue_configure_target` copies the runtime DLLs next to the executable.
 * Everything on license-free programs; the real image still waits for the owner's run.

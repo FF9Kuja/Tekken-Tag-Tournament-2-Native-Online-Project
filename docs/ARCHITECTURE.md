@@ -94,7 +94,10 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   (game/update/user roots, `update/` sibling auto-detected), `OnPreSetup` (backend log), `OnPostLoadXexImage`
   (identification against title `4E4D0859` / TU3 0.0.3.2, import summary), `OnPostLaunchModule` /
   `OnGuestThreadExit` (guest-thread watchdog census), `OnPostInitLogging` (kernel stub counter: a log sink that
-  counts the runtime's `<name> STUB` warnings and logs the full list at exit, `recomp/src/stub_counter.*`). Planned: data patches, hook registration, `OnCreateDialogs`
+  counts the runtime's `<name> STUB` warnings and logs the full list at exit, `recomp/src/stub_counter.*`),
+  `OnPostSetup` (last-chance host crash reporter on `rex::arch::ExceptionHandler`: fault kind and addresses, guest
+  thread, recent stub calls, then the normal crash path), watchdog stall detector (per-thread dump after three
+  unchanged ticks). Planned: data patches, hook registration, `OnCreateDialogs`
   (overlay). A headless harness (`recomp/tests/host`) runs recompiled programs through the same runtime without
   a window, which is how recompiled code was executed natively for the first time (session 3).
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing
