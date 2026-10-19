@@ -99,7 +99,7 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   session (rotated parts in order) and reports the outcome (clean exit, crash, stall, closed, incomplete), the
   facts (image, backend, roots, imports), the timeline, the HOST CRASH block with the fault address translated to a
   guest address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation
-  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 136 names), unimplemented variable imports, the distinct
+  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 135 names), unimplemented variable imports, the distinct
   errors, and a numbered action list. Unit-tested on synthetic logs shaped like the real ones.
 * `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash | --expect-stall]` - boots the
   real game host on the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as

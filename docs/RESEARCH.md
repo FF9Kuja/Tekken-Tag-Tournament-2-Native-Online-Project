@@ -367,7 +367,7 @@ stubs or nothing before anything is run.
 
 **TTT2's real kernel surface, from TTT2 Web.** TTT2 Web (CC0) reports itself *playable natively*: boot logos, intro
 movie, title screen, menus, character select and fights run on its own runtime. That runtime implements exactly
-136 kernel/XAM functions (`GUEST_IMPORT(...)` in its `runtime/kernel`), which is therefore a measured list of what
+135 kernel/XAM functions (`GUEST_IMPORT(...)` in its `runtime/kernel`), which is therefore a measured list of what
 TTT2 needs up to gameplay. Against the pinned ReXGlue runtime: **130 are implemented, 5 are logging stubs, none is
 missing**. The five stubs are XAM UI / stats calls (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`,
 `XamShowMarketplaceDownloadItemsUI`, `XamShowMarketplaceUI`, `XamUserCreateStatsEnumerator`), which TTT2 Web

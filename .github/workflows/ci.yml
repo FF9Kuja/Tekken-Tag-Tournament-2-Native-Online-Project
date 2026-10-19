@@ -112,8 +112,9 @@ jobs:
           }
           Write-Host "pipeline report OK ($((Get-Content out\pipeline-work\report.txt).Count) lines)"
           # The boot step itself without a host (no SDK here): Windows PowerShell 5.1 must parse it and it
-          # must report the missing executable with exit code 2.
-          $bootOut = scripts\run-host.ps1 -Exe out\no-such-ttt2.exe -GameRoot out\pipeline-work\game -Work out\pipeline-work 2>&1 | Out-String
+          # must report the missing executable with exit code 2 (its lines are Write-Host output, which only
+          # *>&1 captures under 5.1).
+          $bootOut = scripts\run-host.ps1 -Exe out\no-such-ttt2.exe -GameRoot out\pipeline-work\game -Work out\pipeline-work *>&1 | Out-String
           if ($LASTEXITCODE -ne 2) { throw "run-host.ps1 without a host: exit code $LASTEXITCODE, expected 2; output: $bootOut" }
           if ($bootOut -notmatch 'host executable not found') { throw "run-host.ps1 did not report the missing host: $bootOut" }
           $global:LASTEXITCODE = 0

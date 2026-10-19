@@ -106,7 +106,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   order) and writes the action list for it: outcome (clean exit / crash / stall / closed / incomplete), facts,
   timeline, the HOST CRASH block with the fault address translated through the logged arena bases to a guest
   address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation for
-  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 136 names with file:line), unimplemented variable imports,
+  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 135 names with file:line), unimplemented variable imports,
   distinct errors. Unit-tested on synthetic logs shaped like today's real ones; the owner checklist runs it on the
   first-boot log and sends its report with the log.
 * **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
@@ -145,7 +145,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
   the variant codegen as a second pass only on a match (both reports are written for comparison).
 * **Predicted kernel coverage for TTT2** (`docs/RESEARCH.md` 8a): TTT2 Web, playable natively on its own CC0
-  runtime, implements 136 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
+  runtime, implements 135 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
   stats calls). The runtime-export generator now counts `REX_HOOK_RAW` hooks (11, e.g. `DbgPrint`) as
   implemented, which it had classified as missing.
 * **First kernel overrides in the host** (`recomp/src/kernel_overrides.cpp`): the five XAM calls above
