@@ -37,7 +37,9 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang g++ cmake
+          # lld: the tool smoke test links license-free PowerPC test programs with ld.lld
+          # (scripts/make-ppc-test-xex.sh), on the gcc job too.
+          sudo apt-get install -y --no-install-recommends ninja-build clang lld g++ cmake
       - name: Fetch pinned XenonRecomp sources (ttt2-xexpatch, Clang only)
         if: matrix.compiler == 'clang'
         run: scripts/fetch-xenonrecomp.sh
