@@ -94,3 +94,20 @@ jobs:
         run: cmake --build --preset windows-clang-cl
       - name: Test
         run: ctest --preset windows-clang-cl
+      - name: Owner pipeline dry run on the synthetic fixtures (no game content)
+        # The one-command owner workflow on real PowerShell with the built tools: disc and title
+        # update identification, extraction, the patch attempt (the synthetic delta is not a real
+        # patch, so step 5 is expected to report a failure and the later steps work from the base
+        # image), the import/helper scan and -ExtractGame (disc and title update files). The
+        # fixtures come from the validate_fixtures ctest above.
+        # Windows PowerShell 5.1 (shell: powershell), the owner's likely shell: stricter about native
+        # tools writing to stderr than PowerShell 7.
+        shell: powershell
+        run: |
+          $fx = "out\build\windows-clang-cl\tests\validate-fixtures"
+          scripts\owner-pipeline.ps1 -Iso "$fx\synthetic.iso" -TitleUpdate "$fx\TU_SYNTHETIC" -Work out\pipeline-work -SkipBuild -ExtractGame
+          $report = Get-Content out\pipeline-work\report.txt -Raw
+          foreach ($needle in @('Identified:\s+Tekken Tag Tournament 2 Title Update 3', 'extracted 3 files', 'extracted 1 files', 'Report written to')) {
+            if ($report -notmatch $needle) { throw "report lacks '$needle'" }
+          }
+          Write-Host "pipeline report OK ($((Get-Content out\pipeline-work\report.txt).Count) lines)"

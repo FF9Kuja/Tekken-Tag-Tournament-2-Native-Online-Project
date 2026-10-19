@@ -91,13 +91,17 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
 ### (C) Native host - `src/host`
 
 * `Ttt2App : rex::ReXApp` (`recomp/src/ttt2_app.cpp`). Overrides **[implemented]**: `OnConfigurePaths`
-  (game/update/user roots, `update/` sibling auto-detected), `OnPreSetup` (backend log), `OnPostLoadXexImage`
-  (identification against title `4E4D0859` / TU3 0.0.3.2, import summary), `OnPostLaunchModule` /
-  `OnGuestThreadExit` (guest-thread watchdog census), `OnPostInitLogging` (kernel stub counter: a log sink that
-  counts the runtime's `<name> STUB` warnings and logs the full list at exit, `recomp/src/stub_counter.*`),
-  `OnPostSetup` (last-chance host crash reporter on `rex::arch::ExceptionHandler`: fault kind and addresses, guest
-  thread, recent stub calls, then the normal crash path), watchdog stall detector (per-thread dump after three
-  unchanged ticks). `recomp/src/kernel_overrides.cpp` **[implemented]**: host-side definitions of `__imp__` kernel
+  (game/update/user roots, `update/` sibling auto-detected), `OnPreSetup` (selects the Xenos GPU plugin staged
+  next to the executable unless `--gpu_plugin` says otherwise; the SDK's default is no GPU emulation),
+  `OnPostLoadXexImage` (identification against title `4E4D0859` / TU3 0.0.3.2, import summary),
+  `OnPostLaunchModule` / `OnGuestThreadExit` (guest-thread watchdog census; on the main thread's exit the host
+  logs the stub report and ends the process, because SDK 0.10.0's teardown deadlocks in the input driver's
+  destructor), `OnPostInitLogging` (kernel stub counter: a log sink that counts the runtime's `<name> STUB`
+  warnings and logs the full list at exit, `recomp/src/stub_counter.*`), `OnPostSetup` (last-chance host crash
+  reporter on `rex::arch::ExceptionHandler`: fault kind and addresses, guest thread, recent stub calls, then
+  exit code 3, because the SDK's signal handler would otherwise re-execute an unhandled guest fault forever),
+  watchdog stall detector (per-thread dump after three unchanged ticks). `scripts/host-boot-test.sh` boots this
+  host on the kernel-import test image in both CI workflows. `recomp/src/kernel_overrides.cpp` **[implemented]**: host-side definitions of `__imp__` kernel
   exports that the runtime only stubs; generated code binds to them at link time (five XAM UI/stats calls so far,
   with TTT2 Web's results; proven by a native run of `recomp/tests/ppc/imports_ttt2.s`, which calls two of them
   through a real XEX import table). Planned: data patches, hook registration, `OnCreateDialogs`

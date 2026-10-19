@@ -62,11 +62,15 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
   SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+* `ttt2-stfs extract-all <package> <dir>` extracts every file of an STFS package with its folders (a title
+  update's data files, the host's `update:` root); ctest `stfs_extract_all_synthetic`.
 * `scripts/build-host.ps1 [-Game default_tu3.xex] [-SdkInstall DIR] [-InstallSdk]` builds the native host
   `ttt2.exe` from `recomp/` against the ReXGlue SDK installed as a CMake package (the SDK's own consumption
   model: `cmake --build ... --target install`, then `find_package(rexglue)` through `CMAKE_PREFIX_PATH`);
-  codegen runs inside the build. The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
-  `rexglue-windows.yml` (`build_host` input), with the license-free switch-table program standing in for the
+  codegen runs inside the build, after `recomp/tools/find_switch_tables.py` has written
+  `recomp/game/ttt2_switch_tables.toml` for the image (the manifests include it; the file is git-ignored with the
+  image). The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
+  `rexglue-windows.yml` (`build_host` input), with the license-free kernel-import program standing in for the
   game image, so the player's build path has CI evidence without any game data.
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)
@@ -91,6 +95,20 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   ones that run everywhere. A `<source>.imports` file next to the source (`library: slot_symbol, thunk_symbol, ...`)
   adds a real XEX2 import table (`IMPORT_LIBRARIES` header) so the program calls kernel exports like the game does:
   `recomp/tests/ppc/imports_ttt2.s` is the example (slots in `.rodata`, 16-byte thunks at the end of `.text`).
+* `recomp/tools/triage_boot_log.py <log file | logs dir> [--md out.md] [--json out.json]` - reads one host log
+  session (rotated parts in order) and reports the outcome (clean exit, crash, stall, closed, incomplete), the
+  facts (image, backend, roots, imports), the timeline, the HOST CRASH block with the fault address translated to a
+  guest address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation
+  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 136 names), unimplemented variable imports, the distinct
+  errors, and a numbered action list. Unit-tested on synthetic logs shaped like the real ones.
+* `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash]` - boots the real game host on
+  the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as `recomp/game/default.xex`)
+  without GPU emulation (`--gpu_plugin=none`; under `xvfb-run` on a display-less Linux) and checks its log: image
+  identified, module launched, both kernel overrides reached, program returned, host exited with code 0. With
+  `--expect-crash` (image: `recomp/tests/ppc/crash_ttt2.s`, a program that writes to the null page) it expects
+  exit code 3 and a HOST CRASH block instead; with `--expect-stall` (image: `recomp/tests/ppc/stall_ttt2.s`, a
+  program that spins forever) it runs with a 1 s watchdog period until the timeout and expects the "possible
+  stall" dump with per-thread lines. Both workflows run all three forms, rebuilding the host on each image.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

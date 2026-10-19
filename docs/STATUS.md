@@ -5,6 +5,47 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 ## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
 
 **Completed**
+* **PR #3 merged into `main`** (merge commit `3a90395`, 13 commits) with CI 10/10, the SDK validation run and the
+  Windows run green on its head: on a Windows runner `rexglue.exe` built, the TTT2-shaped assembly programs
+  were assembled with the SDK's Cygwin binutils, **recompiled code executed natively on Windows** for the first
+  time (switch-table program 12 of 12 values with the finder's tables; the kernel-import program reached the host
+  overrides), the SDK was installed as a package and **`ttt2.exe` was built against it**.
+* **First boot of the real host binary** (`ttt2`, the ReXApp with window and runtime, built from the installed
+  SDK), on Linux under Xvfb with the license-free images. Findings, all fixed and now tested:
+  1. An unhandled guest fault never ends the process: the SDK's POSIX signal handler returns when no handler
+     claims a fault, the faulting instruction re-executes, and the switch-table program (recompiled on the
+     SDK's own tables, which are wrong for several shapes) produced 695,000 "Unhandled guest access violation"
+     lines in 15 seconds and rotated the log away. `Ttt2App::OnHostException` now writes the HOST CRASH report
+     and exits with code 3 (`TTT2_CRASH_KEEP_RUNNING=1` for a debugger). Measured: the same program now ends in
+     0.2 s with the report in the log (`scripts/host-boot-test.sh --expect-crash`).
+  2. The SDK's `gpu_plugin` cvar defaults to "" (no GPU emulation, `VdXxx` calls ignored) and the plugin is only
+     loaded from the executable's folder, where nothing staged it: the owner's first boot would have run blind.
+     `recomp/CMakeLists.txt` stages `rexgpu-xenos` next to the host (`GPU_PLUGINS xenos`; the runtime library
+     too on Linux) and `OnPreSetup` selects it unless `--gpu_plugin=<name>` or `--gpu_plugin=none` was given
+     (an empty value cannot be passed: CLI11 takes the next argument as the value).
+  3. After a clean guest exit the process hung in the SDK's teardown: gdb showed `InputSystem::Shutdown` ->
+     `~MnkInputDriver` -> `CallInUIThreadSynchronous` on the UI thread after its loop ended. The host now ends
+     the process from `OnGuestThreadExit` after the stub report, as the SDK's own window-close path does.
+  With those, `scripts/host-boot-test.sh` boots the host on the kernel-import image: image identified, module
+  launched, `XamShowFriendsUI` and `XamUserCreateStatsEnumerator` reached the host overrides, program returned,
+  exit code 0 in 0.3 s. Both workflows now run it (Linux under Xvfb; Windows on the runner's desktop) and upload
+  the boot log. SDL's dummy video driver is not compiled into the SDK's SDL3 ("dummy not available"), so Xvfb it is.
+* **Two gaps in the owner's path to the first real boot, closed**: (1) nothing ran the switch-table finder on
+  the real image before codegen, although the SDK's own detector is measured to get several of TTT2's switch
+  shapes wrong (a wrong table is a crash at the first such switch) - `build-host.ps1`, the owner pipeline and the
+  Linux CI host step now run `recomp/tools/find_switch_tables.py` on `recomp/game/default.xex` and both manifests
+  include its `game/ttt2_switch_tables.toml` (git-ignored with the image; codegen fails clearly when it is
+  missing: "included file not found"); (2) the title update's own files were never extracted - `ttt2-stfs
+  extract-all <package> <dir>` (ctest on the synthetic package) and the pipeline's `-ExtractGame` now write them
+  to `work\update`, which the host mounts as `update:` next to `work\game`. Verified on Linux: finder -> codegen
+  with the include -> host build -> boot test pass; the owner checklist explains both.
+* **Boot-log triage tool** (`recomp/tools/triage_boot_log.py`): reads one host log session (rotated parts in
+  order) and writes the action list for it: outcome (clean exit / crash / stall / closed / incomplete), facts,
+  timeline, the HOST CRASH block with the fault address translated through the logged arena bases to a guest
+  address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation for
+  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 136 names with file:line), unimplemented variable imports,
+  distinct errors. Unit-tested on synthetic logs shaped like today's real ones; the owner checklist runs it on the
+  first-boot log and sends its report with the log.
 * **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
   clang and gcc, Windows MSVC and clang-cl, hygiene + Python tools (CI), and the SDK validation workflow on a
   GitHub runner: SDK built with Clang 20, 1458 PPC instruction test cases / 5725 assertions, all codegen smoke
@@ -82,27 +123,45 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `rexglue.exe` is uploaded even when the smoke test fails.
 
 **Verified (where)**
-* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green
-  (details above).
-* Linux container: 52 doctest cases / 612 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
-  Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
-  against the package.
-* Windows: CI jobs (tools) green. The ReXGlue Windows workflow: the first run on `main` failed at the SDK
-  checkout (long paths); after the fix, on the PR branch, **`rexglue.exe` built on the Windows runner in 4.5
-  minutes and was uploaded as an artifact** (LLVM 20.1.8 from Chocolatey); its smoke test then failed on the
-  empty-argument bug above, fixed here.
+* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green.
+* PR #3 (merged as `3a90395`): CI 10/10 on `138a4f6`; SDK validation run 39216946123 (five smoke cases incl.
+  the native runs of the switch-table and kernel-import programs, SDK package install, host build); Windows run
+  39216950997 (`rexglue.exe`, assembly cases with the SDK's Cygwin binutils, **native execution on Windows**,
+  `ttt2.exe` built against the installed SDK). The Windows workflow also ran green on `main` after the merge
+  (run 39218860764).
+* PR #4 branch: CI green on every head; SDK validation run 39219293142 (`d064da8`) green with the host boot
+  test under Xvfb; Windows run 39219295783 (`d064da8`, `build_host`): **`ttt2.exe` booted on the Windows
+  runner** on the kernel-import image and passed every boot-test check (`rexgpu-xenos.dll` staged).
+* Linux container: 52 doctest cases / 612 assertions, 15 ctest entries (new: `stfs_extract_all_synthetic`),
+  17 Python unit tests, Clang 18 and GCC 13 `-Werror`; the real host booted, crashed on purpose and exited on
+  purpose as described above; finder -> codegen -> host -> boot verified after the manifest change.
 
 **Not verified / open**
-* `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of
-  `rexglue-windows.yml` with `native_run` and `build_host`).
-* The crash reporter and the stall detector are compile-checked against the SDK (Linux host build) but have not
-  fired: only a real boot exercises them.
-* On Linux the host binary needs `librexruntime.so` next to it or on the library path (RPATH is `$ORIGIN`); on
-  Windows `rexglue_configure_target` copies the runtime DLLs next to the executable.
+* The stall detector fired natively on a license-free program that spins forever (`recomp/tests/ppc/stall_ttt2.s`,
+  `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
+  1 s watchdog period); the crash reporter fired on the illegal-instruction case and on `crash_ttt2.s` (a write
+  to the null page; HOST CRASH block with the fault address, exit 3 in 0.2 s). Both workflows run the normal,
+  crash and stall forms of the boot test, rebuilding the host on each image. The GPU plugin loads only when
+  a GPU is present: never exercised in CI (no GPU; the boot test runs with
+  `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
+* `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the
+  count and the codegen report) comes with the owner's first run.
+* The owner pipeline's PowerShell 5.1 dry run in CI (`fc4e0b5`) and the dispatched SDK / Windows runs on
+  `3551f34` were still in progress when this was written; see PR #4 for their result.
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**
-* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4).
+* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4): the whole owner path is now
+  one command (`scripts\owner-pipeline.ps1 ... -Codegen -BuildHost -InstallSdk -ExtractGame`, checklist step 6),
+  followed by `recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game` and the triage tool
+  on the log.
+
+**Next task (resumable state)**
+* Merge PR #4 once its runs are green, restart the branch from `main`, then iterate on the owner's first-boot
+  report: implement each stub the triage report lists as a host override (TTT2 Web's reference is given per
+  stub), fix what the HOST CRASH block or the stall dump points at, repeat. Until the report arrives, the
+  remaining preparatory work is small (the Windows workflow could run the crash and stall forms of the boot
+  test too).
 
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 

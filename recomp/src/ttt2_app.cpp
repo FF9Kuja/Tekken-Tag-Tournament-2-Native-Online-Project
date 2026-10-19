@@ -1,5 +1,7 @@
 #include "ttt2_app.h"
 
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
@@ -44,6 +46,36 @@ void Ttt2App::OnConfigurePaths(rex::PathConfig& paths) {
 }
 
 void Ttt2App::OnPreSetup(rex::RuntimeConfig& config) {
+  // The SDK's gpu_plugin cvar defaults to "" (no GPU emulation: VdXxx calls are ignored), which is
+  // right for the headless harness but not for a game. Unless the player chose otherwise
+  // (--gpu_plugin=<name>, or --gpu_plugin=none; an empty value cannot be given on the command line),
+  // load the Xenos plugin the build stages next to the executable (GPU_PLUGINS xenos in
+  // recomp/CMakeLists.txt); the SDK's loader only looks there.
+  if (config.gpu_plugin == "none") config.gpu_plugin.clear();
+  if (!config.graphics && config.gpu_plugin.empty() &&
+      rex::cvar::GetFlagSource("gpu_plugin") == rex::cvar::Source::kDefault) {
+    const auto folder = rex::filesystem::GetExecutableFolder();
+    bool staged = false;
+    for (const char* postfix : {"", "d", "rd"}) {  // the SDK's per-config file name postfixes
+#if REX_PLATFORM_WIN32
+      const std::string file = std::string("rexgpu-xenos") + postfix + ".dll";
+#elif REX_PLATFORM_MAC
+      const std::string file = std::string("librexgpu-xenos") + postfix + ".dylib";
+#else
+      const std::string file = std::string("librexgpu-xenos") + postfix + ".so";
+#endif
+      std::error_code ec;
+      if (std::filesystem::exists(folder / file, ec)) staged = true;
+    }
+    if (staged) {
+      config.gpu_plugin = "xenos";
+    } else {
+      REXLOG_WARN(
+          "ttt2: no GPU plugin next to the executable ({}): running WITHOUT GPU emulation; the game "
+          "cannot draw this way (a build stages rexgpu-xenos there; --gpu_plugin=none silences this)",
+          folder.string());
+    }
+  }
   REXLOG_INFO("ttt2: graphics backend {}", config.graphics             ? "provided by the host"
                                            : config.gpu_plugin.empty() ? "none"
                                                                        : config.gpu_plugin);
@@ -70,6 +102,17 @@ void Ttt2App::OnPostSetup() {
 bool Ttt2App::OnHostException(rex::arch::Exception* ex, void* data) {
   auto* self = static_cast<Ttt2App*>(data);
   if (self && !self->crash_reported_.exchange(true)) self->ReportCrash(ex);
+  // Nothing handles this fault. The SDK's POSIX handler then simply returns, so the faulting
+  // instruction re-executes and the same fault repeats forever (measured: a misbehaving test
+  // program produced 695,000 "Unhandled guest access violation" lines in 15 seconds and rotated
+  // the log away); on Windows the process would die with the system's crash dialog. End the process
+  // here instead, with the report flushed, so a crash on the owner's machine leaves a log and an
+  // exit code (TTT2_CRASH_KEEP_RUNNING=1 keeps the old behaviour for a debugger).
+  if (!std::getenv("TTT2_CRASH_KEEP_RUNNING")) {
+    REXLOG_CRITICAL("ttt2: exiting with code {} after the host crash", kExitCodeHostCrash);
+    rex::FlushLogging();
+    std::_Exit(kExitCodeHostCrash);
+  }
   return false;  // not handled: the original handler (and the debugger, if any) takes over
 }
 
@@ -163,6 +206,14 @@ void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
   WatchdogTick();
   StopWatchdog();
   LogStubReport("main thread exit");
+  // The title is over (on a console the dashboard would come back). ReXApp would now quit its UI
+  // loop and tear the runtime down, but SDK 0.10.0's teardown deadlocks here: the mouse/keyboard
+  // input driver's destructor calls CallInUIThreadSynchronous from the UI thread after the loop has
+  // ended (measured with the license-free test image: the process never exits). The SDK's own
+  // window-close path hard-exits for the same reason, so do the same: flush the log and end.
+  REXLOG_INFO("ttt2: guest program ended; exiting with code 0");
+  rex::FlushLogging();
+  std::_Exit(0);
 }
 
 void Ttt2App::OnShutdown() {

@@ -34,6 +34,8 @@ class Ttt2App : public rex::ReXApp {
   /// The executable this host was recompiled from: Tekken Tag Tournament 2 with Title Update 3.
   static constexpr std::uint32_t kExpectedTitleId = 0x4E4D0859u;
   static constexpr std::uint32_t kExpectedVersion = 0x00000302u;  // 0.0.3.2
+  /// Process exit code after an unhandled host exception (the HOST CRASH block is in the log).
+  static constexpr int kExitCodeHostCrash = 3;
 
  protected:
   void OnConfigurePaths(rex::PathConfig& paths) override;
@@ -52,7 +54,7 @@ class Ttt2App : public rex::ReXApp {
   void LogStubReport(const char* when);
   /// Last-chance host exception handler (rex::arch::ExceptionHandler): logs what is known about the
   /// crash (kind, host PC, fault address, guest thread, recent stub calls), flushes the log, and
-  /// declines to handle it so the process still ends the normal way.
+  /// ends the process with kExitCodeHostCrash (the SDK would otherwise re-execute the fault forever).
   static bool OnHostException(rex::arch::Exception* ex, void* data);
   void ReportCrash(rex::arch::Exception* ex);
 

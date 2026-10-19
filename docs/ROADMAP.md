@@ -70,7 +70,10 @@ byte/halfword-offset tables and switches on the wrong register for several absol
 1. [x] `recomp/src/ttt2_app.{h,cpp}` (`Ttt2App` on the SDK; compile-checked on Linux against the SDK with a
    license-free program as the game). [x] Player-side build path: `scripts/build-host.ps1` builds `ttt2.exe`
    against the SDK installed as a CMake package (verified on Linux here; `sdk-validation.yml` repeats it in CI,
-   `rexglue-windows.yml build_host` on Windows). [ ] First Windows CI run of that job green.
+   `rexglue-windows.yml build_host` on Windows). [x] First Windows CI run of that job green (`ttt2.exe` built
+   against the installed SDK on a Windows runner; recompiled test programs executed natively on Windows).
+   [x] The real host boots a license-free image headless (Linux under Xvfb, Windows runner): module launched,
+   kernel overrides reached, clean exit (`scripts/host-boot-test.sh`); the crash path exits with a report.
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime

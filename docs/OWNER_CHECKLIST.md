@@ -8,7 +8,7 @@ only things to send back are the text the tools print (title IDs, versions, hash
 * Your Tekken Tag Tournament 2 (USA, Europe) Xbox 360 disc image (`.iso`).
 * Your Title Update 3 file: `TU_174Q22P_0000008000000.00000000000O2` (from your console's
   `Content\0000000000000000\4E4D0859\000B0000\` folder, or wherever your dump keeps it).
-* Windows 10/11 with Visual Studio 2022 (Desktop development with C++) and git, **or** WSL/Ubuntu.
+* Windows 10/11 with Visual Studio 2022 (Desktop development with C++), git and Python 3, **or** WSL/Ubuntu.
 
 ## The short way: one command
 
@@ -19,7 +19,8 @@ whether the ReXGlue runtime implements, stubs or lacks it):
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
 # or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically
-# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result
+# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result, and
+# -BuildHost -InstallSdk -ExtractGame to build and prepare the native host (step 6)
 ```
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
@@ -97,7 +98,8 @@ You need `rexglue.exe` (the ReXGlue codegen tool). Either download it from the l
 "ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`), or build it:
 
 ```powershell
-# needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja and Visual Studio 2022's C++ workload; 30-60 minutes
+# needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja, Python 3 (winget install Python.Python.3.12) and
+# Visual Studio 2022's C++ workload; 30-60 minutes
 scripts\fetch-rexglue-sdk.ps1
 scripts\build-rexglue-windows.ps1          # prints the path of rexglue.exe
 ```
@@ -113,17 +115,19 @@ The pipeline also compares your executable's save/restore helper addresses with 
 ("Layout vs TTT2 Web: N of 8 helper addresses match" in the report). On a full match it recompiles a second time
 with TTT2 Web's 18k explicit function boundaries and writes `work\codegen-ttt2web-REPORT.md` too; send both.
 
-Also run the switch-table finder on the patched executable; it writes the `[[switch_tables]]` entries the
-recompiler needs (SDK 0.10.0 misses or miscompiles several table shapes on its own, see `docs/RESEARCH.md` 8a):
+Before recompiling, the pipeline runs the switch-table finder on the patched executable (step 6a in the report)
+and writes `recomp\game\ttt2_switch_tables.toml`, which the codegen manifests include: the recompiler needs these
+`[[switch_tables]]` entries because SDK 0.10.0 misses or miscompiles several table shapes on its own
+(`docs/RESEARCH.md` 8a). By hand, the same step is:
 
 ```powershell
-python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\ttt2_switch_tables.toml --json work\switch_tables.json
+python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\game\ttt2_switch_tables.toml --json work\switch_tables.json
 ```
 
 **Send `work\report.txt`, `work\codegen-REPORT.md`, `work\codegen.log` and `work\switch_tables.json`.** They
-contain function counts, addresses, names and error messages: no game bytes. `recomp\ttt2_switch_tables.toml`
-is addresses only too and will be committed once reviewed. The generated C++ in `recomp\generated\default\`
-stays on your PC (it is git-ignored and refused by the hygiene check).
+contain function counts, addresses, names and error messages: no game bytes. `recomp\game\ttt2_switch_tables.toml`
+is addresses only too and stays on your PC with the image (git-ignored). The generated C++ in
+`recomp\generated\default\` stays on your PC as well (git-ignored and refused by the hygiene check).
 
 ## Step 6 - build the native host and attempt the first boot
 
@@ -137,17 +141,36 @@ scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..."
 # by hand instead:
 scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
+.\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
 recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
 ```
 
+`build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` also extracts the
+title update's own files into `work\update`, which the host mounts as `update:` because it sits next to
+`work\game`.
+
+The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
+`rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
+only useful for log-gathering; the game cannot draw that way). The host exits by itself when the game's main
+thread ends, and after a crash it writes the report below and exits with code 3 instead of hanging.
+
 Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
-`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`) and prints it to the console: `ttt2: executable title
-4E4D0859 version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds, a **possible stall**
-dump when nothing changes for 15 seconds (every guest thread with its state), a **kernel stub report** when the
-main thread exits or you close the window (every system call the game reached that the runtime only stubs, with
-counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the guest thread, the most recent stub
-calls). **Send the newest file from that `logs\` folder.** It contains names, addresses and counts only. Also say
-what you saw on screen, if anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
+`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`; the window itself shows nothing useful before the game
+draws): `ttt2: executable title
+4E4D0859 version 0.0.3.2 ...`, `ttt2: graphics backend xenos`, an import summary, a guest-thread census every few
+seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
+**kernel stub report** when the main thread exits or you close the window (every system call the game reached
+that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
+guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder** together with the
+triage report the next command writes from it (outcome, crash block, stubs reached with where TTT2 Web implements
+them, stalls):
+
+```powershell
+python -I recomp\tools\triage_boot_log.py recomp\out\build\win-amd64-release\logs --md work\boot-triage.md --quiet
+```
+
+Both contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
+`work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails
 
