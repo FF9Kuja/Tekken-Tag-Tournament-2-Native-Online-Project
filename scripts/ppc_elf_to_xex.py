@@ -47,6 +47,7 @@ def read_elf(data):
         end = names.index(b"\0", s["name_off"])
         s["name"] = names[s["name_off"]:end].decode()
     funcs = []
+    symbols = []  # every named FUNC/OBJECT/NOTYPE symbol with an address: (address, size, kind, name)
     for s in sections:
         if s["type"] != SHT_SYMTAB:
             continue
@@ -54,9 +55,14 @@ def read_elf(data):
         strs = data[strtab["offset"]:strtab["offset"] + strtab["size"]]
         for k in range(s["size"] // 16):
             st_name, st_value, st_size, st_info, _, st_shndx = struct.unpack_from(">IIIBBH", data, s["offset"] + k * 16)
-            if st_info & 0xF == STT_FUNC and st_size > 0:
-                end = strs.index(b"\0", st_name)
-                funcs.append((st_value, st_size, strs[st_name:end].decode()))
+            end = strs.index(b"\0", st_name)
+            name = strs[st_name:end].decode()
+            kind = st_info & 0xF
+            if kind == STT_FUNC and st_size > 0:
+                funcs.append((st_value, st_size, name))
+            if name and st_shndx not in (0, 0xFFF1) and kind in (0, 1, 2):
+                symbols.append((st_value, st_size, {0: "NOTYPE", 1: "OBJECT", 2: "FUNC"}[kind], name))
+    read_elf.symbols = sorted(symbols)
     return e_entry, sections, sorted(funcs)
 
 
@@ -201,6 +207,7 @@ def main():
     ap.add_argument("elf")
     ap.add_argument("out")
     ap.add_argument("--title-id", default="54455354", help="hex title ID for the execution info (default 'TEST')")
+    ap.add_argument("--symbols", help="also write every symbol as 'ADDRESS SIZE KIND NAME' lines to this file")
     args = ap.parse_args()
     with open(args.elf, "rb") as f:
         elf = f.read()
@@ -210,6 +217,10 @@ def main():
     xex = build_xex(image, entry, int(args.title_id, 16), pe_sections)
     with open(args.out, "wb") as f:
         f.write(xex)
+    if args.symbols:
+        with open(args.symbols, "w") as f:
+            for addr, size, kind, name in read_elf.symbols:
+                f.write(f"0x{addr:08X} {size} {kind} {name}\n")
     print(f"{args.out}: image {len(image)} bytes, {len(pe_sections)} sections, {len(funcs)} functions in .pdata "
           f"(RVA 0x{pdata_rva:X}, {pdata_size} bytes), entry 0x{entry:08X}")
     for addr, size, name in funcs:
