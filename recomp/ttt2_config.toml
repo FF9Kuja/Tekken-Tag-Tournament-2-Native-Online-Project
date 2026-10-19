@@ -32,6 +32,8 @@ data_region_threshold = 16
 #                    recomp/ttt2_functions.ttt2web.toml holds 18k of them converted from TTT2 Web (CC0);
 #                    ttt2_manifest.ttt2web.toml includes it when the image's save/restore helper
 #                    addresses match TTT2 Web's published ones (ttt2-xexinfo --helpers reports this).
-# [[switch_tables]]  the 526-535 TTT2 jump tables (Milestone 3; symbolic finder if the SDK misses them)
+# [[switch_tables]]  the 526-535 TTT2 jump tables: recomp/tools/find_switch_tables.py writes them to
+#                    game/ttt2_switch_tables.toml (git-ignored with the image), which the manifests include;
+#                    the SDK's own detector misses/miscompiles several shapes (docs/RESEARCH.md 8a)
 # [[midasm_hook]]    netplay hooks: frame boundary, input entry builder, srand seeds (Milestone 6)
 # [rexcrt]           memcpy / memset / heap redirects once measured (Milestone 4)

@@ -30,6 +30,15 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   launched, `XamShowFriendsUI` and `XamUserCreateStatsEnumerator` reached the host overrides, program returned,
   exit code 0 in 0.3 s. Both workflows now run it (Linux under Xvfb; Windows on the runner's desktop) and upload
   the boot log. SDL's dummy video driver is not compiled into the SDK's SDL3 ("dummy not available"), so Xvfb it is.
+* **Two gaps in the owner's path to the first real boot, closed**: (1) nothing ran the switch-table finder on
+  the real image before codegen, although the SDK's own detector is measured to get several of TTT2's switch
+  shapes wrong (a wrong table is a crash at the first such switch) - `build-host.ps1`, the owner pipeline and the
+  Linux CI host step now run `recomp/tools/find_switch_tables.py` on `recomp/game/default.xex` and both manifests
+  include its `game/ttt2_switch_tables.toml` (git-ignored with the image; codegen fails clearly when it is
+  missing: "included file not found"); (2) the title update's own files were never extracted - `ttt2-stfs
+  extract-all <package> <dir>` (ctest on the synthetic package) and the pipeline's `-ExtractGame` now write them
+  to `work\update`, which the host mounts as `update:` next to `work\game`. Verified on Linux: finder -> codegen
+  with the include -> host build -> boot test pass; the owner checklist explains both.
 * **Boot-log triage tool** (`recomp/tools/triage_boot_log.py`): reads one host log session (rotated parts in
   order) and writes the action list for it: outcome (clean exit / crash / stall / closed / incomplete), facts,
   timeline, the HOST CRASH block with the fault address translated through the logged arena bases to a guest

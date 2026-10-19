@@ -137,8 +137,16 @@ scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..."
 # by hand instead:
 scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
+.\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
 recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
 ```
+
+The pipeline (and `build-host.ps1`) first runs the switch-table finder on your patched executable and writes
+`recomp\game\ttt2_switch_tables.toml` (addresses only, git-ignored), which the codegen manifests include: the SDK's
+own jump-table detector gets several of this game's switch shapes wrong, and a wrong table means a crash at the
+first such switch. The report says how many tables were found (`work\switch_tables.json` has the list; send it).
+`-ExtractGame` also extracts the title update's own files into `work\update`, which the host mounts as `update:`
+because it sits next to `work\game`.
 
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is

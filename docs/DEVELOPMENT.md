@@ -62,11 +62,15 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
   SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+* `ttt2-stfs extract-all <package> <dir>` extracts every file of an STFS package with its folders (a title
+  update's data files, the host's `update:` root); ctest `stfs_extract_all_synthetic`.
 * `scripts/build-host.ps1 [-Game default_tu3.xex] [-SdkInstall DIR] [-InstallSdk]` builds the native host
   `ttt2.exe` from `recomp/` against the ReXGlue SDK installed as a CMake package (the SDK's own consumption
   model: `cmake --build ... --target install`, then `find_package(rexglue)` through `CMAKE_PREFIX_PATH`);
-  codegen runs inside the build. The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
-  `rexglue-windows.yml` (`build_host` input), with the license-free switch-table program standing in for the
+  codegen runs inside the build, after `recomp/tools/find_switch_tables.py` has written
+  `recomp/game/ttt2_switch_tables.toml` for the image (the manifests include it; the file is git-ignored with the
+  image). The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
+  `rexglue-windows.yml` (`build_host` input), with the license-free kernel-import program standing in for the
   game image, so the player's build path has CI evidence without any game data.
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)

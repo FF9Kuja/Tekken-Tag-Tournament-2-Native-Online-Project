@@ -52,6 +52,8 @@ jobs:
           cmake --install third_party/rexglue-sdk/src/build/linux --prefix "$PWD/out/sdk-install"
           mkdir -p recomp/game
           cp out/codegen-smoke/imports_ttt2/imports_ttt2.xex recomp/game/default.xex
+          # the manifests include the switch-table finder's output for the image (build-host.ps1 does this on Windows)
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables.json
           # codegen before the first configure: the generated glue only picks the recompiled sources up
           # when generated/default exists at configure time (a fresh tree has none)
           (cd recomp && ../out/sdk-install/bin/rexglue codegen ttt2_manifest.toml)

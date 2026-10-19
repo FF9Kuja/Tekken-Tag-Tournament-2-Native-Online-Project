@@ -94,4 +94,14 @@ if(TARGET ttt2-validate)
             -P "${_run_expect}")
         set_tests_properties(iso_extract_all_synthetic PROPERTIES FIXTURES_REQUIRED validate_inputs)
     endif()
+    # The title update's files extracted with their folders: the host's update: root (owner pipeline step 8).
+    if(TARGET ttt2-stfs)
+        add_test(NAME stfs_extract_all_synthetic COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:ttt2-stfs>|extract-all|${_fx}/TU_SYNTHETIC|${_fx}/tu-extracted"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=extracted 1 files \\([0-9]+ bytes\\) in 0 directories"
+            "-DEXPECT_FILES=${_fx}/tu-extracted/Default.xexp"
+            -P "${_run_expect}")
+        set_tests_properties(stfs_extract_all_synthetic PROPERTIES FIXTURES_REQUIRED validate_inputs)
+    endif()
 endif()

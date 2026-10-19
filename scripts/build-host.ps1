@@ -10,6 +10,9 @@
 #   2. Checks the SDK package under -SdkInstall (default: the SDK checkout's
 #      out\install\win-amd64, which scripts\build-rexglue-windows.ps1 -Install produces); with
 #      -InstallSdk it builds and installs the SDK first (long: runtime, GPU plugin, SDL3).
+#   2b. Runs recomp\tools\find_switch_tables.py on the image: ReXGlue's own jump-table detector misses or
+#      miscompiles several of the shapes TTT2's compiler emits, so the manifests include the finder's
+#      recomp\game\ttt2_switch_tables.toml (git-ignored with the image; needs Python 3 on PATH).
 #   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml, then
 #      configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
 #      CMAKE_PREFIX_PATH pointing at the package, and builds. The generated glue only picks the
@@ -44,6 +47,16 @@ function Find-Clang {
     return $null
 }
 
+function Find-Python {
+    foreach ($name in @("python", "python3")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        $major = & $cmd.Source -c "import sys; print(sys.version_info[0])" 2>$null
+        if ($major -eq "3") { return $cmd.Source }   # the Store alias prints a message instead
+    }
+    return $null
+}
+
 # 1. the game image
 $gameDir = Join-Path $root "recomp\game"
 $gameXex = Join-Path $gameDir "default.xex"
@@ -56,6 +69,15 @@ if ($Game -ne "") {
 if (-not (Test-Path $gameXex)) {
     throw "recomp\game\default.xex is missing: pass -Game <your patched default.xex> (docs\OWNER_CHECKLIST.md step 4)"
 }
+
+# 1b. switch jump tables for this image (the manifests include the file, so it must exist before codegen)
+$python = Find-Python
+if (-not $python) { throw "Python 3 not found on PATH (winget install Python.Python.3.12): the switch-table finder needs it" }
+$tables = Join-Path $gameDir "ttt2_switch_tables.toml"
+Write-Host "Finding switch jump tables in the image (recomp\tools\find_switch_tables.py)..."
+& $python -I (Join-Path $root "recomp\tools\find_switch_tables.py") $gameXex --toml $tables --json (Join-Path $gameDir "switch_tables.json")
+if ($LASTEXITCODE -ne 0) { throw "switch-table finder failed ($LASTEXITCODE)" }
+if (-not (Test-Path $tables)) { throw "the finder wrote no $tables" }
 
 # 2. the SDK package
 $config = Join-Path $SdkInstall "lib\cmake\rexglue\rexglueConfig.cmake"

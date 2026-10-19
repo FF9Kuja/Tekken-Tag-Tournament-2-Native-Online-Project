@@ -4,11 +4,15 @@
 //   ttt2-stfs extract <package> <name> <out-file> copies one contained file out
 //   ttt2-stfs identify <package>                  for a title update: finds the .xexp and reports
 //                                                 its source -> target version and hashes
+//   ttt2-stfs extract-all <package> <out-dir>     copies every contained file out, with its folders
+//                                                 (a title update's data files for the host's update: root)
 // Exit code 0 on success, 1 on error.
 
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "ttt2/core/byte_source.hpp"
@@ -26,6 +30,7 @@ void usage() {
                "usage: ttt2-stfs info <package>\n"
                "       ttt2-stfs extract <package> <name> <out-file>\n"
                "       ttt2-stfs identify <package>\n"
+               "       ttt2-stfs extract-all <package> <out-dir>\n"
                "       ttt2-stfs --version\n");
 }
 
@@ -89,6 +94,68 @@ int cmd_extract(ttt2::stfs::Package& pkg, std::string_view name, const std::stri
   return 0;
 }
 
+/// An entry name that is safe to join to the output directory: no separators, no "." / "..".
+bool safe_name(const std::string& name) {
+  if (name.empty() || name == "." || name == "..") return false;
+  for (const char c : name) {
+    if (c == '/' || c == '\\' || c == ':' || c == '\0') return false;
+  }
+  return true;
+}
+
+/// Extracts every file with its folders: a title update's data files become the host's `update:` root.
+int cmd_extract_all(ttt2::stfs::Package& pkg, const std::string& out_dir) {
+  const auto entries = pkg.list();
+  if (!entries) return fail(entries.error().message);
+  std::error_code ec;
+  std::filesystem::create_directories(out_dir, ec);
+  if (ec) return fail("cannot create " + out_dir);
+  std::size_t files = 0, directories = 0, skipped = 0;
+  std::uint64_t bytes = 0;
+  for (std::size_t k = 0; k < entries->size(); ++k) {
+    const auto& e = (*entries)[k];
+    // The path through the parent chain, every component checked.
+    std::vector<std::string> parts;
+    bool ok = true;
+    for (int idx = static_cast<int>(k); idx >= 0 && parts.size() < 64;) {
+      const auto& part = (*entries)[static_cast<std::size_t>(idx)];
+      if (!safe_name(part.name)) {
+        ok = false;
+        break;
+      }
+      parts.push_back(part.name);
+      idx = part.parent_index;
+    }
+    if (!ok) {
+      std::fprintf(stderr, "skipping entry %zu with an unsafe name\n", k);
+      ++skipped;
+      continue;
+    }
+    std::filesystem::path out_path(out_dir);
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) out_path /= *it;
+    if (e.is_directory) {
+      ++directories;
+      std::filesystem::create_directories(out_path, ec);
+      if (ec) return fail("cannot create " + out_path.string());
+      continue;
+    }
+    std::filesystem::create_directories(out_path.parent_path(), ec);
+    std::FILE* out = std::fopen(out_path.string().c_str(), "wb");
+    if (!out) return fail("cannot create " + out_path.string());
+    const auto n = pkg.stream_file(e, [&](std::span<const std::uint8_t> chunk) {
+      return std::fwrite(chunk.data(), 1, chunk.size(), out) == chunk.size();
+    });
+    std::fclose(out);
+    if (!n) return fail(out_path.string() + ": " + n.error().message);
+    ++files;
+    bytes += *n;
+  }
+  std::printf("extracted %zu files (%llu bytes) in %zu directories -> %s\n", files,
+              static_cast<unsigned long long>(bytes), directories, out_dir.c_str());
+  if (skipped) std::printf("skipped %zu entries with unsafe names\n", skipped);
+  return 0;
+}
+
 int cmd_identify(ttt2::stfs::Package& pkg) {
   const int rc = cmd_info(pkg);
   if (rc != 0) return rc;
@@ -148,6 +215,13 @@ int main(int argc, char** argv) {
       return 1;
     }
     return cmd_extract(*pkg, args[2], std::string(args[3]));
+  }
+  if (args[0] == "extract-all") {
+    if (args.size() != 3) {
+      usage();
+      return 1;
+    }
+    return cmd_extract_all(*pkg, std::string(args[2]));
   }
   usage();
   return 1;

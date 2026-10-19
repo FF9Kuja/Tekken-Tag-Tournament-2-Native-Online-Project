@@ -13,4 +13,7 @@ file_path = "game/default.xex"
 out_directory_path = "generated/default"
 includes = [
   "ttt2_config.toml",
+  # written by recomp/tools/find_switch_tables.py on game/default.xex (scripts/build-host.ps1 and the
+  # owner pipeline run it before codegen): the jump tables the SDK's own detector gets wrong
+  "game/ttt2_switch_tables.toml",
 ]

@@ -170,6 +170,13 @@ if ($Codegen) {
             New-Item -ItemType Directory -Force -Path "recomp\game" | Out-Null
             Copy-Item $patched "recomp\game\default.xex" -Force
             Log "Copied the patched executable to recomp\game\default.xex (git-ignored)."
+            # Jump tables: the SDK's own detector misses or miscompiles several of the shapes TTT2's compiler
+            # emits (measured), so the symbolic finder runs first and the manifests include its output.
+            Section "6a. Switch jump tables (recomp\tools\find_switch_tables.py; the manifests include the result)"
+            $tablesJson = Join-Path $Work "switch_tables.json"
+            Run python @("-I", "recomp\tools\find_switch_tables.py", "recomp\game\default.xex", "--toml", "recomp\game\ttt2_switch_tables.toml", "--json", $tablesJson) | Out-Null
+            if (-not (Test-Path "recomp\game\ttt2_switch_tables.toml")) { Log "PROBLEM: the finder wrote no recomp\game\ttt2_switch_tables.toml; codegen will fail (is Python 3 on PATH as 'python'?)" }
+            Section "6b. Recompile"
             Push-Location recomp
             try {
                 $codegenLog = Join-Path $Work "codegen.log"
@@ -224,6 +231,10 @@ if ($ExtractGame) {
     Section "8. Extract the disc into $Work\game (the host's game data root)"
     $gameRoot = Join-Path $Work "game"
     Run $isoTool @("extract-all", $Iso, $gameRoot) | Out-Null
+    # The title update's own files (next to game\, where the host mounts them as update:).
+    $updateRoot = Join-Path $Work "update"
+    Run $stfsTool @("extract-all", $tuFile, $updateRoot) | Out-Null
+    Log "Title update files extracted to $updateRoot; the host picks that folder up as update: when it sits next to game\."
     Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
 }
 

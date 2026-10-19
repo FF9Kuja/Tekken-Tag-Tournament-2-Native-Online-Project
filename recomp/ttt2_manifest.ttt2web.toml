@@ -16,4 +16,5 @@ out_directory_path = "generated/ttt2web"
 includes = [
   "ttt2_config.toml",
   "ttt2_functions.ttt2web.toml",
+  "game/ttt2_switch_tables.toml",
 ]
