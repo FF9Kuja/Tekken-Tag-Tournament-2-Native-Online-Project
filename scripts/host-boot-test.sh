@@ -5,17 +5,21 @@
 # recomp/tests/ppc/imports_ttt2.s as recomp/game/default.xex for this: its entry point calls kernel
 # imports (two overridden by recomp/src/kernel_overrides.cpp) and returns, which makes ReXApp quit.
 #
-#   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds]
+#   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds] [--expect-crash | --expect-stall]
 #
 # Runs without GPU emulation (--gpu_plugin=none) and with SDL's dummy audio driver; on Linux without a
-# display it runs under xvfb-run. Expects exit code 0 within the timeout and these lines in the
+# display it starts an Xvfb of its own. Expects exit code 0 within the timeout and these lines in the
 # newest log file next to the executable: the executable identification, both override first-call
 # lines, the main guest thread's exit and the host's own exit line; a HOST CRASH block fails the test.
-# With --expect-crash the expectations invert: exit code 3 (Ttt2App::kExitCodeHostCrash) and a
-# HOST CRASH block, which is how the crash path itself is tested. With --expect-stall (image:
-# recomp/tests/ppc/stall_ttt2.s, a program that spins forever) the host runs with a 1 s watchdog period
-# until the timeout (default 12 s) and the log must hold the "possible stall" dump with per-thread
-# lines, which is how the stall detector is tested. No game content is involved.
+# With --expect-crash (image: recomp/tests/ppc/crash_ttt2.s, a program that writes to the null page)
+# the expectations invert: exit code 3 (Ttt2App::kExitCodeHostCrash) and a HOST CRASH block, which is
+# how the crash path itself is tested. With --expect-stall (image: recomp/tests/ppc/stall_ttt2.s, a
+# program that spins forever) the host runs with a 1 s watchdog period until its "possible stall" dump
+# appears (at most the timeout, default 12 s), then the window is closed the way a player closes it
+# (SIGTERM, which SDL turns into a close request; WM_CLOSE through taskkill on Windows): the log must
+# hold the dump with per-thread lines and the kernel stub report the host writes on close, and the
+# host must exit with code 0. That is how the stall detector and the close path are tested. No game
+# content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
 game="${2:?game data root}"
@@ -33,20 +37,59 @@ exe="$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")"
 game="$(cd "$game" && pwd)"
 [ -f "$game/default.xex" ] || { echo "host-boot-test: $game/default.xex not found"; exit 2; }
 logs="$(dirname "$exe")/logs"
+stdout_log="$(dirname "$exe")/boot-stdout.log"
 rm -rf "$logs"
 export SDL_AUDIO_DRIVER=dummy SDL_AUDIODRIVER=dummy
-runner=""
+windows=0
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) windows=1 ;; esac
+
+# A display: Linux without one gets an Xvfb of this script's own (not xvfb-run: the host must be this
+# script's direct child so it can be signalled, and the X server must outlive the close request).
+xvfb_pid=""
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*|Darwin) ;;
     *) if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-           command -v xvfb-run > /dev/null 2>&1 || { echo "host-boot-test: no display and no xvfb-run (apt install xvfb)"; exit 2; }
-           runner="xvfb-run -a"
+           command -v Xvfb > /dev/null 2>&1 || { echo "host-boot-test: no display and no Xvfb (apt install xvfb)"; exit 2; }
+           display=":$(( $$ % 900 + 100 ))"
+           Xvfb "$display" -screen 0 1280x720x24 -nolisten tcp > /dev/null 2>&1 &
+           xvfb_pid=$!
+           export DISPLAY="$display"
+           sleep 1
        fi ;;
 esac
+cleanup() { [ -z "$xvfb_pid" ] || kill "$xvfb_pid" 2>/dev/null || true; }
+trap cleanup EXIT
+
 rc=0
 # --gpu_plugin=none keeps Ttt2App from selecting the staged Xenos plugin: no GPU emulation here.
-# shellcheck disable=SC2086
-timeout "$limit" $runner "$exe" --game_data_root "$game" --gpu_plugin=none --log_level info > "$(dirname "$exe")/boot-stdout.log" 2>&1 || rc=$?
+if [ "$expect_stall" = 1 ]; then
+    "$exe" --game_data_root "$game" --gpu_plugin=none --log_level info > "$stdout_log" 2>&1 &
+    pid=$!
+    waited=0
+    while [ "$waited" -lt "$limit" ] && ! grep -qs "ttt2: possible stall" "$logs"/*.log 2>/dev/null; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        # Close the window the way the player will.
+        if [ "$windows" = 1 ]; then
+            winpid="$(ps -W | awk -v p="$pid" '$1 == p { print $4 }')"
+            [ -z "$winpid" ] || taskkill //PID "$winpid" > /dev/null 2>&1 || true
+        else
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+        closed=0
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$pid" 2>/dev/null || { closed=1; break; }
+            sleep 1
+        done
+        [ "$closed" = 1 ] || { echo "FAIL boot: the host did not end within 10 s of the close request"; kill -9 "$pid" 2>/dev/null || true; }
+    fi
+    wait "$pid" 2>/dev/null || rc=$?
+else
+    timeout "$limit" "$exe" --game_data_root "$game" --gpu_plugin=none --log_level info > "$stdout_log" 2>&1 || rc=$?
+fi
 log="$(ls -t "$logs"/*.log 2>/dev/null | head -1)"
 echo "host-boot-test: exit code $rc, log ${log:-<none>}"
 [ -n "$log" ] || { echo "FAIL host-boot-test: no log file was written to $logs"; exit 1; }
@@ -58,14 +101,13 @@ absent() {
     if grep -q "$1" "$log"; then echo "FAIL boot: $2 ('$1' found in the log)"; status=1; else echo "ok   boot: $2"; fi
 }
 if [ "$expect_stall" = 1 ]; then
-    # timeout ends the run: 124 when it had to kill the host, 0 when the host saw the signal as a window
-    # close and ended itself (ReXApp hard-exits on close).
-    case "$rc" in 124|0) echo "ok   boot: the host was still running at the timeout (exit $rc)" ;;
-        *) echo "FAIL boot: exit code $rc, expected the host to run until the timeout"; status=1 ;; esac
+    [ "$rc" = 0 ] && echo "ok   boot: exit code 0 after the close request" || { echo "FAIL boot: exit code $rc, expected 0 after the close request"; status=1; }
     check "ttt2: main guest thread created" "the module was launched"
     check "ttt2: watchdog: .* main thread running" "the watchdog saw the main thread running"
     check "ttt2: possible stall: thread census and stub calls unchanged" "the stall detector fired"
     check "ttt2:   .* id [0-9]* .* priority .* wait_result" "the per-thread dump was logged"
+    check "ttt2: kernel stub report at window close" "the stub report was written when the window closed"
+    check "Window closing" "the host took the close request"
     absent "ttt2: HOST CRASH" "no host crash"
     absent "ttt2: guest program ended" "the program did not end on its own"
 elif [ "$expect_crash" = 1 ]; then

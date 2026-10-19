@@ -101,14 +101,16 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   guest address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation
   for each (`recomp/tools/ttt2web_kernel_functions.txt`, 136 names), unimplemented variable imports, the distinct
   errors, and a numbered action list. Unit-tested on synthetic logs shaped like the real ones.
-* `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash]` - boots the real game host on
-  the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as `recomp/game/default.xex`)
-  without GPU emulation (`--gpu_plugin=none`; under `xvfb-run` on a display-less Linux) and checks its log: image
-  identified, module launched, both kernel overrides reached, program returned, host exited with code 0. With
-  `--expect-crash` (image: `recomp/tests/ppc/crash_ttt2.s`, a program that writes to the null page) it expects
-  exit code 3 and a HOST CRASH block instead; with `--expect-stall` (image: `recomp/tests/ppc/stall_ttt2.s`, a
-  program that spins forever) it runs with a 1 s watchdog period until the timeout and expects the "possible
-  stall" dump with per-thread lines. Both workflows run all three forms, rebuilding the host on each image.
+* `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash | --expect-stall]` - boots the
+  real game host on the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as
+  `recomp/game/default.xex`) without GPU emulation (`--gpu_plugin=none`; on a display-less Linux it starts an
+  Xvfb of its own) and checks its log: image identified, module launched, both kernel overrides reached, program
+  returned, host exited with code 0. With `--expect-crash` (image: `recomp/tests/ppc/crash_ttt2.s`, a program
+  that writes to the null page) it expects exit code 3 and a HOST CRASH block instead. With `--expect-stall`
+  (image: `recomp/tests/ppc/stall_ttt2.s`, a program that spins forever) it runs with a 1 s watchdog period until
+  the "possible stall" dump appears, then closes the window the way a player does (SIGTERM, which SDL turns into a
+  close request; `taskkill` on Windows) and expects the per-thread dump, the kernel stub report the host writes on
+  close, and exit code 0. Both workflows run all three forms, rebuilding the host on each image.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

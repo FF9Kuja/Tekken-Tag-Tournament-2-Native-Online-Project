@@ -141,7 +141,11 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
   1 s watchdog period); the crash reporter fired on the illegal-instruction case and on `crash_ttt2.s` (a write
   to the null page; HOST CRASH block with the fault address, exit 3 in 0.2 s). Both workflows run the normal,
-  crash and stall forms of the boot test, rebuilding the host on each image. The GPU plugin loads only when
+  crash and stall forms of the boot test, rebuilding the host on each image. The stall form also closes the
+  window the way a player does (a quit signal / `taskkill`) and found that the SDK's close path hard-exits
+  without `OnShutdown`, so the full kernel stub report was lost exactly when the owner closes a frozen window;
+  `Ttt2App::OnWindowCloseRequested` now writes it on the way out (verified: report, "Window closing", exit 0,
+  7 s for the whole test). The GPU plugin loads only when
   a GPU is present: never exercised in CI (no GPU; the boot test runs with
   `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
 * `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the

@@ -96,7 +96,8 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   `OnPostLoadXexImage` (identification against title `4E4D0859` / TU3 0.0.3.2, import summary),
   `OnPostLaunchModule` / `OnGuestThreadExit` (guest-thread watchdog census; on the main thread's exit the host
   logs the stub report and ends the process, because SDK 0.10.0's teardown deadlocks in the input driver's
-  destructor), `OnPostInitLogging` (kernel stub counter: a log sink that counts the runtime's `<name> STUB`
+  destructor), `OnWindowCloseRequested` (the full stub report on the way out, since the SDK's close path
+  hard-exits without `OnShutdown`), `OnPostInitLogging` (kernel stub counter: a log sink that counts the runtime's `<name> STUB`
   warnings and logs the full list at exit, `recomp/src/stub_counter.*`), `OnPostSetup` (last-chance host crash
   reporter on `rex::arch::ExceptionHandler`: fault kind and addresses, guest thread, recent stub calls, then
   exit code 3, because the SDK's signal handler would otherwise re-execute an unhandled guest fault forever),

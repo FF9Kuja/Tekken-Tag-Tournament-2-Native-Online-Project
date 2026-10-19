@@ -216,6 +216,16 @@ void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
   std::_Exit(0);
 }
 
+bool Ttt2App::OnWindowCloseRequested() {
+  // Closing the window (the X button, or a quit signal, which SDL turns into the same request) is
+  // how the owner's first boots will end: a black or frozen window. ReXApp's close path terminates
+  // the title and hard-exits the process without OnShutdown, so the full kernel stub report is
+  // written here, while the counts are still there; the watchdog ticks only carry the top five.
+  LogStubReport("window close");
+  rex::FlushLogging();
+  return true;
+}
+
 void Ttt2App::OnShutdown() {
   StopWatchdog();
   if (crash_handler_installed_) {
