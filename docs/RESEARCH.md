@@ -182,6 +182,25 @@ select and fights at 60 fps natively; audio, saves and sign-in missing. Verified
 * **License:** BSD 3-Clause (Tom Clay, 2026; portions from Xenia, BSD 3-Clause). **Verified.**
 * **Status:** v0.10.0 tagged 2026-08-21; nightlies through 2026-10-02 (`0.10.0.24-dev`); README warns "early
   development ... significant changes and breaking public API updates". Linux (amd64/arm64), Windows and macOS CI.
+* **`development` branch evaluated against the pin (2026-10-19; `bd833a2` = `0.10.0.24-dev`, 24 commits past
+  v0.10.0, `main` still at the release).** Commits relevant to TTT2: `stwcx.` migrated to a `std::atomic` CAS
+  with CR0.so dropped (`7f7c92e`), `sync`/`lwsync`/`eieio` emitted as fences (`bd833a2`), register types made
+  unsigned (`ea222e9`), `vpkuwus`/`vpkuhus` packed through a temporary when the destination aliases a source
+  (`6319e23`; TTT2 uses the halfword VMX pack family), XamContent results compared as `X_ERROR_SUCCESS` instead
+  of NTSTATUS (`ee20900`), leaked event/socket/completion-port objects released (`0c7b01a`), file overwrites
+  truncated in place (`01ac2a3`), `writable_code_segments` (`5e2dae1`), plus input (keyboard passthrough,
+  vibration, hotplug), UI (fullscreen switching) and logging (`LogConfig` path/budget/flush) features, SDL3
+  3.4.14. No jump-table detector change and no new instruction builders: `check_instruction_coverage.py` reports
+  the same 64 of 66 (`macchwu`/`maclhwu` missing) and the SDK-only recompilation of `switch_ttt2.s` still runs
+  wrong (exit 132) while the finder's tables give 12 of 12, so the finder stays mandatory. Public API: only
+  `BuildLogConfig` lost its `log_file` parameter (the harness dispatches on the signature); `ReXApp` gained
+  `OnConfigureLogging(LogConfig&)`; every hook, cvar and cmake entry point the host uses is unchanged, and
+  `recomp/` built against the snapshot's installed package without a source change. Measured on the snapshot
+  here: its own `ppc_tests` 1462 cases / 5757 assertions pass (v0.10.0: 1458 / 5725), the codegen smoke test
+  with native runs passes all cases, the host passes the normal, stall and crash boot tests. Also seen in its
+  headers: `IsHostPageWriteWatched` on the memory interface (write-watch infrastructure, of interest for the
+  rollback snapshots of Milestone 6). The pin was not moved: `docs/decisions/0002` sets the rules, and the
+  `sdk_commit` workflow input re-runs this evaluation on any commit.
 * **What it is:** a static recompiler (`rexglue codegen`) **and** a runtime derived from Xenia with the JIT
   replaced by a function dispatch table: kernel (`xboxkrnl` export table 936 lines, `xam` 1749 lines), memory, VFS
   (`game:`, `d:`, `update:` mounts), threading, XMA audio decoder (FFmpeg), SDL3 audio, SDL3/XInput/mouse-keyboard

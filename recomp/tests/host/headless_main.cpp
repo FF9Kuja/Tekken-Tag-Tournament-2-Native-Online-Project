@@ -116,6 +116,26 @@ std::uint32_t load_be32(const std::uint8_t* p) {
 
 }  // namespace
 
+namespace {
+
+// SDK 0.10.0 declares BuildLogConfig(log_file, level, categories); its development branch dropped the log_file
+// parameter (the path moved into LogConfig). These overloads are constrained on the signature the SDK in use
+// declares and their bodies are dependent, so only the matching one is instantiated: the harness builds against
+// the pin and against a snapshot under evaluation (docs/decisions/0002-sdk-pin-and-snapshot-evaluation.md).
+template <class Level, class Categories>
+  requires requires(const Level& l, const Categories& c) { rex::BuildLogConfig(l, c); }
+rex::LogConfig BuildLogConfigCompat(const Level& level, const Categories& categories) {
+  return rex::BuildLogConfig(level, categories);
+}
+
+template <class Level, class Categories>
+  requires(!requires(const Level& l, const Categories& c) { rex::BuildLogConfig(l, c); })
+rex::LogConfig BuildLogConfigCompat(const Level& level, const Categories& categories) {
+  return rex::BuildLogConfig(nullptr, level, categories);
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep progress visible if the guest hangs and we are killed
   Options opt;
@@ -125,17 +145,8 @@ int main(int argc, char** argv) {
   }
 
   rex::InitLoggingEarly();
-  // SDK 0.10.0 declares BuildLogConfig(log_file, level, categories); its development branch dropped the
-  // log_file parameter (the path moved into LogConfig). Call whichever signature the SDK in use declares, so
-  // the harness builds against both (the SDK snapshot evaluations run it, docs/RESEARCH.md 4.1).
   const std::map<std::string, std::string> no_categories;
-  auto log_config = [&] {
-    if constexpr (requires { rex::BuildLogConfig(opt.log_level, no_categories); }) {
-      return rex::BuildLogConfig(opt.log_level, no_categories);
-    } else {
-      return rex::BuildLogConfig(nullptr, opt.log_level, no_categories);
-    }
-  }();
+  auto log_config = BuildLogConfigCompat(opt.log_level, no_categories);
   log_config.log_to_console = true;
   rex::InitLogging(log_config);
   // Count the "<name> STUB" warnings the runtime logs for kernel exports it does not implement.
