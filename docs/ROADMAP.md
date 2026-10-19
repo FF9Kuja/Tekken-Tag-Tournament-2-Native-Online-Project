@@ -44,9 +44,13 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
 3. [x] Ingestion tools (session 2): XDVDFS reader + `ttt2-iso`, STFS reader + `ttt2-stfs`, XEX decrypt /
    basic decompress + `ttt2-xexinfo --image-hash`, XEXP patching via `ttt2-xexpatch` (XenonUtils, MIT, Clang-only).
    [x] (session 3) `ttt2-validate` one-command check, TU-vs-base pre-check, `--imports` / `--helpers` scans,
-   `scripts/owner-pipeline.ps1`. [ ] Run them on the owner's copy (`docs/OWNER_CHECKLIST.md`) and record the
-   verified hashes in `known_titles.hpp` (**needs the owner's files; run locally, report hashes only**).
-4. [ ] Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): the report tool
+   `scripts/owner-pipeline.ps1`. [x] (2026-10-19) The owner ran `ttt2-iso identify` on their disc: title
+   `4E4D0859`, media ID `5D762D06`, version 0.0.0.2, retail AES-128-CBC, basic compression, SHA-1 match with the
+   published retail hash (recorded in `known_titles.hpp`). [ ] The Title Update 3 steps wait for the update (the
+   owner does not have it; `docs/OWNER_CHECKLIST.md` gives the legitimate route); the pipeline's base-image mode
+   runs every later step on the retail executable meanwhile.
+4. [ ] Run ReXGlue codegen on the real image (**owner's PC or WSL; outputs stay local**; the base executable
+   0.0.0.2 now, the TU3 image when the update is available): the report tool
    gives unresolved calls, missing instructions, jump tables found; run the finder on the same image and compare
    with the 526-535 tables the other ports report; add its `[[switch_tables]]` and the data-as-code
    `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse. [x] TTT2 Web's 18k

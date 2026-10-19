@@ -6,9 +6,55 @@ only things to send back are the text the tools print (title IDs, versions, hash
 ## What you need
 
 * Your Tekken Tag Tournament 2 (USA, Europe) Xbox 360 disc image (`.iso`).
-* Your Title Update 3 file: `TU_174Q22P_0000008000000.00000000000O2` (from your console's
-  `Content\0000000000000000\4E4D0859\000B0000\` folder, or wherever your dump keeps it).
+* Optionally your Title Update 3 file: `TU_174Q22P_0000008000000.00000000000O2` (see "Title Update 3" below
+  for where it comes from). Without it everything runs on the retail executable 0.0.0.2 ("base-image mode").
 * Windows 10/11 with Visual Studio 2022 (Desktop development with C++), git and Python 3, **or** WSL/Ubuntu.
+
+## Status of your copy (2026-10-19)
+
+`ttt2-iso identify` on your disc image, built with Visual Studio 2022: title ID `4E4D0859`, media ID `5D762D06`,
+version `0.0.0.2`, normal retail AES-128-CBC encryption, basic compression, and the "Matches" line for the
+USA/Europe retail disc (its `default.xex` has the SHA-1 the TTT2Recomp project published, now confirmed by your
+copy). That is exactly the image TTT2 Web recompiled and the base every port starts from. **Not yet done with your
+files:** the Title Update 3 steps (you do not have the update yet), the recompilation, the host build and the
+first boot; nothing beyond identification is validated on the real game so far.
+
+## No Title Update 3 yet? Use the base-image path
+
+Every step below works without the update: leave `-TitleUpdate` out and the pipeline runs in base-image mode
+(the report says `Mode: BASE IMAGE`), skipping steps 3 and 5 and recompiling, building and booting the retail
+executable 0.0.0.2. The base game is a complete, playable image (TTT2 Web runs it to menus and fights), so the
+first boot does not have to wait for the update. The TTT2 Web function boundaries were produced for this exact
+image, so the pipeline's second recompilation pass with them applies ("Layout vs TTT2 Web: 8 of 8"). When you
+obtain the update later, rerun the same command with `-TitleUpdate` and the report switches to the TU3 image;
+online play will need both players on the same version, which is why TU3 stays the project's target.
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
+```
+
+## Title Update 3: the legitimate way to get it
+
+The update is Namco's copyrighted file and this project never distributes it; the only clean source is Microsoft's
+own update service for a game you own:
+
+1. Put the disc in an Xbox 360 that is signed in to Xbox Live (a free account is enough) and start the game. The
+   console offers the game's update; accept it. Microsoft's store-closure FAQ says game updates keep being served
+   after the July 2024 closure ("Xbox 360 games will still prompt for and install game updates when one is
+   available for a game that you've launched", as relayed from support.xbox.com; check the FAQ page
+   `support.xbox.com/help/xbox-360/store/xbox-360-marketplace-update` yourself before relying on it). The final
+   update for this title is the one that targets 0.0.3.2.
+2. Get the file off the console. It is stored on the console's storage under the title's `000B0000` content
+   folder (`Content\0000000000000000\4E4D0859\000B0000\`) or, for updates named `TU_...`, in the hard drive's
+   `Cache` folder. From an unmodified console the routes are the console's own Storage menu (move the item to a
+   USB stick formatted by the console, then read the stick's Xbox 360 partition on the PC with a FATX-aware tool)
+   or an Xbox 360 hard-drive transfer cable with such a tool. `ttt2-stfs identify <file>` tells you whether a
+   candidate file is the right package ("Identified: Tekken Tag Tournament 2 Title Update 3").
+3. Point `-TitleUpdate` at the file, or at a folder holding your candidate files; the pipeline picks the one whose
+   `Default.xexp` targets 0.0.3.2.
+
+Downloading the update from third-party archives is redistribution of copyrighted content and is not a route this
+project documents.
 
 ## The short way: one command
 
@@ -21,6 +67,8 @@ scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q
 # or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically.
 # The whole path to the first boot, with the SDK package downloaded and unzipped to D:\rexglue-sdk (step 6):
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
+# the same without Title Update 3 (base-image mode, retail executable 0.0.0.2):
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
 ```
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are

@@ -177,11 +177,16 @@ void Ttt2App::OnPostLoadXexImage() {
           "ttt2: this executable is not Tekken Tag Tournament 2 (title {:08X}); the recompiled code will not "
           "match it",
           title_id);
+    } else if (version == kRetailBaseVersion) {
+      REXLOG_INFO(
+          "ttt2: base retail executable {} (no Title Update 3 applied): the recompiled code must come from this "
+          "same image (docs/OWNER_CHECKLIST.md, base-image path)",
+          version_string(version));
     } else if (version != kExpectedVersion) {
       REXLOG_WARN(
-          "ttt2: executable version {} is not Title Update 3 ({}); the recompiled code was generated from "
-          "the TU3 image",
-          version_string(version), version_string(kExpectedVersion));
+          "ttt2: executable version {} is neither Title Update 3 ({}) nor the retail base ({}); the recompiled "
+          "code must come from exactly this image",
+          version_string(version), version_string(kExpectedVersion), version_string(kRetailBaseVersion));
     }
   } else {
     REXLOG_WARN("ttt2: the executable has no execution info header");

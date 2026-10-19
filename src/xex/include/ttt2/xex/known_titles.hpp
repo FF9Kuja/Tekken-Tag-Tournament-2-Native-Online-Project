@@ -33,14 +33,17 @@ struct KnownExecutable {
   std::string_view sha1_hex;    ///< empty if unknown
   std::string_view sha256_hex;  ///< empty if unknown
   std::string_view provenance;  ///< where the hash was published
+  std::uint32_t media_id = 0;   ///< the disc's media ID when one has been observed, else 0
 };
 
 inline constexpr KnownExecutable kKnownExecutables[] = {
     // Reported by the TTT2Recomp project (shihabal3amri/tekken-tag-tournament-2-pc,
-    // port/src/setup/game_data.cpp, "retail 0.0.0.2"). Unverified by this project.
+    // port/src/setup/game_data.cpp, "retail 0.0.0.2"). Confirmed on 2026-10-19: the owner's own disc
+    // produced this SHA-1 ("Matches" line of ttt2-iso identify), with media ID 5D762D06, version 0.0.0.2,
+    // normal retail AES-128-CBC encryption and basic compression.
     {0x4E4D0859u, "Tekken Tag Tournament 2 (USA, Europe) retail disc Default.xex, v0.0.0.2",
      "a942090b7c293d0ce63346ed8a2974448135d0dd", "",
-     "reported by TTT2Recomp (game_data.cpp); not yet verified here"},
+     "reported by TTT2Recomp (game_data.cpp); confirmed by the owner's disc on 2026-10-19", 0x5D762D06u},
     // The decrypted image of the retail executable patched with Title Update 3 (version 0.0.3.2), as
     // produced by XenonUtils' XexPatcher: the image both existing ports recompile. Reported by
     // TTT2Recomp (port/src/setup/game_data.cpp, kImageSha1). Unverified by this project.

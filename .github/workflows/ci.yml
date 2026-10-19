@@ -119,3 +119,12 @@ jobs:
           if ($bootOut -notmatch 'host executable not found') { throw "run-host.ps1 did not report the missing host: $bootOut" }
           $global:LASTEXITCODE = 0
           Write-Host "run-host.ps1 prerequisite check OK"
+          # Base-image mode: no -TitleUpdate. Steps 3 and 5 must be skipped, the later steps labelled with the
+          # retail executable, the title-update extraction skipped and the (unbuilt) host step skipped.
+          scripts\owner-pipeline.ps1 -Iso "$fx\synthetic.iso" -Work out\pipeline-base -SkipBuild -ExtractGame -Boot
+          $base = Get-Content out\pipeline-base\report.txt -Raw
+          foreach ($needle in @('Mode:\s+BASE IMAGE', 'skipped: no -TitleUpdate given', 'skipped: base-image mode', 'extracted 3 files', 'No title update: nothing to extract', 'ttt2\.exe is missing', 'Report written to')) {
+            if ($base -notmatch $needle) { throw "base-mode report lacks '$needle'" }
+          }
+          if ($base -match 'Default\.xexp') { throw "base-mode report mentions the title update file" }
+          Write-Host "base-image pipeline report OK ($((Get-Content out\pipeline-base\report.txt).Count) lines)"
