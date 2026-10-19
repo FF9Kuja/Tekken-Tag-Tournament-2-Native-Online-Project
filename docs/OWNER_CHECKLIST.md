@@ -8,7 +8,7 @@ only things to send back are the text the tools print (title IDs, versions, hash
 * Your Tekken Tag Tournament 2 (USA, Europe) Xbox 360 disc image (`.iso`).
 * Your Title Update 3 file: `TU_174Q22P_0000008000000.00000000000O2` (from your console's
   `Content\0000000000000000\4E4D0859\000B0000\` folder, or wherever your dump keeps it).
-* Windows 10/11 with Visual Studio 2022 (Desktop development with C++) and git, **or** WSL/Ubuntu.
+* Windows 10/11 with Visual Studio 2022 (Desktop development with C++), git and Python 3, **or** WSL/Ubuntu.
 
 ## The short way: one command
 
@@ -19,7 +19,8 @@ whether the ReXGlue runtime implements, stubs or lacks it):
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
 # or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically
-# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result
+# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result, and
+# -BuildHost -InstallSdk -ExtractGame to build and prepare the native host (step 6)
 ```
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
@@ -144,12 +145,9 @@ scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\bui
 recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
 ```
 
-The pipeline (and `build-host.ps1`) first runs the switch-table finder on your patched executable and writes
-`recomp\game\ttt2_switch_tables.toml` (addresses only, git-ignored), which the codegen manifests include: the SDK's
-own jump-table detector gets several of this game's switch shapes wrong, and a wrong table means a crash at the
-first such switch. The report says how many tables were found (`work\switch_tables.json` has the list; send it).
-`-ExtractGame` also extracts the title update's own files into `work\update`, which the host mounts as `update:`
-because it sits next to `work\game`.
+`build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` also extracts the
+title update's own files into `work\update`, which the host mounts as `update:` because it sits next to
+`work\game`.
 
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
@@ -157,7 +155,8 @@ only useful for log-gathering; the game cannot draw that way). The host exits by
 thread ends, and after a crash it writes the report below and exits with code 3 instead of hanging.
 
 Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
-`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`) and prints it to the console: `ttt2: executable title
+`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`; the window itself shows nothing useful before the game
+draws): `ttt2: executable title
 4E4D0859 version 0.0.3.2 ...`, `ttt2: graphics backend xenos`, an import summary, a guest-thread census every few
 seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
 **kernel stub report** when the main thread exits or you close the window (every system call the game reached
