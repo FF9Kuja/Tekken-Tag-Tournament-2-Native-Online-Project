@@ -76,7 +76,8 @@ the tool and checks exit code, printed reasons and the files written to `--work`
 * `scripts/make-ppc-test-xex.sh <source.c|.s> <out.xex>` - builds a license-free PowerPC test program and packs
   it as an XEX2 image (assembly through the SDK's bundled binutils); writes `<out.xex>.syms`.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
-  runs the program natively and checks the values it stores (`scripts/codegen-smoke-test.sh --exec`).
+  runs the program natively, checks the values it stores and reports the kernel stubs it reached
+  (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
 
 ## Repository hygiene
 
@@ -95,8 +96,10 @@ it on every push. Install it as a pre-commit hook with `scripts/install-git-hook
 
 `.github/workflows/ci.yml`: hygiene check and Python unit tests; Linux clang and gcc (`-Werror`); Windows MSVC (VS
 2022 generator) and clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also smoke-test the
-tools. `sdk-validation.yml` (weekly/manual) builds the SDK and runs the codegen checks; `rexglue-windows.yml`
-(weekly/manual) builds `rexglue.exe` on Windows.
+tools. `sdk-validation.yml` (weekly/manual) builds the SDK, runs the codegen checks and the native run of the
+switch-table program through the headless host (`--exec`); `rexglue-windows.yml` (weekly/manual) builds
+`rexglue.exe` on Windows and, with the `native_run` input, also builds the headless host on Windows and runs the
+program there (the first native-execution evidence on the target platform; slow).
 
 ## Working with the ReXGlue SDK on Linux (Milestone 3 preview)
 

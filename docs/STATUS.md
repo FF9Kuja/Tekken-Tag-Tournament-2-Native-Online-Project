@@ -39,6 +39,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * **Host**: `recomp/src/ttt2_app.{h,cpp}` implements the `ReXApp` hooks (paths, backend log, executable
   identification against title `4E4D0859` / version 0.0.3.2, import summary, guest-thread watchdog);
   `recomp/tests/host/headless_main.cpp` is the headless runtime harness.
+* **Kernel stub counter** (`recomp/src/stub_counter.{h,cpp}`, `stub_name.hpp`): a spdlog sink on the runtime's
+  loggers that counts every `<name> STUB` warning the SDK's stubbed exports emit; `Ttt2App` reports the top
+  entries on each watchdog tick and the complete list (most-called first, first-seen order) when the main
+  thread exits and at shutdown, so the first boot of the real game yields the exact list of system calls the
+  runtime must implement. The headless harness compiles the same code and prints the stubs a test program
+  reached (`--max-stub-calls N` makes more a failure). The line parser is unit-tested in the main project.
 * **Windows**: `scripts/build-rexglue-windows.ps1` (the SDK's own CI recipe: LLVM clang + Ninja, `win-amd64`
   preset), `.github/workflows/rexglue-windows.yml` (builds `rexglue.exe` on a Windows runner, runs the smoke
   test, uploads the tool), `scripts/owner-pipeline.ps1` (one command from ISO + TU to a text report, optional
@@ -62,13 +68,14 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   step name) - fixed, all workflows lint clean.
 
 **Verified (where)**
-* Linux container, Clang 18 and GCC 13 `-Werror`: 50 doctest cases / 594 assertions, 13 ctest entries (4 of them
+* Linux container, Clang 18 and GCC 13 `-Werror`: 51 doctest cases / 604 assertions, 13 ctest entries (4 of them
   end-to-end runs of `ttt2-validate` on synthetic fixtures); Python unit tests 6/6; hygiene check clean;
   `actionlint` clean; PowerShell parse clean.
 * `scripts/codegen-smoke-test.sh --exec` with the SDK built here: smoke 6/0/0, jumptable 2/0/0, switch_ttt2
   12 functions / 7 SDK switches / 9 with the finder, insn_ttt2 8 functions with 64 mnemonics translated; the
-  native run passes with the finder's tables and fails with the SDK's; all generated units compile against the
-  SDK headers.
+  native run passes with the finder's tables and fails with the SDK's (a trap or a guest thread that never
+  finishes, depending on the run); all generated units compile against the SDK headers. The harness's stub
+  counter reports `kernel stubs: 0 calls to 0 stubs` for the test program, which the script now asserts.
 * Everything above on license-free programs only. Nothing was run on game files (none here, by design).
 
 **Not verified / open**

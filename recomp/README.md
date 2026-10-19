@@ -31,6 +31,7 @@ programs in `tests/ppc/`, see `docs/DEVELOPMENT.md`.
 | `tools/find_switch_tables.py` | symbolic switch-table finder; writes `[[switch_tables]]` for the config (required: the SDK's detector misses/miscompiles several shapes) |
 | `tools/codegen_report.py` | summarises a codegen run as REPORT.md / JSON (counts, addresses, names only) |
 | `tests/ppc/*.c`, `*.s` | license-free PowerPC test programs: smoke, jump-table shapes (`switch_ttt2.s`), the TTT2 instruction list (`insn_ttt2.s`) |
-| `tests/host/` | headless host: runs a recompiled test program through the runtime and checks its results |
+| `tests/host/` | headless host: runs a recompiled test program through the runtime, checks its results and reports the kernel stubs it reached |
 | `ttt2_instructions.txt` | the 66 instructions TTT2 needs beyond XenonRecomp's original set (from TTT2 Web, CC0) |
-| `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog |
+| `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog, kernel stub report |
+| `src/stub_counter.{h,cpp}`, `src/stub_name.hpp` | counts the runtime's `<name> STUB` warnings per export (also used by the headless harness) |
