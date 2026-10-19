@@ -35,5 +35,7 @@ jobs:
         run: scripts/build-rexglue-linux.sh third_party/rexglue-sdk/src --with-tests
       - name: Regenerate the instruction tests with recompile-tests (smoke)
         run: scripts/sdk-recompile-tests.sh third_party/rexglue-sdk/src third_party/rexglue-sdk/src/out/linux-amd64/rexglue out/ppc-tests
+      - name: End-to-end codegen smoke test on license-free PowerPC programs
+        run: scripts/codegen-smoke-test.sh third_party/rexglue-sdk/src/out/linux-amd64/rexglue third_party/rexglue-sdk/src out/codegen-smoke
       - name: Hygiene check
         run: python3 scripts/check_repo_hygiene.py

@@ -93,3 +93,13 @@ instruction tests as Catch2 sources without any game file:
 ```sh
 scripts/sdk-recompile-tests.sh /path/to/rexglue-sdk /path/to/rexglue-sdk/out/linux-amd64/rexglue out/ppc-tests
 ```
+
+End-to-end recompilation of license-free programs (`recomp/tests/ppc/*.c` -> XEX2 image -> `rexglue codegen`
+-> generated C++ syntax-checked against the SDK):
+
+```sh
+scripts/codegen-smoke-test.sh /path/to/rexglue-sdk/out/linux-amd64/rexglue /path/to/rexglue-sdk out/codegen-smoke
+```
+
+`scripts/ppc_elf_to_xex.py` is the packer behind it (PE32 for PowerPC-BE with a `.pdata` exception directory
+synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers).

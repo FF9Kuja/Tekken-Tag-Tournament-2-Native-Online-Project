@@ -15,6 +15,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   validation workflow added.
 
 **Verified (where)**
+* **`rexglue codegen` runs end to end on license-free programs**: `scripts/ppc_elf_to_xex.py` wraps a
+  Clang-built PowerPC ELF into a minimal XEX2/PE32 image with a `.pdata` exception directory (the SDK's
+  loader checks the `MZ\x90\x00` DOS dword, PowerPC-BE machine type, the Xbox subsystem and 64 KiB page
+  descriptors); all seven analysis phases pass, every function is recompiled with no unimplemented or error
+  markers, and the generated translation units compile (syntax check) against the SDK headers with Clang 20.
+  `scripts/codegen-smoke-test.sh` repeats this for `recomp/tests/ppc/*.c`; the SDK validation workflow runs it.
 * Linux container: 42 doctest cases / 473 assertions, 7 ctest entries, both compilers.
 * STFS layout cross-check: an independent reader known to work on the real TTT2 title updates reads this
   project's synthetic packages and recovers every file byte for byte.

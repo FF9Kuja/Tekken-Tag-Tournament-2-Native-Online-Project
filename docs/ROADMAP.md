@@ -29,10 +29,12 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
 
 1. [x] ReXGlue SDK pinned (`third_party/rexglue-sdk/PIN`, fetch + Linux build scripts; the `recomp/` skeleton
    from `rexglue init` is in the tree). [ ] Windows build recipe for the `rexglue` tool.
-2. License-free validation in CI: (a) the SDK's PPC instruction tests through `scripts/sdk-recompile-tests.sh`
-   (works on Linux, verified); (b) a small XEX2/PE packer so Clang-built PowerPC test programs get the `.pdata`
-   directory `rexglue codegen` requires, then codegen smoke tests with expected function counts; (c) an
-   instruction-coverage check for the ~70 instructions TTT2 Web lists.
+2. License-free validation in CI: [x] (a) the SDK's PPC instruction tests through
+   `scripts/sdk-recompile-tests.sh` (1458 cases pass on Linux); [x] (b) `scripts/ppc_elf_to_xex.py` +
+   `scripts/codegen-smoke-test.sh`: Clang-built PowerPC programs wrapped as XEX2/PE images with `.pdata`,
+   recompiled end to end with expected function counts and syntax-checked output; [ ] (c) an
+   instruction-coverage check for the ~70 instructions TTT2 Web lists (test programs exercising halfword VMX,
+   update-form loads/stores and half-float pack/unpack).
 3. [x] Ingestion tools (session 2): XDVDFS reader + `ttt2-iso`, STFS reader + `ttt2-stfs`, XEX decrypt /
    basic decompress + `ttt2-xexinfo --image-hash`, XEXP patching via `ttt2-xexpatch` (XenonUtils, MIT, Clang-only).
    [ ] Run them on the owner's copy (`docs/OWNER_CHECKLIST.md`) and record the verified hashes in

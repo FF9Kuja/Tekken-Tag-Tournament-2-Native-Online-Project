@@ -145,3 +145,6 @@ third_party/rexglue-sdk/src/
 
 # XenonRecomp checkout (fetched by scripts/fetch-xenonrecomp.sh)
 third_party/xenonrecomp/src/
+
+# codegen smoke-test outputs
+/out/codegen-smoke/
