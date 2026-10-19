@@ -49,7 +49,9 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
 4. [ ] Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): the report tool
    gives unresolved calls, missing instructions, jump tables found; run the finder on the same image and compare
    with the 526-535 tables the other ports report; add its `[[switch_tables]]` and the data-as-code
-   `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse.
+   `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse. [x] TTT2 Web's 18k
+   explicit function boundaries are converted and ready (`recomp/ttt2_functions.ttt2web.toml`), applied only if
+   the owner's image matches TTT2 Web's helper-address fingerprint (the pipeline checks and runs both variants).
 5. [ ] Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others
    (the tools already refuse other titles/versions; the owner's hashes complete the table).
 6. [x] Diagnostic pipeline: codegen logs, validation reports (`codegen_report.py`, `ttt2-validate --json`,

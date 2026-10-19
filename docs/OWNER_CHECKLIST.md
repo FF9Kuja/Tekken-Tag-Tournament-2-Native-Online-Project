@@ -109,6 +109,10 @@ Then let the pipeline script do the rest (it copies `work\default_tu3.xex` to `r
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe"
 ```
 
+The pipeline also compares your executable's save/restore helper addresses with the ones TTT2 Web published
+("Layout vs TTT2 Web: N of 8 helper addresses match" in the report). On a full match it recompiles a second time
+with TTT2 Web's 18k explicit function boundaries and writes `work\codegen-ttt2web-REPORT.md` too; send both.
+
 Also run the switch-table finder on the patched executable; it writes the `[[switch_tables]]` entries the
 recompiler needs (SDK 0.10.0 misses or miscompiles several table shapes on its own, see `docs/RESEARCH.md` 8a):
 

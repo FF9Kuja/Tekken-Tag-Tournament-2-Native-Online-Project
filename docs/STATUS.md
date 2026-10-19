@@ -31,6 +31,15 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   per-thread dump (state, priority, suspend count, wait result) when the thread census and the stub total stay
   unchanged for three ticks while the main thread runs. The stub counter keeps a ring of the last 16 calls. The
   owner checklist now points at the host's `logs\` folder (the SDK writes `logs/` next to the executable).
+* **TTT2 Web's public-domain addresses, gated by a layout fingerprint**: TTT2 Web (CC0) publishes the eight
+  save/restore helper addresses of its author's executable and 18,351 explicit function boundaries generated
+  on it (leaf functions without `.pdata`, functions outgrowing their recorded size). The boundaries are
+  converted to ReXGlue's `[functions]` form (`recomp/tools/import_ttt2web_functions.py` ->
+  `recomp/ttt2_functions.ttt2web.toml`, addresses and sizes only). Because the executable version TTT2 Web used
+  is not stated, the helper addresses serve as fingerprint: `ttt2-xexinfo --helpers` and `ttt2-validate` print
+  "Layout vs TTT2 Web: N of 8 helper addresses match", and only a full match makes the boundaries applicable;
+  `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
+  the variant codegen as a second pass only on a match (both reports are written for comparison).
 * Windows workflow fixes from its first run on `main`: the SDK checkout failed with "Filename too long"
   (vulkan-loader fuzzer test data beyond 260 characters) - `fetch-rexglue-sdk.ps1` now clones with
   `core.longpaths=true`; the LLVM install falls back to the latest package when the pinned version is missing;
@@ -39,7 +48,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 **Verified (where)**
 * GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green
   (details above).
-* Linux container: 51 doctest cases / 604 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
+* Linux container: 52 doctest cases / 612 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
   Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
   against the package.
 * Windows: CI jobs (tools) green; the ReXGlue Windows workflow's first run on `main` reached the LLVM install
