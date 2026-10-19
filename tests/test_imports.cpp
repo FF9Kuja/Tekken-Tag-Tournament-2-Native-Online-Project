@@ -1,10 +1,10 @@
 #include <doctest.h>
 
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <vector>
 
+#include "pe_image_builder.hpp"
 #include "xex_builder.hpp"
 
 #include "ttt2/core/endian.hpp"
@@ -18,53 +18,11 @@ using ttt2::test::XexBuilder;
 
 namespace {
 
-constexpr std::uint32_t kBase = 0x82000000u;
-constexpr std::size_t kImageSize = 0x2000;
+constexpr std::uint32_t kBase = ttt2::test::kImportTestImageBase;
+constexpr std::size_t kImageSize = ttt2::test::kImportTestImageSize;
 
-void le32(std::vector<std::uint8_t>& v, std::size_t off, std::uint32_t x) {
-  v[off] = static_cast<std::uint8_t>(x);
-  v[off + 1] = static_cast<std::uint8_t>(x >> 8);
-  v[off + 2] = static_cast<std::uint8_t>(x >> 16);
-  v[off + 3] = static_cast<std::uint8_t>(x >> 24);
-}
-
-/// A plaintext PE32 image: .text (executable) at RVA 0x1000, .rdata at 0x1800, with import
-/// record words and helper byte patterns at known places.
 std::vector<std::uint8_t> make_image() {
-  std::vector<std::uint8_t> img(kImageSize, 0);
-  img[0] = 'M';
-  img[1] = 'Z';
-  le32(img, 0x3C, 0x80);
-  std::memcpy(img.data() + 0x80, "PE\0\0", 4);
-  img[0x80 + 6] = 2;           // NumberOfSections
-  le32(img, 0x80 + 20, 0xE0);  // SizeOfOptionalHeader (low 16 bits)
-  const std::size_t sect = 0x80 + 24 + 0xE0;
-  std::memcpy(img.data() + sect, ".text\0\0\0", 8);
-  le32(img, sect + 8, 0x800);
-  le32(img, sect + 12, 0x1000);
-  le32(img, sect + 16, 0x800);
-  le32(img, sect + 36, 0x60000020u);
-  std::memcpy(img.data() + sect + 40, ".rdata\0\0", 8);
-  le32(img, sect + 40 + 8, 0x400);
-  le32(img, sect + 40 + 12, 0x1800);
-  le32(img, sect + 40 + 16, 0x400);
-  le32(img, sect + 40 + 36, 0x40000040u);
-  // Import records (big-endian words: type << 24 | ordinal).
-  store_be32(img.data() + 0x1800, 0x000000CFu);  // NtClose slot
-  store_be32(img.data() + 0x1100, 0x010000CFu);  // NtClose thunk (in .text)
-  store_be32(img.data() + 0x1808, 0x000000ADu);  // KeTimeStampBundle (variable)
-  store_be32(img.data() + 0x180C, 0x000002BCu);  // XamShowSigninUI slot
-  store_be32(img.data() + 0x1110, 0x010002BCu);  // XamShowSigninUI thunk
-  store_be32(img.data() + 0x1810, 0x0000FFF0u);  // unknown ordinal
-  // Helper patterns: __savegprlr_14 twice (ambiguous), __restvmx_64 once, __restgprlr_14 in .rdata (ignored).
-  const std::uint8_t savegprlr[] = {0xF9, 0xC1, 0xFF, 0x68};
-  const std::uint8_t restvmx64[] = {0x39, 0x60, 0xFC, 0x00, 0x10, 0x0B, 0x60, 0xCB};
-  const std::uint8_t restgprlr[] = {0xE9, 0xC1, 0xFF, 0x68};
-  std::memcpy(img.data() + 0x1200, savegprlr, 4);
-  std::memcpy(img.data() + 0x1400, savegprlr, 4);
-  std::memcpy(img.data() + 0x1300, restvmx64, 8);
-  std::memcpy(img.data() + 0x1900, restgprlr, 4);
-  return img;
+  return ttt2::test::make_import_test_image();
 }
 
 std::vector<std::uint8_t> make_xex(const std::vector<std::uint8_t>& image) {
@@ -76,16 +34,8 @@ std::vector<std::uint8_t> make_xex(const std::vector<std::uint8_t>& image) {
     std::vector<std::uint8_t> f(4, 0);  // encryption none, compression none
     return f;
   }());
-  b.add_sized(
-      header_key::kImportLibraries,
-      XexBuilder::import_libraries(
-          {{"xboxkrnl.exe",
-            0,
-            0x00000302u,
-            0x00000301u,
-            0,
-            {kBase + 0x1800, kBase + 0x1100, kBase + 0x1808, 0x90000000u}},
-           {"xam.xex", 1, 0x00000302u, 0x00000301u, 0, {kBase + 0x180C, kBase + 0x1110, kBase + 0x1810}}}));
+  b.add_sized(header_key::kImportLibraries,
+              XexBuilder::import_libraries(ttt2::test::import_test_libraries()));
   b.set_security(XexBuilder::security_info(kImageSize, 0, kBase, 0xFFFFFFFFu, 0, {{1, 1}, {2, 1}}));
   b.set_basefile(image);
   return b.build();

@@ -1,7 +1,7 @@
 // ttt2-validate: checks a Tekken Tag Tournament 2 disc image and title update as a pair, in one
 // command, and prints a report that contains only facts (IDs, versions, hashes, counts, addresses).
 //
-//   ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR] [--no-imports]
+//   ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR] [--no-imports] [--no-patch]
 //
 // Steps: find and identify default.xex in the disc image; find the title update (a folder is
 // searched for the package whose Default.xexp targets 0.0.3.2, as TTT2Recomp's installer does);
@@ -9,7 +9,8 @@
 // the Clang-only patcher compiled in, apply the update in memory and hash the patched image; list
 // the kernel/XAM imports and the register save/restore helper addresses of the image the
 // recompiler will see. --work DIR also writes base.xex, Default.xexp and default_tu3.xex there (the
-// player's own files, for the next pipeline step). Exit code 0 when the pair is usable, 1 otherwise.
+// player's own files, for the next pipeline step); --no-patch stops after the pre-check (the
+// synthetic end-to-end tests use it). Exit code 0 when the pair is usable, 1 otherwise.
 
 #include <algorithm>
 #include <cstdio>
@@ -48,6 +49,7 @@ struct Options {
   std::string work;
   bool json = false;
   bool imports = true;
+  bool patch = true;
 };
 
 /// Collects the report as key/value lines; printed as text or JSON at the end.
@@ -237,6 +239,8 @@ int main(int argc, char** argv) {
       opt.json = true;
     } else if (a == "--no-imports") {
       opt.imports = false;
+    } else if (a == "--no-patch") {
+      opt.patch = false;
     } else if (a == "--work" && i + 1 < argc) {
       opt.work = argv[++i];
     } else if (!a.empty() && a[0] == '-') {
@@ -251,7 +255,7 @@ int main(int argc, char** argv) {
   if (opt.iso.empty() || opt.update.empty()) {
     std::fprintf(stderr,
                  "usage: ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR] "
-                 "[--no-imports]\n");
+                 "[--no-imports] [--no-patch]\n");
     return 1;
   }
   Report rep;
@@ -383,8 +387,32 @@ int main(int argc, char** argv) {
     for (const auto& n : compat.notes) rep.add("Note", n);
     for (const auto& e : compat.errors) rep.problem(e);
     rep.add("Pre-check", compat.compatible ? "passed" : "FAILED");
+
+    // Writes the player's extracted files, and the patched executable when there is one, to --work.
+    const auto write_work = [&](const std::vector<std::uint8_t>* patched) {
+      if (opt.work.empty()) return;
+      std::error_code ec;
+      fs::create_directories(opt.work, ec);
+      bool ok = write_file(fs::path(opt.work) / "base.xex", base_file) &&
+                write_file(fs::path(opt.work) / "Default.xexp", patch_file);
+      if (ok && patched != nullptr) ok = write_file(fs::path(opt.work) / "default_tu3.xex", *patched);
+      if (!ok) {
+        rep.add("Work folder", "could not write to " + opt.work);
+        rep.problem("could not write the work folder " + opt.work);
+      } else if (patched != nullptr) {
+        rep.add("Work folder",
+                opt.work + " (base.xex, Default.xexp, default_tu3.xex written; keep it private)");
+      } else {
+        rep.add("Work folder",
+                opt.work + " (base.xex, Default.xexp written; run ttt2-xexpatch for default_tu3.xex)");
+      }
+    };
+
+    bool applied = false;
+    if (!opt.patch) {
+      rep.add("Patch", "not applied (--no-patch)");
+    } else if (compat.compatible) {
 #if TTT2_HAVE_XEXPATCHER
-    if (compat.compatible) {
       std::vector<std::uint8_t> patched;
       const auto result = XexPatcher::apply(base_file.data(), base_file.size(), patch_file.data(),
                                             patch_file.size(), patched, false);
@@ -399,30 +427,16 @@ int main(int argc, char** argv) {
                     (out->execution_info ? out->execution_info->version.to_string() : "?"));
         rep.add("Patched SHA-1", sha1_hex(patched));
         describe_image(rep, "Patched", *out, patched, opt.imports);
-        if (!opt.work.empty()) {
-          std::error_code ec;
-          fs::create_directories(opt.work, ec);
-          const bool ok = write_file(fs::path(opt.work) / "base.xex", base_file) &&
-                          write_file(fs::path(opt.work) / "Default.xexp", patch_file) &&
-                          write_file(fs::path(opt.work) / "default_tu3.xex", patched);
-          rep.add("Work folder",
-                  ok ? opt.work + " (base.xex, Default.xexp, default_tu3.xex written; keep it private)"
-                     : "could not write to " + opt.work);
-          if (!ok) rep.problem("could not write the work folder " + opt.work);
-        }
+        write_work(&patched);
+        applied = true;
       }
-    }
 #else
-    if (!opt.work.empty()) {
-      std::error_code ec;
-      fs::create_directories(opt.work, ec);
-      const bool ok = write_file(fs::path(opt.work) / "base.xex", base_file) &&
-                      write_file(fs::path(opt.work) / "Default.xexp", patch_file);
-      rep.add("Work folder",
-              ok ? opt.work + " (base.xex, Default.xexp written; run ttt2-xexpatch for default_tu3.xex)"
-                 : "could not write to " + opt.work);
-    }
+      rep.add("Patch",
+              "not applied (patcher not compiled in: build with the windows-clang-cl or linux-clang "
+              "preset after scripts/fetch-xenonrecomp)");
 #endif
+    }
+    if (!applied && compat.compatible) write_work(nullptr);
   } else {
     rep.add("Pre-check", "skipped (inputs missing)");
   }
