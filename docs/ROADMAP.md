@@ -103,12 +103,27 @@ Character select, Practice, Arcade, local Versus; fix rendering/audio/timing iss
 option (original 2-frame FIFO on/off, as TTT2Recomp offers); save data; resolution options. Exit: reliably playable
 offline, verified by the owner's test matrix.
 
+Input (requirements and design: `docs/INPUT.md`, ADR 0003; native execution in Milestones 3-4 keeps priority):
+1. [ ] `recomp/src/input/` core: binding parser, TOML profiles (default `tekken8-numpad`: WASD, Numpad 4/5/1/2 for
+   1/2/3/4, Numpad 6 = 1+2, Numpad 3 = 3+4, Tag = Numpad 8, B = Start, V = Back), opposite-direction policies
+   (neutral default), press latch, macro keys; doctest unit tests, no game needed.
+2. [ ] `KeyboardPadDriver` + device assignment on the SDK's `InputDriver` interface, installed by the host's
+   `input_factory` next to the SDL3/XInput pad drivers; license-free guest program polling `XamInputGetState` in the
+   headless harness with injected key events (CI).
+3. [ ] In-game Controls dialog (ImGui): press-to-bind, profiles (save/duplicate/reset/switch), direction target,
+   opposite-input policy, player slot; `--input_profile`; input latency statistics (`--input_stats`).
+4. [ ] Owner verification on the real game (`docs/INPUT.md` 6): menus, character select, Practice, matches from the
+   keyboard alone; confirm the Tag pad button and the direction target; pad + keyboard on player 1; keyboard as
+   player 2. Keep the game's original input behaviour; no Tekken 8 mechanics.
+
 ## Milestone 6 - Rollback netcode
 
 Determinism tooling first (input record/replay, per-frame state hashes, snapshot self-test), then frame/input/seed
 hooks, snapshots with dirty-page tracking, audio boundary, GGPO integration, local two-instance sync test with
 simulated latency, desync detection. Exit: verified rollback matches over LAN/loopback with 0-8 frames of
-rollback and no desyncs over long sessions.
+rollback and no desyncs over long sessions. Inputs enter as per-frame `PlayerInput` words (button mask + 8-way
+direction) built after the keyboard cleaning and latching of `docs/INPUT.md`, so keyboard and pad players are
+indistinguishable to the netcode and to replays.
 
 ## Milestone 7 - Multiplayer infrastructure
 

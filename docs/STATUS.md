@@ -32,6 +32,15 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   input of both workflows evaluate any commit without touching the pin; `docs/decisions/0002` records the pin
   policy and the checklist. The pin stays at v0.10.0 for now (no failure points at it yet); the bump is a
   one-PR step when the first boot report asks for one of those fixes.
+* **Input requirements recorded** (owner, 2026-10-19): full keyboard play with the owner's Tekken 8 layout (WASD;
+  Numpad 4/5/1/2 for 1/2/3/4; Numpad 6 = 1+2; Numpad 3 = 3+4; B = Start; V = Back) and Tag on Numpad 8, saved
+  profiles, exact simultaneous presses, opposite-direction handling, keyboard in every screen, low latency, Xbox
+  and PlayStation pads alongside, rollback-ready inputs, the game's original input behaviour preserved and no
+  Tekken 8 mechanics. `docs/INPUT.md` holds the requirements, the measured state of the SDK's input system (its
+  keyboard driver, device merge, driver interface) and the design (own `KeyboardPadDriver` in the SDK's
+  `InputSystem`, TOML profiles in Tekken terms, neutral opposite-direction default, press latch, macro keys,
+  `PlayerInput` words for the netcode); ADR 0003 records the decision; ROADMAP Milestone 5 lists the steps in
+  order. Native game execution keeps priority; no input code was written yet.
 * Kernel-surface check repeated against a fresh TTT2 Web checkout (`4d6dd61`): its 135 `GUEST_IMPORT` functions
   (a macro parameter had been counted as a 136th name; `recomp/tools/ttt2web_kernel_functions.txt` fixed) are all
   implemented (130) or stubbed (5, overridden) by the pinned runtime, and the seven kernel variable imports its
