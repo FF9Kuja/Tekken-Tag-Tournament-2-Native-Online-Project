@@ -35,11 +35,14 @@ add_subdirectory("${REXSDK_DIR}" rexglue-sdk EXCLUDE_FROM_ALL)
 
 include("${TTT2_GUEST_GENERATED}/sources.cmake")
 
-add_executable(headless_host headless_main.cpp ${GENERATED_SOURCES})
+# The host's kernel stub counter (recomp/src) is compiled in so the harness reports the stubs a
+# program reaches, with the same code the game host uses.
+set(TTT2_HOST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
+add_executable(headless_host headless_main.cpp "${TTT2_HOST_SRC}/stub_counter.cpp" ${GENERATED_SOURCES})
 target_compile_definitions(headless_host PRIVATE
     TTT2_GUEST_INIT_HEADER="${TTT2_GUEST_PROJECT}_init.h"
     TTT2_GUEST_PROJECT_NAME="${TTT2_GUEST_PROJECT}")
-target_include_directories(headless_host PRIVATE "${TTT2_GUEST_GENERATED}")
+target_include_directories(headless_host PRIVATE "${TTT2_GUEST_GENERATED}" "${TTT2_HOST_SRC}")
 target_link_libraries(headless_host PRIVATE rex::runtime)
 target_precompile_headers(headless_host PRIVATE "${TTT2_GUEST_GENERATED}/${TTT2_GUEST_PROJECT}_pch.h")
 rexglue_apply_target_settings(headless_host)

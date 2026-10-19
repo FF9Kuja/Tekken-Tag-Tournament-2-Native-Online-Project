@@ -9,9 +9,11 @@ add_executable(ttt2_tests
     test_imports.cpp
     test_xdvdfs.cpp
     test_stfs.cpp
+    test_stub_name.cpp
 )
 target_link_libraries(ttt2_tests PRIVATE ttt2::core ttt2::xex ttt2::xdvdfs ttt2::stfs doctest::doctest)
-target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# recomp/src/stub_name.hpp is header-only and SDK-free, so the host's stub-line parser is tested here.
+target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/recomp/src")
 ttt2_apply_warnings(ttt2_tests)
 
 add_test(NAME ttt2_unit_tests COMMAND ttt2_tests --reporters=console --no-intro)

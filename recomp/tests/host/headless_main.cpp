@@ -7,10 +7,13 @@
 // assumes - that the recompiled jump tables and instructions behave correctly on this toolchain.
 //
 //   headless_host --game-root DIR --xex NAME.xex [--results 0xADDR:COUNT] [--expect v,v,...]
-//                 [--timeout-ms 10000] [--log-level warn]
+//                 [--max-stub-calls N] [--timeout-ms 10000] [--log-level warn]
 //
-// Exit codes: 0 results as expected (or no expectation given), 1 mismatch, 2 setup failure,
-// 3 the guest thread did not finish in time.
+// The kernel stubs the program reaches ("<name> STUB" warnings of the runtime) are counted and
+// reported; --max-stub-calls makes more than N of them a failure.
+//
+// Exit codes: 0 results as expected (or no expectation given), 1 mismatch or too many stub calls,
+// 2 setup failure, 3 the guest thread did not finish in time.
 
 #include TTT2_GUEST_INIT_HEADER
 
@@ -26,10 +29,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "stub_counter.h"
 
 namespace {
 
@@ -40,13 +47,15 @@ struct Options {
   unsigned results_count = 0;
   std::vector<std::uint32_t> expect;
   unsigned timeout_ms = 10000;
+  std::uint64_t max_stub_calls = std::numeric_limits<std::uint64_t>::max();
   std::string log_level = "warn";
 };
 
 void usage() {
-  std::fprintf(stderr,
-               "usage: headless_host --game-root DIR --xex NAME.xex [--results 0xADDR:COUNT]\n"
-               "                     [--expect v,v,...] [--timeout-ms N] [--log-level LEVEL]\n");
+  std::fprintf(
+      stderr,
+      "usage: headless_host --game-root DIR --xex NAME.xex [--results 0xADDR:COUNT]\n"
+      "                     [--expect v,v,...] [--max-stub-calls N] [--timeout-ms N] [--log-level LEVEL]\n");
 }
 
 bool parse(int argc, char** argv, Options& opt) {
@@ -81,6 +90,10 @@ bool parse(int argc, char** argv, Options& opt) {
         if (comma == std::string::npos) break;
         pos = comma + 1;
       }
+    } else if (a == "--max-stub-calls") {
+      const char* v = value();
+      if (!v) return false;
+      opt.max_stub_calls = std::strtoull(v, nullptr, 10);
     } else if (a == "--timeout-ms") {
       const char* v = value();
       if (!v) return false;
@@ -115,6 +128,10 @@ int main(int argc, char** argv) {
   auto log_config = rex::BuildLogConfig(nullptr, opt.log_level, std::map<std::string, std::string>{});
   log_config.log_to_console = true;
   rex::InitLogging(log_config);
+  // Count the "<name> STUB" warnings the runtime logs for kernel exports it does not implement.
+  auto stubs = std::make_shared<ttt2::KernelStubCounter>();
+  stubs->set_level(spdlog::level::warn);
+  rex::AddSink(stubs);
 
   std::printf("headless_host: project %s, image base 0x%08X size 0x%X, code 0x%08X+0x%X\n",
               TTT2_GUEST_PROJECT_NAME, PPCImageConfig.image_base, PPCImageConfig.image_size,
@@ -171,6 +188,13 @@ int main(int argc, char** argv) {
                    opt.results_count);
       rc = 1;
     }
+  }
+  std::printf("headless_host: kernel stubs: %s\n", stubs->Summary().c_str());
+  if (stubs->total_calls() > opt.max_stub_calls) {
+    std::fprintf(stderr, "headless_host: %llu stub calls, at most %llu allowed\n",
+                 static_cast<unsigned long long>(stubs->total_calls()),
+                 static_cast<unsigned long long>(opt.max_stub_calls));
+    rc = 1;
   }
   std::printf("headless_host: %s\n", rc == 0 ? "PASS" : "FAIL");
   std::fflush(stdout);

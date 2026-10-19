@@ -168,13 +168,15 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
                 -DREXSDK_DIR="$sdk" -DTTT2_GUEST_PROJECT=switch_ttt2 -DTTT2_GUEST_GENERATED="$1" > "$hostbuild.configure.log" 2>&1 \
                 && cmake --build "$hostbuild" --target headless_host --parallel > "$hostbuild.build.log" 2>&1 || {
                 echo "FAIL exec: building the headless host failed (see $hostbuild.build.log)"; tail -20 "$hostbuild.build.log"; return 2; }
-            host="$(find "$sdk/out" -name headless_host -type f 2>/dev/null | head -1)"
+            host="$(find "$sdk/out" \( -name headless_host -o -name headless_host.exe \) -type f 2>/dev/null | head -1)"
             [ -n "$host" ] || { echo "FAIL exec: headless_host not found under $sdk/out"; return 2; }
+            # --max-stub-calls 0: the program must not reach any kernel export the runtime only stubs.
             (cd "$dir" && timeout 120 "$host" --game-root "$dir" --xex switch_ttt2.xex --results "$results:12" \
-                --expect "$expected" --log-level warn)
+                --expect "$expected" --max-stub-calls 0 --log-level warn)
         }
-        # Harness exit codes: 0 all values as expected, 1 mismatch, 2 build/setup failure, 3 the guest
-        # never finished; a trap in the guest ends the process with a signal (>= 128).
+        # Harness exit codes: 0 all values as expected and no stub calls, 1 mismatch or stub calls,
+        # 2 build/setup failure, 3 the guest never finished; a trap in the guest ends the process with
+        # a signal (>= 128).
         rc=0
         run_host "$dir/generated-sdk-only/default" > "$dir/exec-sdk-only.log" 2>&1 || rc=$?
         case "$rc" in
@@ -184,8 +186,9 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
         esac
         rc=0
         run_host "$dir/generated/default" > "$dir/exec-finder.log" 2>&1 || rc=$?
-        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-finder.log"; then
-            echo "ok   exec: native run with the finder's switch tables produced all 12 expected values"
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-finder.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec-finder.log"; then
+            echo "ok   exec: native run with the finder's switch tables produced all 12 expected values, no kernel stubs reached"
         else
             echo "FAIL exec: native run with the finder's switch tables (exit $rc, see $dir/exec-finder.log)"
             tail -20 "$dir/exec-finder.log"

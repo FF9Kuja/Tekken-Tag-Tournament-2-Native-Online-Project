@@ -14,6 +14,7 @@ include(generated/rexglue.cmake)
 set(TTT2_SOURCES
     src/main.cpp
     src/ttt2_app.cpp
+    src/stub_counter.cpp
 )
 
 if(WIN32)

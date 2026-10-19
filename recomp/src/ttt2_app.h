@@ -1,9 +1,10 @@
 // ttt2 - the native host application for Tekken Tag Tournament 2 (ReXGlue SDK, rex::ReXApp).
 //
 // Milestone 4 work in progress. What exists: the lifecycle hooks that identify the loaded
-// executable, log the content paths and backend selection, and run a guest-thread watchdog that
-// reports the thread population periodically (the first boot diagnostics both reference ports
-// needed). Hooks for data patches, netplay and settings come later. Nothing here is game data.
+// executable, log the content paths and backend selection, run a guest-thread watchdog that
+// reports the thread population periodically, and count the kernel stubs the game calls (the first
+// boot diagnostics both reference ports needed). Hooks for data patches, netplay and settings come
+// later. Nothing here is game data.
 
 #pragma once
 
@@ -14,6 +15,8 @@
 #include <cstdint>
 #include <memory>
 #include <thread>
+
+#include "stub_counter.h"
 
 /// Layout of the recompiled image, defined by the generated ttt2_init.cpp.
 extern const rex::PPCImageInfo PPCImageConfig;
@@ -34,6 +37,7 @@ class Ttt2App : public rex::ReXApp {
  protected:
   void OnConfigurePaths(rex::PathConfig& paths) override;
   void OnPreSetup(rex::RuntimeConfig& config) override;
+  void OnPostInitLogging() override;
   void OnPostLoadXexImage() override;
   void OnPostLaunchModule(rex::system::XThread* thread) override;
   void OnGuestThreadExit(rex::system::XThread* thread) override;
@@ -43,7 +47,9 @@ class Ttt2App : public rex::ReXApp {
   void StartWatchdog();
   void StopWatchdog();
   void WatchdogTick();
+  void LogStubReport(const char* when);
 
+  std::shared_ptr<ttt2::KernelStubCounter> stubs_;
   rex::system::XThread* main_thread_ = nullptr;
   std::thread watchdog_;
   std::atomic<bool> watchdog_stop_{false};

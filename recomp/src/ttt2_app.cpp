@@ -52,6 +52,14 @@ void Ttt2App::OnPreSetup(rex::RuntimeConfig& config) {
   }
 }
 
+void Ttt2App::OnPostInitLogging() {
+  // Every kernel export the runtime only stubs logs "<name> STUB" when called; counting those lines
+  // gives the list of system calls the game reaches that the runtime does not implement.
+  stubs_ = std::make_shared<ttt2::KernelStubCounter>();
+  stubs_->set_level(spdlog::level::warn);
+  rex::AddSink(stubs_);
+}
+
 void Ttt2App::OnPostLoadXexImage() {
   auto module = runtime()->kernel_state()->GetExecutableModule();
   if (!module) {
@@ -99,10 +107,30 @@ void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
   REXLOG_INFO("ttt2: main guest thread exited (id {})", thread ? thread->thread_id() : 0u);
   WatchdogTick();
   StopWatchdog();
+  LogStubReport("main thread exit");
 }
 
 void Ttt2App::OnShutdown() {
   StopWatchdog();
+  LogStubReport("shutdown");
+  if (stubs_) {
+    rex::RemoveSink(stubs_);
+    stubs_.reset();
+  }
+}
+
+void Ttt2App::LogStubReport(const char* when) {
+  // The complete list, most-called first: what Milestone 4 has to implement next. Names and counts.
+  if (!stubs_) return;
+  const auto hits = stubs_->Snapshot();
+  REXLOG_INFO("ttt2: kernel stub report at {}: {} calls to {} distinct stubs", when, stubs_->total_calls(),
+              hits.size());
+  constexpr std::size_t kMaxLines = 200;
+  for (std::size_t i = 0; i < hits.size() && i < kMaxLines; ++i) {
+    REXLOG_INFO("ttt2:   {:<48} {:>9} calls (first seen as stub call #{})", hits[i].name, hits[i].calls,
+                hits[i].first_seen);
+  }
+  if (hits.size() > kMaxLines) REXLOG_INFO("ttt2:   ... {} more", hits.size() - kMaxLines);
 }
 
 void Ttt2App::StartWatchdog() {
@@ -139,6 +167,7 @@ void Ttt2App::WatchdogTick() {
       names += t->name().empty() ? ("#" + std::to_string(t->thread_id())) : t->name();
     }
   }
-  REXLOG_INFO("ttt2: watchdog: {} guest threads ({} running); main thread {}: {}", threads.size(), running,
-              main_thread_ && main_thread_->is_running() ? "running" : "not running", names);
+  REXLOG_INFO("ttt2: watchdog: {} guest threads ({} running); main thread {}: {}; kernel stubs: {}",
+              threads.size(), running, main_thread_ && main_thread_->is_running() ? "running" : "not running",
+              names, stubs_ ? stubs_->Summary(5) : std::string("not counted"));
 }
