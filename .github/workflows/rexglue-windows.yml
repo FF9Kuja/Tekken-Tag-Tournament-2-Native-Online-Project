@@ -17,6 +17,10 @@ on:
         description: "Also install the SDK as a CMake package and build the game host ttt2.exe from the license-free test program with scripts/build-host.ps1 (adds an hour or more)"
         type: boolean
         default: false
+      sdk_commit:
+        description: "ReXGlue SDK commit to build instead of the pin (third_party/rexglue-sdk/PIN): for evaluating a snapshot; empty = the pin"
+        type: string
+        default: ""
   schedule:
     - cron: "41 5 * * 2"
 
@@ -37,7 +41,9 @@ jobs:
           clang --version
           # the SDK's submodules hold paths longer than 260 characters
           git config --global core.longpaths true
-      - name: Fetch the pinned SDK
+      - name: Fetch the pinned SDK (or the sdk_commit snapshot)
+        env:
+          REXGLUE_SDK_COMMIT: ${{ inputs.sdk_commit }}
         run: scripts\fetch-rexglue-sdk.ps1
       - name: Build rexglue.exe
         run: scripts\build-rexglue-windows.ps1

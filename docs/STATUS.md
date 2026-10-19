@@ -21,6 +21,17 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Triage outcome order: a stall dump followed by the window close is reported as the stall ("...; the window was
   closed afterwards") rather than as a plain close, since that is the owner's most likely first-boot shape; unit
   test added (18 Python tests).
+* **SDK snapshot evaluation and the mechanism for it.** Upstream's `development` branch (`bd833a2`, 24 commits past
+  the pinned v0.10.0) was built here, installed as a package and run through the whole license-free suite: its own
+  PPC tests (1462/1462), instruction coverage (unchanged, 64 of 66), the codegen smoke test with native runs (all
+  cases; the SDK-only jump tables are still wrong, the finder stays mandatory), the host built unchanged against it
+  and the normal, stall and crash boot tests. Relevant fixes for TTT2 are listed in `docs/RESEARCH.md` 4.1 (atomic
+  `stwcx.`, fences, VMX pack aliasing, XamContent results, leaked kernel objects). The only source change needed
+  was in the headless harness (`BuildLogConfig` lost a parameter): it now dispatches on the declared signature and
+  builds against both. `REXGLUE_SDK_COMMIT=<sha>` / `-Commit <sha>` on the fetch scripts and the `sdk_commit`
+  input of both workflows evaluate any commit without touching the pin; `docs/decisions/0002` records the pin
+  policy and the checklist. The pin stays at v0.10.0 for now (no failure points at it yet); the bump is a
+  one-PR step when the first boot report asks for one of those fixes.
 * Kernel-surface check repeated against a fresh TTT2 Web checkout (`4d6dd61`): its 135 `GUEST_IMPORT` functions
   (a macro parameter had been counted as a 136th name; `recomp/tools/ttt2web_kernel_functions.txt` fixed) are all
   implemented (130) or stubbed (5, overridden) by the pinned runtime, and the seven kernel variable imports its
@@ -64,9 +75,24 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   components whose licence text lives in their sources: disasm, disruptorplus, dxbc, dxc, ffmpeg-overlay, pe,
   renderdoc, stb, tiny-aes-c).
 
+* Windows run 39237113902 on `main` after the PR #7 merge (`8d21247`): green.
+* SDK snapshot `bd833a2`, Linux container: `ppc_tests` "All tests passed (5757 assertions in 1462 test cases)";
+  `check_instruction_coverage.py --sdk <snapshot>`: 64 implemented, 2 missing (same as the pin); codegen smoke test
+  `--exec`: all five cases, native runs 12/12 with the finder's tables, overrides reached (0, 1317), no stubs; host
+  built from the snapshot's package: boot tests normal/stall/crash PASS. The same smoke run against the pin with
+  the new harness shim: identical results. Fetch-script override: accepted on a snapshot checkout, refused without
+  it, pinned checkout unaffected (sh and pwsh 7.4).
+
+* PR #8 dispatched runs on `d9d21a1`, all green: SDK validation with `sdk_commit=bd833a2` (run 39240052895:
+  `rexglue 0.10.0.24-dev.gbd833a2`, PPC tests, smoke test with native runs, host built against the snapshot's
+  package, boot tests, boot step "clean exit" / "stall ...; closed afterwards") and with the pin (run
+  39240056253); the Windows workflow with the snapshot plus `native_run` and `build_host` (run 39240060409:
+  tool built, smoke test, snapshot package 54 MB with the licence bundle, `ttt2.exe` built and booted from it,
+  every boot form) and with the pin (run 39240064074). CI 10/10 on the head.
+
 **Not verified / open**
-* `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
-  `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
+* The owner's first boot is the only test of the snapshot's kernel and GPU changes with the real image; a bump
+  stays a one-PR step (`docs/decisions/0002`).
 * A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
   link (same MSVC ABI) but is unverified until the owner's run.
 * Everything on license-free programs; the real image still waits for the owner's run.
@@ -78,8 +104,10 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   and the three files it names (`work\boot-triage.md`, the log copy, `work\boot-report.txt`) plus `work\report.txt`.
 
 **Next task (resumable state)**
-* PR #7 (this boot step): CI, SDK validation and Windows `build_host` runs green, merge, restart the branch, Windows
-  run on `main`. Then iterate on the owner's first-boot report as described in session 4's next task.
+* PR #8 (SDK snapshot evaluation mechanism, harness shim, ADR 0002): CI plus the dispatched pin and snapshot runs
+  green, merge, restart the branch. Then iterate on the owner's first-boot report as described in session 4's next
+  task; if that report points at atomics, fences, VMX pack or XamContent behaviour, the snapshot bump
+  (`docs/decisions/0002`) is the first candidate fix.
 
 ## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
 

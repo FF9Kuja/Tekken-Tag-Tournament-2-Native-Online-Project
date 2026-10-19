@@ -174,6 +174,13 @@ cmake -S rexglue-sdk -B build/sdk -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_C
 cmake --build build/sdk --target rexglue --parallel        # the codegen tool only
 ```
 
+The repository's own scripts fetch the pinned commit (`third_party/rexglue-sdk/PIN`): `scripts/fetch-rexglue-sdk.sh`
+and `scripts/fetch-rexglue-sdk.ps1`. To evaluate another SDK commit without touching the pin, set
+`REXGLUE_SDK_COMMIT=<sha>` (or pass `-Commit <sha>` to the PowerShell script), or dispatch `sdk-validation.yml` /
+`rexglue-windows.yml` with their `sdk_commit` input, which runs the whole license-free suite on that snapshot (and,
+on Windows with `build_host`, produces its package artifact). `docs/decisions/0002-sdk-pin-and-snapshot-evaluation.md`
+holds the evaluation checklist and the rules for moving the pin.
+
 Verified in the first session: the tool builds (809 steps) and `rexglue init`, `rexglue codegen` (loads ELF/XEX;
 analysis needs a PE `.pdata` directory) and `rexglue recompile-tests` run. To regenerate the SDK's PowerPC
 instruction tests as Catch2 sources without any game file:
