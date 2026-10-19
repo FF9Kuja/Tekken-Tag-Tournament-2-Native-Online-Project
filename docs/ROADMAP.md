@@ -75,7 +75,9 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    [x] The real host boots a license-free image headless (Linux under Xvfb, Windows runner): module launched,
    kernel overrides reached, clean exit (`scripts/host-boot-test.sh`); the crash path exits with a report.
    [x] The owner's boot step as one command (`scripts/run-host.ps1`, `owner-pipeline.ps1 -Boot`): run, close on
-   timeout, triage, report; both workflows run it on the kernel-import and the stall images.
+   timeout, triage, report; both workflows run it on the kernel-import and the stall images. [x] Prebuilt SDK
+   package artifact (`rexglue-sdk-install-win-amd64`, licences included) so the owner skips the SDK build; the
+   Windows workflow builds and boots the host from the relocated package (`-SdkInstall`).
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime
