@@ -45,6 +45,7 @@ class Ttt2App : public rex::ReXApp {
   void OnPostLoadXexImage() override;
   void OnPostLaunchModule(rex::system::XThread* thread) override;
   void OnGuestThreadExit(rex::system::XThread* thread) override;
+  bool OnWindowCloseRequested() override;
   void OnShutdown() override;
 
  private:
