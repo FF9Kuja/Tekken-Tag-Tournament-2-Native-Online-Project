@@ -97,7 +97,8 @@ You need `rexglue.exe` (the ReXGlue codegen tool). Either download it from the l
 "ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`), or build it:
 
 ```powershell
-# needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja and Visual Studio 2022's C++ workload; 30-60 minutes
+# needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja, Python 3 (winget install Python.Python.3.12) and
+# Visual Studio 2022's C++ workload; 30-60 minutes
 scripts\fetch-rexglue-sdk.ps1
 scripts\build-rexglue-windows.ps1          # prints the path of rexglue.exe
 ```
@@ -113,17 +114,19 @@ The pipeline also compares your executable's save/restore helper addresses with 
 ("Layout vs TTT2 Web: N of 8 helper addresses match" in the report). On a full match it recompiles a second time
 with TTT2 Web's 18k explicit function boundaries and writes `work\codegen-ttt2web-REPORT.md` too; send both.
 
-Also run the switch-table finder on the patched executable; it writes the `[[switch_tables]]` entries the
-recompiler needs (SDK 0.10.0 misses or miscompiles several table shapes on its own, see `docs/RESEARCH.md` 8a):
+Before recompiling, the pipeline runs the switch-table finder on the patched executable (step 6a in the report)
+and writes `recomp\game\ttt2_switch_tables.toml`, which the codegen manifests include: the recompiler needs these
+`[[switch_tables]]` entries because SDK 0.10.0 misses or miscompiles several table shapes on its own
+(`docs/RESEARCH.md` 8a). By hand, the same step is:
 
 ```powershell
-python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\ttt2_switch_tables.toml --json work\switch_tables.json
+python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\game\ttt2_switch_tables.toml --json work\switch_tables.json
 ```
 
 **Send `work\report.txt`, `work\codegen-REPORT.md`, `work\codegen.log` and `work\switch_tables.json`.** They
-contain function counts, addresses, names and error messages: no game bytes. `recomp\ttt2_switch_tables.toml`
-is addresses only too and will be committed once reviewed. The generated C++ in `recomp\generated\default\`
-stays on your PC (it is git-ignored and refused by the hygiene check).
+contain function counts, addresses, names and error messages: no game bytes. `recomp\game\ttt2_switch_tables.toml`
+is addresses only too and stays on your PC with the image (git-ignored). The generated C++ in
+`recomp\generated\default\` stays on your PC as well (git-ignored and refused by the hygiene check).
 
 ## Step 6 - build the native host and attempt the first boot
 

@@ -14,12 +14,14 @@
 #   5. applies the title update with ttt2-xexpatch (Clang builds only) and hashes the result, then lists
 #      the kernel/XAM imports (marking which ones the pinned ReXGlue runtime implements, stubs or lacks)
 #      and the save/restore helper addresses (ttt2-xexinfo --imports --helpers);
-#   6. with -Codegen, copies the patched executable to recomp\game\default.xex, runs
+#   6. with -Codegen, copies the patched executable to recomp\game\default.xex, runs the switch-table
+#      finder on it (recomp\game\ttt2_switch_tables.toml, which the manifests include), runs
 #      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
 #   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
 #      SDK package (scripts\build-host.ps1; -InstallSdk builds and installs the SDK first, which takes
 #      a long time); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
-#      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`).
+#      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`), and the title update's
+#      files into update\ next to it (the host mounts that as update:).
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
 # counts and addresses only; game files stay in the work folder and recomp\game (both git-ignored).
 # Send the report file, never the work folder.
