@@ -85,21 +85,43 @@ the kernel changes. The SDK's own `MnkInputDriver` stays off.
   ```toml
   [profile]
   name = "tekken8-numpad"
+
   [movement]
-  up = "W"  down = "S"  left = "A"  right = "D"
-  target = "dpad"            # "dpad" (default) | "stick" | "both"
+  up = "W"
+  down = "S"
+  left = "A"
+  right = "D"
+  target = "dpad"             # "dpad" (default) | "stick" | "both"
   socd_horizontal = "neutral" # "neutral" (default) | "last_input" | "first_input"
   socd_vertical = "neutral"   # "neutral" (default) | "last_input" | "first_input" | "up" | "down"
+
   [buttons]
-  lp = "Numpad4"  rp = "Numpad5"  lk = "Numpad1"  rk = "Numpad2"
-  lp_rp = "Numpad6"  lk_rk = "Numpad3"  tag = "Numpad8"
-  start = "B"  back = "V"
-  [layout]                    # function -> pad button, mirrors the game's Controller Settings
-  lp = "X"  rp = "Y"  lk = "A"  rk = "B"  tag = "RB"   # tag to be confirmed on the real game
+  lp = "Numpad4"
+  rp = "Numpad5"
+  lk = "Numpad1"
+  rk = "Numpad2"
+  lp_rp = "Numpad6"
+  lk_rk = "Numpad3"
+  tag = "Numpad8"
+  start = "B"
+  back = "V"
+
+  [layout]                    # function -> pad control, mirrors the game's Controller Settings
+  lp = "X"
+  rp = "Y"
+  lk = "A"
+  rk = "B"
+  tag = "RB"                  # to be confirmed on the real game
+  start = "Start"
+  back = "Back"
+
   [options]
   latch_presses = true        # a key pressed and released between two polls still counts for one poll
   player = 1                  # guest user the keyboard feeds (1 or 2)
   ```
+
+  Key names are the SDK's (`W`, `Numpad8`, `Left`, `Shift+Up`, ...); a value may list alternatives separated by
+  commas. The files use a TOML subset (tables, strings, integers, booleans, comments), one key per line.
 
 * Switching profiles, renaming, duplicating and resetting to the default happen in the overlay (4.6) or by editing
   the files; `--input_profile <name>` selects one for a run.
