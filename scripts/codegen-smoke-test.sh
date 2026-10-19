@@ -10,6 +10,13 @@
 # headers. Each case leaves REPORT.md / report.json / codegen.log in the work directory.
 #
 #   scripts/codegen-smoke-test.sh <rexglue executable> [rexglue-sdk source dir] [work dir] [--exec]
+#                                 [--allow-no-ppc-clang]
+#
+# --allow-no-ppc-clang skips (instead of failing) the two C cases when the compiler has no PowerPC
+# backend, which is the case for the official LLVM builds on Windows (X86/ARM/AArch64 only); the
+# assembly cases run everywhere the SDK's binutils are present (Cygwin-built .exe on Windows). The
+# per-TU syntax check against the SDK headers is Linux-only; on Windows the --exec host build
+# compiles the generated code instead. PYTHON overrides the interpreter (Windows runners: `python`).
 #
 # --exec additionally builds recomp/tests/host (the ReXGlue runtime in tool mode plus the generated
 # code; a long build, reused across runs when TTT2_HOST_BUILD_DIR points at an existing one) and
@@ -23,10 +30,12 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 # Positional arguments are kept by position (an empty SDK argument, as the Windows workflow passes
 # when it skips the native run, must not shift the work directory into the SDK slot).
 exec_mode=0
+allow_no_ppc_cc=0
 n=0
 p1=""; p2=""; p3=""
 for a in "$@"; do
     if [ "$a" = "--exec" ]; then exec_mode=1; continue; fi
+    if [ "$a" = "--allow-no-ppc-clang" ]; then allow_no_ppc_cc=1; continue; fi
     n=$((n + 1))
     case $n in 1) p1="$a" ;; 2) p2="$a" ;; 3) p3="$a" ;; esac
 done
@@ -36,6 +45,16 @@ work="${p3:-$root/out/codegen-smoke}"
 cxx="${CXX:-clang++-20}"
 cc="${CC:-clang-20}"
 report="$root/recomp/tools/codegen_report.py"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) windows=1 ;; *) windows=0 ;; esac
+# One Python for this script and the packer it calls.
+if [ -z "${PYTHON:-}" ]; then
+    if [ "$windows" = 1 ]; then candidates="python python3"; else candidates="python3 python"; fi
+    for p in $candidates; do
+        if "$p" -c "import sys" > /dev/null 2>&1; then PYTHON="$p"; break; fi
+    done
+fi
+python="${PYTHON:?python3 not found (set PYTHON)}"
+export PYTHON="$python"
 # Cases run inside their own directories, so every path must be absolute.
 [ -x "$rexglue" ] || { echo "rexglue not found or not executable: $rexglue"; exit 2; }
 rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
@@ -44,6 +63,8 @@ mkdir -p "$work"
 work="$(cd "$work" && pwd)"
 rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2
 status=0
+skipped=0
+syntax_note=0
 
 # run_case <name> <source> <expected functions> <expected jump tables> <expected unimplemented sites> [extra report options]
 run_case() {
@@ -52,9 +73,17 @@ run_case() {
     mkdir -p "$dir/generated"
     # The packer gets this script's compiler, so a versioned toolchain (clang-20 + ld.lld-20, as the
     # SDK workflow installs) is used consistently instead of whatever unversioned clang is on the PATH.
-    if ! CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+    rc=0
+    CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1 || rc=$?
+    if [ "$rc" = 3 ] && [ "$allow_no_ppc_cc" = 1 ]; then
+        # exit 3: this Clang has no PowerPC backend (official LLVM Windows builds); C cases are Linux-covered.
+        echo "skip $name: $(tail -1 "$dir/pack.log")"
+        skipped=$((skipped + 1))
+        return
+    elif [ "$rc" != 0 ]; then
         echo "FAIL $name: could not build the test image (see $dir/pack.log)"
         tail -5 "$dir/pack.log"
+        [ "$rc" != 3 ] || echo "     C test programs need a Clang with the PowerPC backend; --allow-no-ppc-clang skips them where none exists (as the Windows workflow does)"
         status=1
         return
     fi
@@ -85,7 +114,7 @@ CONFIG
         return
     fi
     # shellcheck disable=SC2086
-    if python3 -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
+    if "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
             --md "$dir/REPORT.md" --json "$dir/report.json" --quiet \
             --expect-functions "$funcs" --expect-switches "$switches" --expect-unimplemented "$unimpl" \
             --fail-on-errors $extra; then
@@ -95,7 +124,12 @@ CONFIG
         grep "FAIL" "$dir/REPORT.md" || true
         status=1
     fi
-    if [ -n "$sdk" ] && [ -d "$sdk/include/rex" ]; then
+    if [ -n "$sdk" ] && [ -d "$sdk/include/rex" ] && [ "$windows" = 1 ]; then
+        if [ "$syntax_note" = 0 ]; then
+            echo "note: the syntax check of the generated code against the SDK headers is Linux-only (Linux defines); on Windows --exec compiles it for real"
+            syntax_note=1
+        fi
+    elif [ -n "$sdk" ] && [ -d "$sdk/include/rex" ]; then
         for tu in "$dir"/generated/default/*.cpp; do
             if "$cxx" -std=c++23 -fsyntax-only -mssse3 -fno-char8_t -DREX_PLATFORM_LINUX=1 -DSPDLOG_COMPILED_LIB \
                 -DSPDLOG_FMT_EXTERNAL -DREX_HAS_VULKAN=1 -I"$sdk/include" -I"$sdk/build/linux/include" \
@@ -118,9 +152,12 @@ CONFIG
 run_case smoke     "$root/recomp/tests/ppc/smoke.c"     6 0 0
 run_case jumptable "$root/recomp/tests/ppc/jumptable.c" 2 0 0
 
-# Assembly programs need the SDK's PowerPC binutils (VMX128); skipped without an SDK checkout.
+# Assembly programs need the SDK's PowerPC binutils (VMX128); skipped without an SDK checkout. The
+# SDK ships Linux ELF builds and Cygwin-built .exe variants side by side; Windows runs the latter.
 bu="${TTT2_PPC_BINUTILS:-${sdk:-$root/third_party/rexglue-sdk/src}/tools/binutils}"
-if [ -x "$bu/powerpc-none-elf-as" ]; then
+exe=""
+[ "$windows" = 0 ] || exe=.exe
+if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     export TTT2_PPC_BINUTILS="$bu"
     # Pass 1, SDK detection alone: 11 .pdata functions + one leaf discovered through its call; the SDK
     # recognises 7 of the 9 dispatches (it misses the byte- and halfword-offset tables; measured with
@@ -133,9 +170,9 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
     # Pass 2: our finder (recomp/tools/find_switch_tables.py) must see all 9 and, included as manual
     # [[switch_tables]] entries, make the codegen emit 9 switches. Manual entries take precedence
     # over the SDK's detection, so this is also the path the real game's config uses.
-    if python3 -I "$root/recomp/tools/find_switch_tables.py" "$dir/switch_ttt2.xex" \
+    if "$python" -I "$root/recomp/tools/find_switch_tables.py" "$dir/switch_ttt2.xex" \
             --toml "$dir/switch_ttt2_tables.toml" --json "$dir/switch_tables.json" > "$dir/finder.log" 2>&1 \
-        && [ "$(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['found'])" "$dir/switch_tables.json")" = "9" ]; then
+        && [ "$("$python" -I -c "import json,sys; print(json.load(open(sys.argv[1]))['found'])" "$dir/switch_tables.json")" = "9" ]; then
         echo "ok   switch_ttt2: finder found 9 switch tables"
     else
         echo "FAIL switch_ttt2: finder did not find 9 switch tables (see $dir/finder.log)"
@@ -144,7 +181,7 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
     fi
     printf 'includes = ["switch_ttt2_tables.toml"]\n' >> "$dir/switch_ttt2_config.toml"
     if (cd "$dir" && "$rexglue" --log-level debug codegen --ignore-stamp switch_ttt2_manifest.toml > codegen2.log 2>&1) \
-        && python3 -I "$report" "$dir/generated/default" --log "$dir/codegen2.log" --project switch_ttt2 \
+        && "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen2.log" --project switch_ttt2 \
             --md "$dir/REPORT2.md" --json "$dir/report2.json" --quiet \
             --expect-functions 12 --expect-switches 9 --expect-unimplemented 0 --fail-on-errors; then
         echo "ok   switch_ttt2: with the finder's tables, 9 jump tables, no errors"
@@ -163,7 +200,7 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
         # Native execution through the ReXGlue runtime (recomp/tests/host). The program stores 12
         # words at `results` (address from the packer's symbol map) and returns their sum.
         dir="$work/switch_ttt2"
-        results="$(awk '$4 == "results" {print $1}' "$dir/switch_ttt2.xex.syms")"
+        results="$(tr -d '\r' < "$dir/switch_ttt2.xex.syms" | awk '$4 == "results" {print $1}')"
         expected="20,102,201,301,401,500,600,701,900,800,0,9"
         hostbuild="${TTT2_HOST_BUILD_DIR:-$work/host-build}"
         run_host() {  # <generated dir>: builds the harness for it and runs the program
@@ -201,6 +238,8 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
         fi
     fi
 else
-    echo "skip switch_ttt2 / insn_ttt2: PowerPC binutils not found at $bu"
+    echo "skip switch_ttt2 / insn_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    skipped=$((skipped + 1))
 fi
+[ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"
 exit $status

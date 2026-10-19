@@ -50,6 +50,16 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `__imp__` symbols in the host, which generated code binds to at link time ahead of the runtime library's stubs
   (verified on Linux: the symbols are defined in `ttt2` and shadow `librexruntime.so`'s); each logs its first
   call. This is the mechanism for every stub the owner's report shows the game reaching.
+* The first Windows run that reached the smoke test (ReXGlue codegen tool workflow, run 3) found two more
+  Windows-only problems, fixed here and awaiting the next Windows run: the official LLVM Windows build has no
+  PowerPC backend (`clang -print-targets` lists no `ppc32`; "No available targets are compatible with triple
+  powerpc-unknown-linux-gnu"), so the two C test programs cannot be built there - the packer now exits 3 for
+  that case and the smoke test skips the C cases on request (`--allow-no-ppc-clang`, which the Windows workflow
+  passes; Linux CI keeps covering them); and the scripts tested for the SDK's Linux ELF binutils, which Git Bash
+  does not consider executable, so the TTT2-shaped assembly cases were skipped - they now pick the SDK's
+  Cygwin-built `powerpc-none-elf-*.exe` on Windows. Also: `python` instead of `python3` on the Windows runners,
+  LF-only symbol maps so `awk` finds the result address, and the Linux-only syntax check is skipped on Windows
+  (the `--exec` host build compiles the generated code for real there).
 * Two findings from the first CI runs of the host-build route, fixed and reproduced locally: on a fresh tree the
   SDK's generated CMake glue only picks the recompiled sources up when `generated/default` exists at configure
   time (the link failed with an undefined `PPCImageConfig`), so `build-host.ps1` and the SDK workflow run

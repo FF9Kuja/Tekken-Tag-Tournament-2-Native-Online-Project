@@ -85,7 +85,10 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   includes the result and is only for images whose helper addresses match TTT2 Web's published set
   (`ttt2-xexinfo --helpers`). Unit-tested in `tests/python`.
 * `scripts/make-ppc-test-xex.sh <source.c|.s> <out.xex>` - builds a license-free PowerPC test program and packs
-  it as an XEX2 image (assembly through the SDK's bundled binutils); writes `<out.xex>.syms`.
+  it as an XEX2 image (assembly through the SDK's bundled binutils, the Cygwin-built `.exe` variants on Windows);
+  writes `<out.xex>.syms`. C sources need a Clang with the PowerPC backend (exit 3 without one): the official LLVM
+  builds for Windows ship X86/ARM/AArch64 only, so the C programs are Linux-only and the assembly programs are the
+  ones that run everywhere.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
@@ -154,7 +157,9 @@ scripts/codegen-smoke-test.sh /path/to/rexglue-sdk/out/linux-amd64/rexglue /path
 
 `scripts/ppc_elf_to_xex.py` is the packer behind it (PE32 for PowerPC-BE with a `.pdata` exception directory
 synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers). Add `--exec` to
-also build `recomp/tests/host` and run the switch-table program natively (slow: it builds the runtime). To
+also build `recomp/tests/host` and run the switch-table program natively (slow: it builds the runtime). On Windows
+(Git Bash) add `--allow-no-ppc-clang`: the C cases are skipped there, the assembly cases and `--exec` run, and the
+syntax check of the generated code against the SDK headers is Linux-only (the host build compiles it instead). To
 compile-check the real host (`recomp/`, `Ttt2App`) on Linux, put any test image at `recomp/game/default.xex` and
 configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `-mssse3`).
 

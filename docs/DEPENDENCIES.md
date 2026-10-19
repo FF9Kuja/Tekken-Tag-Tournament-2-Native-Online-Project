@@ -10,7 +10,7 @@ Microsoft is a dependency: game content is supplied by the player at install tim
 | doctest | 2.4.11 | MIT | downloaded at configure time with a pinned SHA-256 (`third_party/doctest/CMakeLists.txt`; license kept in-tree) | unit tests only |
 | CMake | >= 3.25 (3.28 tested) | BSD-3 | developer tool | build system |
 | Ninja | 1.11 tested | Apache-2.0 | developer tool | build backend (Linux, clang-cl presets) |
-| Clang / LLD | 18.1 tested | Apache-2.0 with LLVM exception | developer tool | compiler (also emits PowerPC test inputs) |
+| Clang / LLD | 18.1 tested | Apache-2.0 with LLVM exception | developer tool | compiler (also emits PowerPC test inputs on Linux; the official Windows builds have no PowerPC backend, so the assembly test programs cover Windows) |
 | GCC | 13.3 tested | GPL-3.0 with runtime exception | developer tool | second compiler for portability checks |
 | MSVC / Windows SDK | VS 2022 | proprietary (free Community / Build Tools) | developer tool | Windows builds, CI |
 | Python | 3.10+ | PSF | developer tool | scripts (hygiene check, later patch tools) |

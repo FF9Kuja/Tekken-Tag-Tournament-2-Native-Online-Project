@@ -218,7 +218,7 @@ def main():
     with open(args.out, "wb") as f:
         f.write(xex)
     if args.symbols:
-        with open(args.symbols, "w") as f:
+        with open(args.symbols, "w", newline="\n") as f:  # LF on Windows too: shell tools read it
             for addr, size, kind, name in read_elf.symbols:
                 f.write(f"0x{addr:08X} {size} {kind} {name}\n")
     print(f"{args.out}: image {len(image)} bytes, {len(pe_sections)} sections, {len(funcs)} functions in .pdata "

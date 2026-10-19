@@ -55,14 +55,16 @@ jobs:
           CXX: clang++
           NATIVE_RUN: ${{ inputs.native_run && 'true' || 'false' }}
         run: |
-          # make-ppc-test-xex.sh uses clang/ld.lld (LLVM is multi-target) for C sources and the SDK's
-          # Windows binutils (.exe) for assembly sources. With native_run the SDK source tree is passed
-          # too and --exec builds recomp/tests/host (the runtime) and runs the program on Windows.
+          # The official LLVM builds for Windows have no PowerPC backend (X86/ARM/AArch64 only), so the
+          # two C test programs cannot be built here and --allow-no-ppc-clang skips them (Linux CI covers
+          # them); the TTT2-shaped assembly programs are assembled with the SDK's Cygwin-built PowerPC
+          # binutils (.exe). With native_run the SDK source tree is passed too and --exec builds
+          # recomp/tests/host (the runtime) and runs the switch-table program natively on Windows.
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
           if [ "$NATIVE_RUN" = true ]; then
-            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec --allow-no-ppc-clang
           else
-            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke --allow-no-ppc-clang
           fi
       - name: Upload rexglue.exe
         # Even when the smoke test fails: the tool itself is the deliverable the owner downloads.
