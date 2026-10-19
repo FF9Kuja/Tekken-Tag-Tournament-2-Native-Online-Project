@@ -4,7 +4,7 @@
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
 #                              [-BuildHost] [-SdkInstall <dir>] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
-#                              [-BootRounds 3]
+#                              [-BootRounds 3] [-BuildJobs <n>]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -73,7 +73,8 @@ param(
     [switch]$ExtractGame,
     [switch]$Boot,
     [int]$BootTimeout = 0,
-    [int]$BootRounds = 3
+    [int]$BootRounds = 3,
+    [int]$BuildJobs = 0
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -341,11 +342,13 @@ function Invoke-Codegen([int]$pass) {
     $resolveJson = Join-Path $Work "resolve-report.json"
     foreach ($old in @($resolveMd, $resolveJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
     Get-ChildItem -Path $Work -Filter "codegen.round*.log" -ErrorAction SilentlyContinue | Remove-Item -Force
+    $codegenWatch = [System.Diagnostics.Stopwatch]::StartNew()
     Run $script:python @("-I", "recomp\tools\resolve_functions.py", "codegen", "--rexglue", $script:Rexglue,
         "--manifest", "recomp\ttt2_manifest.toml", "--image", "recomp\game\default.xex",
         "--out", "recomp\game\ttt2_resolved_functions.toml", "--reference", "recomp\ttt2_functions.ttt2web.toml",
         "--log", $script:codegenLog, "--report", $resolveMd, "--json", $resolveJson, "--ignore-stamp") | Out-Null
     $codegenCode = $script:lastExit
+    Log ("Codegen (all rounds) took {0:N1} minutes" -f $codegenWatch.Elapsed.TotalMinutes)
     if (Test-Path $resolveMd) { Log ""; Get-Content $resolveMd | ForEach-Object { Log $_ } }
     Log ""
     Log "(last lines of $($script:codegenLog))"
@@ -365,8 +368,8 @@ function Invoke-Codegen([int]$pass) {
     $auditMd = Join-Path $Work "switch-audit.md"
     $auditJson = Join-Path $Work "switch-audit.json"
     foreach ($old in @($auditMd, $auditJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
-    Run $script:python @("-I", "recomp\tools\audit_switches.py", "--image", "recomp\game\default.xex",
-        "--generated", "recomp\generated\default", "--finder", $tablesJson, "--md", $auditMd, "--json", $auditJson) | Out-Null
+    $auditOut = Run $script:python @("-I", "recomp\tools\audit_switches.py", "--image", "recomp\game\default.xex",
+        "--generated", "recomp\generated\default", "--finder", $tablesJson, "--md", $auditMd, "--json", $auditJson)
     if ($script:lastExit -eq 1) {
         Log "PROBLEM: the generated code contradicts the finder's switch tables (see $auditMd)"
     } elseif ($script:lastExit -ne 0) {
@@ -380,11 +383,10 @@ function Invoke-Codegen([int]$pass) {
         }
         Log "The dispatches the finder could not read, with their code: $auditMd"
     }
-    if (Test-Path $auditJson) {
-        $audit = Get-Content $auditJson -Raw | ConvertFrom-Json
-        if ($audit.counts.sdk_only_miscompiles -gt 0) {
-            Log "PROBLEM: $($audit.counts.sdk_only_miscompiles) switch(es) from the SDK's own detector are certain miscompiles: the game traps if it reaches one (listed above)"
-        }
+    $miscompiles = 0
+    foreach ($l in $auditOut) { if ($l -match "\((\d+) certain miscompiles\)") { $miscompiles = [int]$Matches[1] } }
+    if ($miscompiles -gt 0) {
+        Log "PROBLEM: $miscompiles switch(es) from the SDK's own detector are certain miscompiles: the game traps if it reaches one (listed above)"
     }
     if ($pass -gt 1) { return }
 
@@ -411,14 +413,32 @@ function Invoke-Codegen([int]$pass) {
 function Invoke-HostBuild([int]$pass) {
     Section ("7. Build the native host (ttt2.exe) against the installed ReXGlue SDK" + $(if ($pass -gt 1) { " (pass $pass)" } else { "" }))
     Log "Image:     $imageLabel, prepared as $plain"
+    # The whole game is about 300 generated files plus their objects, the precompiled header and the
+    # executable with its line tables: a few GB. Say so before a long build rather than after a failed one.
+    $driveRoot = [System.IO.Path]::GetPathRoot((Get-Location).Path)
+    try {
+        $freeGb = [Math]::Round((New-Object System.IO.DriveInfo($driveRoot)).AvailableFreeSpace / 1GB, 1)
+        Log "Free space on ${driveRoot}: $freeGb GB"
+        if ($freeGb -lt 10) { Log "WARNING: less than 10 GB free on $driveRoot; the build of the whole game needs a few GB (free some space if it fails with a write error)" }
+    } catch { Log "(free space on $driveRoot unknown: $($_.Exception.Message))" }
     $hostArgs = @("-Game", $plain)
     if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
     if ($InstallSdk -and $pass -eq 1) { $hostArgs += "-InstallSdk" }
-    Invoke-ChildScript (Join-Path $PSScriptRoot "build-host.ps1") $hostArgs | Out-Null
+    if ($BuildJobs -gt 0) { $hostArgs += @("-Jobs", $BuildJobs); Log "Compiling at most $BuildJobs files at once (-BuildJobs)." }
+    $hostWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $hostOut = Invoke-ChildScript (Join-Path $PSScriptRoot "build-host.ps1") $hostArgs
     $hostCode = $script:lastExit
+    Log ("scripts\build-host.ps1 took {0:N1} minutes (exit code $hostCode)" -f $hostWatch.Elapsed.TotalMinutes)
     $hostExe = "recomp\out\build\win-amd64-release\ttt2.exe"
     $listing = "recomp\out\build\win-amd64-release\host-listing.txt"
     if ($hostCode -ne 0 -or -not (Test-Path $hostExe)) {
+        $hostText = ($hostOut -join "`n")
+        if ($hostText -match "out of memory|bad_alloc|not enough memory|virtual memory exhausted|insufficient memory") {
+            Log "HINT: the compiler ran out of memory: rerun the same command with -BuildJobs 4 (or 2) so fewer files compile at once"
+        }
+        if ($hostText -match "No space left|not enough space|disk is full|There is not enough space") {
+            Log "HINT: the disk is full: free some space on $driveRoot and rerun the same command"
+        }
         Fail-Pipeline "the host build failed (exit $hostCode) or left no $hostExe; see the lines above (scripts\build-host.ps1)"
     }
     if (Test-Path $listing) { Log "Host binaries:"; Get-Content $listing | ForEach-Object { Log "  $_" } }

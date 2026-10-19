@@ -36,6 +36,14 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `13 24 32 44 51 62 71 80 83 92 0`; the audit: 0 mapping problems, 6 certain miscompiles in the SDK-only
   `switch_ttt2` build. Local runs: the smoke test with `--exec` (all checks), 75 Python tests, 24 ctests, hygiene.
 
+* **The first full host build, prepared (follow-up PR).** The real game is about 300 generated files of up to 1 MB;
+  `build-host.ps1 -Jobs <n>` / `owner-pipeline.ps1 -BuildJobs <n>` limit the parallel compiles for a PC whose
+  memory runs short, the report shows the drive's free space before the build and how long codegen and the build
+  took, a failed build's output is scanned for out-of-memory and disk-full messages (a `HINT:` line says what to
+  change), and step 6c reads the audit's miscompile count from its summary line instead of parsing its JSON (Windows
+  PowerShell 5.1's `ConvertFrom-Json` has trouble with very large inputs). The Windows workflow builds with
+  `-Jobs 2` and checks the timing line.
+
 **Not verified yet:** the owner's executable. The rerun will show how many of the 18 the finder now reads, how
 ReXGlue emitted the other `bctr` sites (the audit's verdicts), and then whether codegen completes with the resolver
 (PR #12), the host builds and the first boot.
