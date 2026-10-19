@@ -112,7 +112,14 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing
   handled through SDK mechanisms plus game-specific hooks (as T6 NO does for its 1024x576 targets).
 * Audio: SDK XMA decoder + SDL3 audio driver; a deterministic stepping mode for netplay (D).
-* Input: SDK SDL3 (Xbox + PlayStation controllers, keyboard) and XInput; netplay feeds `XamInputGetState`.
+* Input (`docs/INPUT.md`, ADR 0003) **[planned, Milestone 5]**: the game polls one virtual Xbox 360 pad per player
+  through `XamInputGetState`. Pads come from the SDK's SDL3 (Xbox, DualShock, DualSense) and XInput drivers; the
+  keyboard from the project's `KeyboardPadDriver` (`recomp/src/input/`, plugged into the SDK's `InputSystem` through
+  the host's `input_factory`), with saved TOML profiles in Tekken terms (default: the owner's Tekken 8 layout, WASD +
+  Numpad 4/5/1/2, Numpad 6 and 3 for 1+2 and 3+4, Tag on Numpad 8, B/V for Start/Back), presses latched between
+  polls so simultaneous and sub-frame taps register, opposite directions resolved to neutral by default, macro keys
+  pressing both limb buttons, a layout table mirroring the game's Controller Settings, and an ImGui rebinding
+  dialog. The game's own input buffer, frame delay and settings stay untouched; no Tekken 8 mechanics.
 * Saves/settings: SDK content manager under the user data root; no Program Files writes.
 * TTT2-specific kernel/XAM behaviour fixes live as SDK patches (`third_party/rexglue-patches/`) or overrides in the
   app, documented per fix.
@@ -126,7 +133,9 @@ Design modelled on the Tekken 6 Native Online approach (knowledge only; our impl
   frame, `ggpo_idle`, add local input, synchronize inputs, then run the frame. A rollback restores a snapshot and
   re-runs the per-frame step N times.
 * **Input hook** where both players' input entries are built, before the input manager consumes them. The original
-  2-frame offline input FIFO is neutralised (GGPO's delay replaces it).
+  2-frame offline input FIFO is neutralised (GGPO's delay replaces it). The hook consumes per-frame `PlayerInput`
+  words (16-bit button mask plus 8-way direction), the single point where cleaned local keyboard/pad input, remote
+  input and replayed input enter (`docs/INPUT.md` 4.8).
 * **Seed hooks** on the game's LCG `srand` and the CRT `srand(time)` to use an agreed seed; cosmetic RNG consumers
   isolated.
 * **Snapshots:** XEX data/bss + game heaps for TTT2 (ranges to be measured), with dirty-page maps written by every

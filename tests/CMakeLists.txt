@@ -10,9 +10,12 @@ add_executable(ttt2_tests
     test_xdvdfs.cpp
     test_stfs.cpp
     test_stub_name.cpp
+    test_input_core.cpp
+    "${PROJECT_SOURCE_DIR}/recomp/src/input/input_core.cpp"
 )
 target_link_libraries(ttt2_tests PRIVATE ttt2::core ttt2::xex ttt2::xdvdfs ttt2::stfs doctest::doctest)
-# recomp/src/stub_name.hpp is header-only and SDK-free, so the host's stub-line parser is tested here.
+# recomp/src/stub_name.hpp and recomp/src/input/ are SDK-free, so the host's stub-line parser and its
+# keyboard input core are tested here (the host build compiles the same sources against the SDK).
 target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/recomp/src")
 ttt2_apply_warnings(ttt2_tests)
 

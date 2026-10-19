@@ -21,6 +21,7 @@ the game (disc image + Title Update 3). See [`docs/LEGAL.md`](docs/LEGAL.md).
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Milestone 1 research: reference projects, toolchains, TTT2 facts, risks |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Selected architecture and component design |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Milestones 1-8 with exit criteria and owner checkpoints |
+| [`docs/INPUT.md`](docs/INPUT.md) | Keyboard, controller and profile requirements and the input layer design |
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | Every dependency with version and license |
 | [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | How to build, test and contribute |
 | [`docs/STATUS.md`](docs/STATUS.md) | Session log: completed, verified, blocked |
