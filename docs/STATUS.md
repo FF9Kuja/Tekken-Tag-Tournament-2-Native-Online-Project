@@ -5,6 +5,31 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 ## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
 
 **Completed**
+* **PR #3 merged into `main`** (merge commit `3a90395`, 13 commits) with CI 10/10, the SDK validation run and the
+  Windows run green on its head: on a Windows runner `rexglue.exe` built, the TTT2-shaped assembly programs
+  were assembled with the SDK's Cygwin binutils, **recompiled code executed natively on Windows** for the first
+  time (switch-table program 12 of 12 values with the finder's tables; the kernel-import program reached the host
+  overrides), the SDK was installed as a package and **`ttt2.exe` was built against it**.
+* **First boot of the real host binary** (`ttt2`, the ReXApp with window and runtime, built from the installed
+  SDK), on Linux under Xvfb with the license-free images. Findings, all fixed and now tested:
+  1. An unhandled guest fault never ends the process: the SDK's POSIX signal handler returns when no handler
+     claims a fault, the faulting instruction re-executes, and the switch-table program (recompiled on the
+     SDK's own tables, which are wrong for several shapes) produced 695,000 "Unhandled guest access violation"
+     lines in 15 seconds and rotated the log away. `Ttt2App::OnHostException` now writes the HOST CRASH report
+     and exits with code 3 (`TTT2_CRASH_KEEP_RUNNING=1` for a debugger). Measured: the same program now ends in
+     0.2 s with the report in the log (`scripts/host-boot-test.sh --expect-crash`).
+  2. The SDK's `gpu_plugin` cvar defaults to "" (no GPU emulation, `VdXxx` calls ignored) and the plugin is only
+     loaded from the executable's folder, where nothing staged it: the owner's first boot would have run blind.
+     `recomp/CMakeLists.txt` stages `rexgpu-xenos` next to the host (`GPU_PLUGINS xenos`; the runtime library
+     too on Linux) and `OnPreSetup` selects it unless `--gpu_plugin=<name>` or `--gpu_plugin=none` was given
+     (an empty value cannot be passed: CLI11 takes the next argument as the value).
+  3. After a clean guest exit the process hung in the SDK's teardown: gdb showed `InputSystem::Shutdown` ->
+     `~MnkInputDriver` -> `CallInUIThreadSynchronous` on the UI thread after its loop ended. The host now ends
+     the process from `OnGuestThreadExit` after the stub report, as the SDK's own window-close path does.
+  With those, `scripts/host-boot-test.sh` boots the host on the kernel-import image: image identified, module
+  launched, `XamShowFriendsUI` and `XamUserCreateStatsEnumerator` reached the host overrides, program returned,
+  exit code 0 in 0.3 s. Both workflows now run it (Linux under Xvfb; Windows on the runner's desktop) and upload
+  the boot log. SDL's dummy video driver is not compiled into the SDK's SDL3 ("dummy not available"), so Xvfb it is.
 * **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
   clang and gcc, Windows MSVC and clang-cl, hygiene + Python tools (CI), and the SDK validation workflow on a
   GitHub runner: SDK built with Clang 20, 1458 PPC instruction test cases / 5725 assertions, all codegen smoke

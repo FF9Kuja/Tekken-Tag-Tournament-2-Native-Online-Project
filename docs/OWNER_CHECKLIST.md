@@ -140,14 +140,20 @@ scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\bui
 recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
 ```
 
+The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
+`rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
+only useful for log-gathering; the game cannot draw that way). The host exits by itself when the game's main
+thread ends, and after a crash it writes the report below and exits with code 3 instead of hanging.
+
 Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
 `ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`) and prints it to the console: `ttt2: executable title
-4E4D0859 version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds, a **possible stall**
-dump when nothing changes for 15 seconds (every guest thread with its state), a **kernel stub report** when the
-main thread exits or you close the window (every system call the game reached that the runtime only stubs, with
-counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the guest thread, the most recent stub
-calls). **Send the newest file from that `logs\` folder.** It contains names, addresses and counts only. Also say
-what you saw on screen, if anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
+4E4D0859 version 0.0.3.2 ...`, `ttt2: graphics backend xenos`, an import summary, a guest-thread census every few
+seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
+**kernel stub report** when the main thread exits or you close the window (every system call the game reached
+that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
+guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder.** It contains names,
+addresses and counts only. Also say what you saw on screen, if anything. Never send `work\game`, `recomp\game`,
+`recomp\generated` or `recomp\out`.
 
 ## If something fails
 

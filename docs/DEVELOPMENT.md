@@ -91,6 +91,12 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   ones that run everywhere. A `<source>.imports` file next to the source (`library: slot_symbol, thunk_symbol, ...`)
   adds a real XEX2 import table (`IMPORT_LIBRARIES` header) so the program calls kernel exports like the game does:
   `recomp/tests/ppc/imports_ttt2.s` is the example (slots in `.rodata`, 16-byte thunks at the end of `.text`).
+* `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash]` - boots the real game host on
+  the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as `recomp/game/default.xex`)
+  without GPU emulation (`--gpu_plugin=none`; under `xvfb-run` on a display-less Linux) and checks its log: image
+  identified, module launched, both kernel overrides reached, program returned, host exited with code 0. With
+  `--expect-crash` it expects exit code 3 and a HOST CRASH block instead (the crash path, tested here with the
+  switch-table program recompiled on the SDK's own tables, which traps). Both workflows run the normal form.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

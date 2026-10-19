@@ -78,18 +78,29 @@ jobs:
       - name: Install the SDK as a CMake package (runtime, GPU plugin, SDL3; long)
         if: inputs.build_host
         run: scripts\build-rexglue-windows.ps1 -Install
-      - name: Pack the license-free switch-table program as the host's game image
+      - name: Pack the license-free kernel-import program as the host's game image
         if: inputs.build_host
         shell: bash
-        env:
-          CC: clang
         run: |
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
           mkdir -p recomp/game
-          scripts/make-ppc-test-xex.sh recomp/tests/ppc/switch_ttt2.s recomp/game/default.xex
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/imports_ttt2.s recomp/game/default.xex
       - name: Build ttt2.exe against the installed SDK (codegen runs inside the build)
         if: inputs.build_host
         run: scripts\build-host.ps1
+      - name: Boot ttt2.exe on the license-free image (no GPU plugin) and check its log
+        # The real host on Windows: window, runtime, recompiled code, Ttt2App hooks and the kernel
+        # overrides; the program ends and the host must exit with code 0 (scripts/host-boot-test.sh).
+        if: inputs.build_host
+        shell: bash
+        run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Upload the host boot log
+        if: always() && inputs.build_host
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-win-amd64-boot-log
+          path: recomp/out/build/win-amd64-release/logs/
+          if-no-files-found: ignore
       - name: Upload the host build listing
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4

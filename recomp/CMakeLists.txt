@@ -24,7 +24,18 @@ else()
     add_executable(ttt2 ${TTT2_SOURCES})
 endif()
 
-rexglue_setup_target(ttt2)
+# GPU_PLUGINS xenos: the Xenos GPU emulation plugin is loaded at run time from the executable's
+# folder (the SDK's loader looks nowhere else), so stage it there; Ttt2App::OnPreSetup selects it
+# unless --gpu_plugin says otherwise.
+rexglue_setup_target(ttt2 GPU_PLUGINS xenos)
+
+# The SDK stages its runtime DLL next to the host on Windows and macOS only; do the same on Linux
+# so the $ORIGIN rpath it sets resolves and the build folder runs as is (CI boots it headless).
+if(UNIX AND NOT APPLE)
+    add_custom_command(TARGET ttt2 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rex::runtime> $<TARGET_FILE_DIR:ttt2>
+        VERBATIM)
+endif()
 
 # rex/rex_app.h pulls in the SDK's ImGui-based UI headers; in a source-tree build (REXSDK_DIR) the
 # ImGui target is not propagated to consumers, so link it explicitly for the include directories.
