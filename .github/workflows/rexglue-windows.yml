@@ -130,13 +130,26 @@ jobs:
           name: rexglue-sdk-install-win-amd64
           path: out/rexglue-sdk-install/
           retention-days: 90
-      - name: Pack the license-free kernel-import program as the host's game image
+      - name: Build the first-party tools (ttt2-xexinfo and the retail-form wrapper; VS 2022)
+        if: inputs.build_host
+        run: |
+          cmake --preset windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
+          cmake --build --preset windows-msvc --target ttt2-xexinfo ttt2_make_retail_xex
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+          .\out\build\windows-msvc\bin\Release\ttt2-xexinfo.exe --version
+      - name: Pack the license-free kernel-import program as the host's game image, in the disc's retail form, and prepare it
+        # The owner's path: the executable arrives AES-encrypted and basic-compressed, which neither the finder nor
+        # codegen read; the pipeline's step 5c (ttt2-xexinfo --write-plain) prepares the plain image they do, and
+        # build-host.ps1 below builds from that file.
         if: inputs.build_host
         shell: bash
         run: |
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
-          mkdir -p recomp/game
-          scripts/make-ppc-test-xex.sh recomp/tests/ppc/imports_ttt2.s recomp/game/default.xex
+          mkdir -p recomp/game out/host-retail
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/imports_ttt2.s out/host-retail/plain.xex
+          out/build/windows-msvc/bin/Release/ttt2_make_retail_xex.exe out/host-retail/plain.xex out/host-retail/default.xex
+          out/build/windows-msvc/bin/Release/ttt2-xexinfo.exe out/host-retail/default.xex --write-plain recomp/game/default.xex --no-hash | tail -3
       - name: Build ttt2.exe against the relocated SDK package (codegen runs inside the build)
         if: inputs.build_host
         run: scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
@@ -146,6 +159,12 @@ jobs:
         if: inputs.build_host
         shell: bash
         run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Boot ttt2.exe on the retail-form executable (what the owner's extracted game folder holds)
+        # The runtime must decrypt and decompress the disc's default.xex itself when it loads it; same host,
+        # the retail-form file as the game root's executable.
+        if: inputs.build_host
+        shell: bash
+        run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe out/host-retail 120
       - name: Run the owner's boot step (scripts\run-host.ps1) on the same image
         # The one command of docs\OWNER_CHECKLIST.md step 6: runs the host, waits for its exit, triages the
         # log (recomp\tools\triage_boot_log.py), copies it and writes the run report. The program ends by

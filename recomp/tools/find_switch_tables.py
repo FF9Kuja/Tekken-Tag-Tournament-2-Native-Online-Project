@@ -51,8 +51,10 @@ def parse_xex2(data):
         if key == 0x000003FF:  # FILE_FORMAT_INFO
             encryption, compression = struct.unpack_from(">HH", data, value + 4)
             if encryption != 0 or compression != 0:
-                raise ValueError("the image is encrypted or compressed (encryption %d, compression %d): "
-                                 "run ttt2-xexpatch first, it writes a plain image" % (encryption, compression))
+                raise ValueError("the image is encrypted or compressed (encryption %d, compression %d): prepare the plain "
+                                 "image first with `ttt2-xexinfo <file.xex> --write-plain <plain.xex>` (the owner pipeline "
+                                 "does this in step 5c; ttt2-xexpatch's output is plain already) and pass that file"
+                                 % (encryption, compression))
     image = data[header_size:header_size + image_size]
     if len(image) < image_size:
         raise ValueError("the file is shorter than its declared image size")

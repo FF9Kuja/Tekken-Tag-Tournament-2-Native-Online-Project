@@ -26,10 +26,16 @@ Binaries land in `out/build/<preset>/bin/` (MSVC: `bin/<Config>/`).
 Options: `TTT2_BUILD_TESTS` (ON), `TTT2_BUILD_TOOLS` (ON), `TTT2_WARNINGS_AS_ERRORS` (OFF; CI turns it on for
 the Linux jobs; the Windows jobs will get it once their first run shows a clean log).
 
-`ctest` runs the doctest unit tests, the Python unit tests, the tools' version/rejection smoke tests and four
-end-to-end runs of `ttt2-validate` on synthetic fixtures: `tests/tools/make_validate_fixtures.cpp` writes a disc
-image, two title-update packages and a folder tree into the build directory, `tests/tools/run_expect.cmake` runs
-the tool and checks exit code, printed reasons and the files written to `--work`. All inputs are synthetic.
+`ctest` runs the doctest unit tests, the Python unit tests, the tools' version/rejection smoke tests and the
+end-to-end runs on synthetic fixtures: `tests/tools/make_validate_fixtures.cpp` writes a disc image whose
+`default.xex` is in the retail form (AES-encrypted, basic-compressed, like the owner's), that executable and the
+TU3 delta patch as files, two title-update packages and a folder tree into the build directory;
+`tests/tools/run_expect.cmake` runs a tool and checks exit code, printed reasons, the files written and the files
+that must not exist. Covered: four `ttt2-validate` runs (matching pair, folder search, mismatch, no update), the
+preparation step `ttt2-xexinfo --write-plain` (verified output with the known image SHA-1, plain output re-read
+with the same imports and helpers, same-path refusal, delta-patch refusal), the switch-table finder refusing the
+retail form and accepting the plain output, and `tests/tools/make_retail_xex.cpp` (the wrapper the SDK workflows
+use to put a license-free program into the retail form) round-tripped. All inputs are synthetic.
 
 ## Tools
 
@@ -56,12 +62,24 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   `Default.xexp` targets 0.0.3.2), runs the pre-check, applies the update in memory when the patcher is compiled
   in, and reports hashes, import counts and the save/restore helper addresses of the image the recompiler sees.
   `--no-patch` stops after the pre-check (the end-to-end tests use it).
+* `ttt2-xexinfo <file.xex> --write-plain <out.xex>` writes the plain form of a retail executable: the input the
+  switch-table finder and `rexglue codegen` read (`src/xex/basefile.hpp`: `make_plain_xex`, `verify_plain_xex`).
+  The headers are copied byte for byte except that FILE_FORMAT_INFO says encryption none / compression none, and
+  the decrypted, basic-decompressed PE image follows them (the layout `ttt2-xexpatch` and XenonUtils write). The
+  written file is read back and verified against the input (headers, image, sizes); a file that fails is deleted,
+  the input is never written, and the tool refuses to name the input as output. LZX-compressed images and delta
+  patches are refused with the reason. The owner pipeline runs this as step 5c and stops on failure.
 * `ttt2-xexinfo --imports` names every kernel/XAM import (ordinal, thunk and slot address) from the export
   tables in `src/xex/xbox_exports_table.inc` (regenerate with `scripts/gen_xbox_exports.py` after bumping the
   XenonRecomp pin) and marks what the pinned ReXGlue runtime provides for each one (implemented, stub, missing)
   from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
   SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+  The pipeline stops on a critical failure (`Fail-Pipeline`: a `CRITICAL:` line, the report written, a throw)
+  wherever a later stage would otherwise run on missing files: disc/update not readable or not extractable, the
+  plain image not prepared, the finder, codegen, the host build or the extraction failing. CI exercises the dry
+  runs on the synthetic fixtures under Windows PowerShell 5.1 (TU mode, base mode with step 5c, the finder on
+  both files of the work folder, and a stopped run on an input that is not a disc image).
 * `ttt2-stfs extract-all <package> <dir>` extracts every file of an STFS package with its folders (a title
   update's data files, the host's `update:` root); ctest `stfs_extract_all_synthetic`.
 * `scripts/build-host.ps1 [-Game default_tu3.xex] [-SdkInstall DIR] [-InstallSdk]` builds the native host

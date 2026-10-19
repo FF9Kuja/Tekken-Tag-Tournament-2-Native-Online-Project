@@ -59,6 +59,16 @@ jobs:
           # license-free PowerPC test images pack with the Linux toolchain (Clang + LLD + the packer)
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/smoke.c out/smoke-test.xex && ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo out/smoke-test.xex --no-hash | head -5
           python3 -I recomp/tools/find_switch_tables.py out/smoke-test.xex
+          # The owner pipeline's preparation step (5c) on the retail form of that image: the wrapper puts the test
+          # image into the disc executable's form (AES-encrypted, basic-compressed), which the finder must refuse;
+          # ttt2-xexinfo --write-plain undoes it, and the finder must see in the plain file exactly what it sees in
+          # the original.
+          ./out/build/${{ matrix.preset }}/bin/ttt2_make_retail_xex out/smoke-test.xex out/smoke-retail.xex
+          ! python3 -I recomp/tools/find_switch_tables.py out/smoke-retail.xex
+          ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo out/smoke-retail.xex --write-plain out/smoke-plain.xex --no-hash | tail -2
+          python3 -I recomp/tools/find_switch_tables.py out/smoke-plain.xex --json out/smoke-plain.json
+          python3 -I recomp/tools/find_switch_tables.py out/smoke-test.xex --json out/smoke-test.json
+          python3 -c "import json; a, b = (json.load(open(f)) for f in ('out/smoke-plain.json', 'out/smoke-test.json')); [x.pop(k) for x in (a, b) for k in ('image', 'sha1')]; assert a == b, 'finder results differ between the plain and the original image'; print('finder results identical on the plain and the original image')"
       - name: Hygiene check on the build tree (no game content may appear)
         run: python3 scripts/check_repo_hygiene.py
 
@@ -107,9 +117,10 @@ jobs:
           $fx = "out\build\windows-clang-cl\tests\validate-fixtures"
           scripts\owner-pipeline.ps1 -Iso "$fx\synthetic.iso" -TitleUpdate "$fx\TU_SYNTHETIC" -Work out\pipeline-work -SkipBuild -ExtractGame -Boot
           $report = Get-Content out\pipeline-work\report.txt -Raw
-          foreach ($needle in @('Identified:\s+Tekken Tag Tournament 2 Title Update 3', 'extracted 3 files', 'extracted 1 files', 'ttt2\.exe is missing \(build it with -BuildHost', 'Report written to')) {
+          foreach ($needle in @('Identified:\s+Tekken Tag Tournament 2 Title Update 3', 'PROBLEM: the title update could not be applied', 'skipped: no image to prepare', 'extracted 3 files', 'extracted 1 files', 'ttt2\.exe is missing \(build it with -BuildHost', 'Report written to')) {
             if ($report -notmatch $needle) { throw "report lacks '$needle'" }
           }
+          if ($report -match 'CRITICAL') { throw "the TU-mode dry run stopped on a critical failure: $report" }
           Write-Host "pipeline report OK ($((Get-Content out\pipeline-work\report.txt).Count) lines)"
           # The boot step itself without a host (no SDK here): Windows PowerShell 5.1 must parse it and it
           # must report the missing executable with exit code 2 (its lines are Write-Host output, which only
@@ -120,11 +131,37 @@ jobs:
           $global:LASTEXITCODE = 0
           Write-Host "run-host.ps1 prerequisite check OK"
           # Base-image mode: no -TitleUpdate. Steps 3 and 5 must be skipped, the later steps labelled with the
-          # retail executable, the title-update extraction skipped and the (unbuilt) host step skipped.
+          # retail executable, the title-update extraction skipped and the (unbuilt) host step skipped. The synthetic
+          # disc executable is in the retail form (encrypted, basic-compressed) like the owner's, so step 5c must
+          # prepare and verify its plain form, which is the file the finder accepts (the extracted one it refuses).
           scripts\owner-pipeline.ps1 -Iso "$fx\synthetic.iso" -Work out\pipeline-base -SkipBuild -ExtractGame -Boot
           $base = Get-Content out\pipeline-base\report.txt -Raw
-          foreach ($needle in @('Mode:\s+BASE IMAGE', 'skipped: no -TitleUpdate given', 'skipped: base-image mode', 'extracted 3 files', 'No title update: nothing to extract', 'ttt2\.exe is missing', 'Report written to')) {
+          foreach ($needle in @('Mode:\s+BASE IMAGE', 'skipped: no -TitleUpdate given', 'skipped: base-image mode', 'Encryption:\s+normal', 'Compression:\s+basic', '5c\. Prepare the recompilation image', 'Plain image:\s+verified, written to .*default_base_plain\.xex', 'Prepared:\s+.*default_base_plain\.xex', 'extracted 3 files', 'No title update: nothing to extract', 'ttt2\.exe is missing', 'Report written to')) {
             if ($base -notmatch $needle) { throw "base-mode report lacks '$needle'" }
           }
           if ($base -match 'Default\.xexp') { throw "base-mode report mentions the title update file" }
+          if ($base -match 'CRITICAL') { throw "the base-mode dry run stopped on a critical failure: $base" }
+          if (-not (Test-Path out\pipeline-base\default_base_plain.xex)) { throw "step 5c left no prepared image" }
           Write-Host "base-image pipeline report OK ($((Get-Content out\pipeline-base\report.txt).Count) lines)"
+          # The finder on the two files of the work folder: the prepared one is what steps 6 and 7 hand it (accepted,
+          # tables written), the extracted retail-form one is what the owner's first run handed it (refused, exit 2,
+          # the message naming the preparation step). Native stderr under 5.1 needs "Continue" to be captured.
+          $ErrorActionPreference = "Continue"
+          python -I recomp\tools\find_switch_tables.py out\pipeline-base\default_base_plain.xex --toml out\pipeline-base\tables.toml --json out\pipeline-base\tables.json 2>&1 | ForEach-Object { $_.ToString() }
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path out\pipeline-base\tables.toml)) { throw "the finder did not accept the prepared plain image (exit $LASTEXITCODE)" }
+          $finderOut = (python -I recomp\tools\find_switch_tables.py out\pipeline-base\base.xex 2>&1 | ForEach-Object { $_.ToString() }) -join "`n"
+          if ($LASTEXITCODE -ne 2) { throw "the finder did not refuse the retail-form executable (exit $LASTEXITCODE): $finderOut" }
+          if ($finderOut -notmatch 'ttt2-xexinfo <file\.xex> --write-plain') { throw "the finder's refusal does not name the preparation step: $finderOut" }
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
+          Write-Host "finder: accepts the prepared image, refuses the retail form with the right message"
+          # Stop-on-critical: a disc image that is not one must end the pipeline with a CRITICAL line, a written
+          # report and a non-zero exit, before any later step.
+          $failed = $false
+          try { scripts\owner-pipeline.ps1 -Iso CMakeLists.txt -Work out\pipeline-critical -SkipBuild -ExtractGame } catch { $failed = $true; Write-Host "stopped as expected: $($_.Exception.Message)" }
+          if (-not $failed) { throw "the pipeline did not stop on a disc image that is not one" }
+          $crit = Get-Content out\pipeline-critical\report.txt -Raw
+          if ($crit -notmatch 'CRITICAL: ttt2-iso cannot read') { throw "no CRITICAL line in the stopped pipeline's report: $crit" }
+          if ($crit -match '8\. Extract the disc') { throw "the pipeline went on to extraction after the critical failure" }
+          $global:LASTEXITCODE = 0
+          Write-Host "stop-on-critical OK"

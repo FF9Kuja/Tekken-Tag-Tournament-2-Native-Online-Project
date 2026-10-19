@@ -58,4 +58,31 @@ struct BasefileOptions {
 /// True when the buffer starts with an MZ header whose e_lfanew points at a PE signature.
 [[nodiscard]] bool looks_like_pe_image(std::span<const std::uint8_t> image) noexcept;
 
+/// What verify_plain_xex() confirmed about a plain file.
+struct PlainXexReport {
+  std::uint32_t header_size = 0;  ///< the headers, byte for byte those of the original
+  std::uint32_t image_size = 0;   ///< the PE image that follows them
+  std::array<std::uint8_t, 20> image_sha1{};
+};
+
+/// Produces the "plain" form of a retail executable: the form the switch-table finder and the
+/// recompiler read. The XEX2 headers are copied byte for byte (keys, digests, execution info,
+/// import tables, page descriptors, everything) except that FILE_FORMAT_INFO then says encryption
+/// none / compression none, and the decrypted, decompressed PE image (`image_size` bytes) follows
+/// them where the encrypted basefile was. This is the layout ttt2-xexpatch and XenonUtils write.
+/// A plain input comes out unchanged in content (the function is idempotent). Fails when the
+/// basefile cannot be produced (see load_basefile), when the result is not a PE image (wrong key
+/// or damaged file), or when the self-check (verify_plain_xex) finds a difference.
+[[nodiscard]] Expected<std::vector<std::uint8_t>> make_plain_xex(const Xex2Image& image,
+                                                                 std::span<const std::uint8_t> file,
+                                                                 const BasefileOptions& options = {});
+
+/// Checks that `plain` is the plain form of `original` (parsed from `original_file`): it parses,
+/// its FILE_FORMAT_INFO says none / none, its headers equal the original's except for those two
+/// fields, and the image after them is exactly what load_basefile() produces from the original.
+[[nodiscard]] Expected<PlainXexReport> verify_plain_xex(std::span<const std::uint8_t> plain,
+                                                        const Xex2Image& original,
+                                                        std::span<const std::uint8_t> original_file,
+                                                        const BasefileOptions& options = {});
+
 }  // namespace ttt2::xex

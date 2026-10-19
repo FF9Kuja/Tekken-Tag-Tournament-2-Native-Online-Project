@@ -17,18 +17,28 @@
 #   5. applies the title update with ttt2-xexpatch (Clang builds only) and hashes the result, then lists
 #      the kernel/XAM imports (marking which ones the pinned ReXGlue runtime implements, stubs or lacks)
 #      and the save/restore helper addresses (ttt2-xexinfo --imports --helpers);
-#   6. with -Codegen, copies the image (patched, or the base executable) to recomp\game\default.xex, runs
-#      the switch-table finder on it (recomp\game\ttt2_switch_tables.toml, which the manifests include),
-#      runs `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
+#   5c. PREPARES THE RECOMPILATION IMAGE: the retail executable is AES-encrypted and basic-compressed, which the
+#      switch-table finder and rexglue codegen do not read. `ttt2-xexinfo --write-plain` writes its plain form
+#      (every header kept, FILE_FORMAT_INFO set to encryption none / compression none, the decrypted and
+#      decompressed PE image after the headers) to <work>\default_base_plain.xex (or default_tu3_plain.xex for
+#      the patched image), reads it back and verifies it against the input. The original files are not touched.
+#   6. with -Codegen, copies the prepared image to recomp\game\default.xex, runs the switch-table finder on it
+#      (recomp\game\ttt2_switch_tables.toml, which the manifests include), runs `rexglue codegen` on
+#      recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
 #   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
-#      SDK package (scripts\build-host.ps1): -SdkInstall <dir> names the package (the unzipped
-#      rexglue-sdk-install-win-amd64 artifact of the Windows workflow, whose bin\rexglue.exe is then used
-#      for step 6 unless -Rexglue says otherwise), -InstallSdk builds and installs it first (long); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
-#      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`), and the title update's
-#      files into update\ next to it (the host mounts that as update:);
-#   8. with -Boot, runs the host on that game data through scripts\run-host.ps1: waits for it to end (or
+#      SDK package (scripts\build-host.ps1 -Game <prepared image>): -SdkInstall <dir> names the package (the
+#      unzipped rexglue-sdk-install-win-amd64 artifact of the Windows workflow, whose bin\rexglue.exe is then used
+#      for step 6 unless -Rexglue says otherwise), -InstallSdk builds and installs it first (long);
+#   8. with -ExtractGame, extracts the whole disc into the work folder's game\ directory, the folder ttt2.exe runs
+#      from (`ttt2.exe --game_data_root <work>\game`; the host decrypts the disc's default.xex itself when it
+#      loads it), and the title update's files into update\ next to it (the host mounts that as update:);
+#   9. with -Boot, runs the host on that game data through scripts\run-host.ps1: waits for it to end (or
 #      closes its window after -BootTimeout seconds), triages its log (<work>\boot-triage.md) and copies the
 #      log file to <work>\boot-logs\; the triage goes into the report too.
+# A CRITICAL FAILURE STOPS THE PIPELINE: when a stage the later ones depend on fails (the disc or the title
+# update cannot be read or extracted, the image cannot be prepared, the finder, codegen, the host build or the
+# extraction fails), the report gets a "CRITICAL:" line naming the cause, is written, and the script throws
+# instead of running the later steps on missing files.
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
 # counts and addresses only; game files stay in the work folder and recomp\game (both git-ignored).
 # Send the report file, never the work folder.
@@ -58,6 +68,7 @@ New-Item -ItemType Directory -Force -Path $Work | Out-Null
 $Work = (Resolve-Path $Work).Path
 if ($Report -eq "") { $Report = Join-Path $Work "report.txt" }
 $lines = New-Object System.Collections.Generic.List[string]
+$script:lastExit = 0
 
 function Log([string]$text) {
     Write-Host $text
@@ -69,6 +80,19 @@ function Section([string]$title) {
     Log $title
     Log ("=" * 78)
 }
+function Write-Report {
+    $script:lines | Set-Content -Path $Report -Encoding UTF8
+}
+function Fail-Pipeline([string]$reason) {
+    # A stage the later ones depend on failed: running them on missing or wrong files would only produce a
+    # misleading report. Record the cause, write the report and stop.
+    Log ""
+    Log "CRITICAL: $reason"
+    Log "The pipeline stopped here; the later steps did not run. Fix the cause and rerun the same command."
+    Log "Report written to $Report (send this file, not the work folder)."
+    Write-Report
+    throw "pipeline stopped: $reason (see $Report)"
+}
 function Invoke-Tool([scriptblock]$command) {
     # Native tools write progress and warnings to stderr. Under Windows PowerShell 5.1 with
     # $ErrorActionPreference = "Stop", a 2>&1 redirection turns every such line into a terminating
@@ -78,14 +102,29 @@ function Invoke-Tool([scriptblock]$command) {
     try { & $command } finally { $ErrorActionPreference = $saved }
 }
 function Run([string]$exe, [string[]]$arguments) {
-    # Runs a tool, echoes its output into the report, returns the output lines; never throws on
-    # a non-zero exit code (the report records it).
+    # Runs a tool, echoes its output into the report, returns the output lines and records the exit code in
+    # $script:lastExit; never throws (the caller decides whether a failure is critical).
     Log ("> " + (Split-Path $exe -Leaf) + " " + ($arguments -join " "))
+    if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) {
+        Log "(command not found: $exe)"
+        $script:lastExit = 127
+        return ,@()
+    }
     $output = Invoke-Tool { & $exe @arguments 2>&1 | ForEach-Object { $_.ToString() } }
     $code = $LASTEXITCODE
     foreach ($o in $output) { Log $o }
     if ($code -ne 0) { Log "(exit code $code)" }
+    $script:lastExit = $code
     return ,@($output)
+}
+function Find-Python {
+    foreach ($name in @("python", "python3")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $cmd) { continue }
+        $major = & $cmd.Source -c "import sys; print(sys.version_info[0])" 2>$null
+        if ($major -eq "3") { return $cmd.Source }   # the Store alias prints a message instead
+    }
+    return $null
 }
 
 Section "Tekken Tag Tournament 2 Native Online - owner pipeline report"
@@ -104,13 +143,13 @@ if (-not $SkipBuild) {
         Invoke-Tool { & scripts\fetch-xenonrecomp.ps1 2>&1 | ForEach-Object { Log $_.ToString() } }
     }
     Invoke-Tool { & scripts\build.ps1 -Preset $Preset 2>&1 | Select-Object -Last 15 | ForEach-Object { Log $_.ToString() } }
-    if ($LASTEXITCODE -ne 0) { Log "BUILD FAILED (exit $LASTEXITCODE)"; $lines | Set-Content $Report; throw "build failed; see $Report" }
+    if ($LASTEXITCODE -ne 0) { Fail-Pipeline "BUILD FAILED (exit $LASTEXITCODE): the tools could not be built with preset $Preset" }
 } else {
     Log "skipped (-SkipBuild)"
 }
 $binDirs = @("out\build\$Preset\bin\Release", "out\build\$Preset\bin")
 $bin = $binDirs | Where-Object { Test-Path (Join-Path $_ "ttt2-iso.exe") } | Select-Object -First 1
-if (-not $bin) { throw "built tools not found under out\build\$Preset\bin" }
+if (-not $bin) { Fail-Pipeline "built tools not found under out\build\$Preset\bin (build them first, or drop -SkipBuild)" }
 $bin = (Resolve-Path $bin).Path
 Log "Tools:     $bin"
 $xexinfo = Join-Path $bin "ttt2-xexinfo.exe"
@@ -123,7 +162,9 @@ Run $xexinfo @("--version") | Out-Null
 Section "2. Disc image"
 Log "File:      $Iso ($([math]::Round((Get-Item $Iso).Length / 1GB, 2)) GB)"
 Run $isoTool @("info", $Iso) | Out-Null
+if ($script:lastExit -ne 0) { Fail-Pipeline "ttt2-iso cannot read $Iso as an Xbox 360 disc image (exit $($script:lastExit))" }
 $isoIdentify = Run $isoTool @("identify", $Iso, "--image-hash")
+if ($script:lastExit -ne 0) { Fail-Pipeline "the disc image could not be identified (ttt2-iso identify exit $($script:lastExit)); see the lines above" }
 
 # --- 3. title update --------------------------------------------------------------------------
 Section "3. Title update"
@@ -144,10 +185,11 @@ if ($baseMode) {
                 break
             }
         }
-        if (-not $tuFile) { Log "No package identified as Title Update 3 in $TitleUpdate"; $lines | Set-Content $Report; throw "title update not found; see $Report" }
+        if (-not $tuFile) { Fail-Pipeline "no package identified as Title Update 3 in $TitleUpdate (run without -TitleUpdate for the base-image path)" }
     }
     Log "File:      $tuFile ($([math]::Round((Get-Item $tuFile).Length / 1MB, 2)) MB)"
     $tuIdentify = Run $stfsTool @("identify", $tuFile)
+    if ($script:lastExit -ne 0) { Fail-Pipeline "ttt2-stfs cannot read $tuFile as a title update package (exit $($script:lastExit))" }
 }
 
 # --- 4. extract -------------------------------------------------------------------------------
@@ -155,10 +197,14 @@ Section $(if ($baseMode) { "4. Extract default.xex into $Work" } else { "4. Extr
 $baseXex = Join-Path $Work "base.xex"
 $patchXexp = Join-Path $Work "Default.xexp"
 Run $isoTool @("extract", $Iso, "default.xex", $baseXex) | Out-Null
+if ($script:lastExit -ne 0 -or -not (Test-Path $baseXex)) { Fail-Pipeline "default.xex could not be extracted from the disc image (ttt2-iso extract exit $($script:lastExit))" }
 Run $xexinfo @($baseXex, "--image-hash") | Out-Null
+if ($script:lastExit -ne 0) { Fail-Pipeline "the extracted default.xex does not parse as an XEX2 executable (ttt2-xexinfo exit $($script:lastExit))" }
 if (-not $baseMode) {
     Run $stfsTool @("extract", $tuFile, "Default.xexp", $patchXexp) | Out-Null
+    if ($script:lastExit -ne 0 -or -not (Test-Path $patchXexp)) { Fail-Pipeline "Default.xexp could not be extracted from the title update package (ttt2-stfs extract exit $($script:lastExit))" }
     Run $xexinfo @($patchXexp) | Out-Null
+    if ($script:lastExit -ne 0) { Fail-Pipeline "the extracted Default.xexp does not parse as an XEX2 patch (ttt2-xexinfo exit $($script:lastExit))" }
 }
 
 # --- 5. patch ---------------------------------------------------------------------------------
@@ -169,9 +215,11 @@ if ($baseMode) {
     Log "skipped: base-image mode (no Title Update 3)"
 } elseif (Test-Path $patchTool) {
     $patchOut = Run $patchTool @($baseXex, $patchXexp, $patched)
-    if ($LASTEXITCODE -eq 0 -and (Test-Path $patched)) {
+    if ($script:lastExit -eq 0 -and (Test-Path $patched)) {
         $patchedOk = $true
         Run $xexinfo @($patched, "--image-hash") | Out-Null
+    } else {
+        Log "PROBLEM: the title update could not be applied (ttt2-xexpatch exit $($script:lastExit)); there is no patched image."
     }
 } else {
     Log "ttt2-xexpatch.exe not built (preset $Preset): the patch tool needs the windows-clang-cl preset"
@@ -183,105 +231,141 @@ $image = $null
 $imageLabel = ""
 if ($patchedOk) { $image = $patched; $imageLabel = "Title Update 3 image (0.0.3.2)" }
 elseif ($baseMode) { $image = $baseXex; $imageLabel = "base retail executable 0.0.0.2 (no Title Update 3)" }
+if (-not $image -and ($Codegen -or $BuildHost)) {
+    Fail-Pipeline "the title update could not be applied, so there is no executable for -Codegen / -BuildHost; fix step 5 or run without -TitleUpdate (base-image mode)"
+}
 
 # --- 5b. imports and helpers -------------------------------------------------------------------
 Section "5b. Imports (with the ReXGlue runtime's support for each) and save/restore helpers"
 $scanned = $(if ($patchedOk) { $patched } else { $baseXex })
 Log "Image:     $scanned"
 Run $xexinfo @($scanned, "--imports", "--helpers", "--no-hash") | Out-Null
+if ($script:lastExit -ne 0) { Log "PROBLEM: the import/helper scan failed (exit $($script:lastExit)); the report lacks it" }
+
+# --- 5c. the recompilation image -----------------------------------------------------------------
+# The finder and rexglue codegen read an unencrypted, uncompressed XEX; the disc's executable is neither
+# (encryption normal, compression basic). The plain form keeps every header and carries the decrypted,
+# decompressed image; it is verified after writing. The owner's first real run failed here (encrypted image
+# handed to the finder, no switch tables, no codegen), hence a step of its own that stops on failure.
+Section "5c. Prepare the recompilation image (plain XEX: headers kept, image decrypted and decompressed)"
+$plain = $null
+if (-not $image) {
+    Log "skipped: no image to prepare (the title update was given but could not be applied)"
+} else {
+    $plain = Join-Path $Work $(if ($patchedOk) { "default_tu3_plain.xex" } else { "default_base_plain.xex" })
+    Log "Image:     $imageLabel ($image)"
+    if (Test-Path $plain) { Remove-Item $plain -Force }
+    $prep = Run $xexinfo @($image, "--write-plain", $plain)
+    if ($script:lastExit -ne 0 -or -not (Test-Path $plain) -or -not ($prep -match "Plain image:\s+verified")) {
+        Fail-Pipeline "the plain image could not be prepared from $image (ttt2-xexinfo --write-plain exit $($script:lastExit)); the switch-table finder and rexglue codegen need an unencrypted, uncompressed executable"
+    }
+    Log "Prepared:  $plain ($([math]::Round((Get-Item $plain).Length / 1MB, 2)) MB). Steps 6 and 7 read this file; $image is unchanged."
+}
 
 # --- 6. codegen -------------------------------------------------------------------------------
 if ($Codegen) {
     Section "6. Recompile with rexglue codegen"
-    if (-not $image) {
-        Log "skipped: no image to recompile (the title update was given but could not be applied)"
+    Log "Image:     $imageLabel, prepared as $plain"
+    if ($Rexglue -eq "" -and $SdkInstall -ne "" -and (Test-Path (Join-Path $SdkInstall "bin\rexglue.exe"))) {
+        $Rexglue = (Resolve-Path (Join-Path $SdkInstall "bin\rexglue.exe")).Path
+    }
+    if ($Rexglue -eq "") {
+        $found = Get-ChildItem -Path "third_party\rexglue-sdk\src\out" -Recurse -Filter rexglue.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch "CMakeFiles" } | Select-Object -First 1
+        if ($found) { $Rexglue = $found.FullName }
+    }
+    if ($Rexglue -eq "" -or -not (Test-Path $Rexglue)) {
+        Fail-Pipeline "rexglue.exe not found: pass -SdkInstall <unzipped rexglue-sdk-install-win-amd64> or -Rexglue <path>, build it with scripts\build-rexglue-windows.ps1, or download the artifact of the 'ReXGlue codegen tool (Windows)' workflow"
+    }
+    $python = Find-Python
+    if (-not $python) { Fail-Pipeline "Python 3 not found on PATH (winget install Python.Python.3.12): the switch-table finder needs it" }
+    New-Item -ItemType Directory -Force -Path "recomp\game" | Out-Null
+    Copy-Item $plain "recomp\game\default.xex" -Force
+    Log "Copied the prepared image to recomp\game\default.xex (git-ignored)."
+    # Jump tables: the SDK's own detector misses or miscompiles several of the shapes TTT2's compiler
+    # emits (measured), so the symbolic finder runs first and the manifests include its output.
+    Section "6a. Switch jump tables (recomp\tools\find_switch_tables.py; the manifests include the result)"
+    $tables = "recomp\game\ttt2_switch_tables.toml"
+    if (Test-Path $tables) { Remove-Item $tables -Force }
+    $tablesJson = Join-Path $Work "switch_tables.json"
+    Run $python @("-I", "recomp\tools\find_switch_tables.py", "recomp\game\default.xex", "--toml", $tables, "--json", $tablesJson) | Out-Null
+    if ($script:lastExit -ne 0 -or -not (Test-Path $tables)) {
+        Fail-Pipeline "the switch-table finder failed (exit $($script:lastExit)) or wrote no $tables; rexglue codegen cannot run without it"
+    }
+    Section "6b. Recompile"
+    $codegenLog = Join-Path $Work "codegen.log"
+    Push-Location recomp
+    try {
+        Log "> rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml  (log: $codegenLog)"
+        Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog }
+        $codegenCode = $LASTEXITCODE
+    } finally { Pop-Location }
+    Log "(rexglue exit code $codegenCode; last lines:)"
+    if (Test-Path $codegenLog) { Get-Content $codegenLog | Select-Object -Last 25 | ForEach-Object { Log $_ } }
+    if ($codegenCode -ne 0 -or -not (Test-Path "recomp\generated\default\sources.cmake")) {
+        Fail-Pipeline "rexglue codegen failed (exit $codegenCode) or produced no recomp\generated\default\sources.cmake; the full log is $codegenLog"
+    }
+    $reportMd = Join-Path $Work "codegen-REPORT.md"
+    $reportJson = Join-Path $Work "codegen-report.json"
+    Run $python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet") | Out-Null
+    if (Test-Path $reportMd) { Get-Content $reportMd | ForEach-Object { Log $_ } } else { Log "PROBLEM: no codegen report was written (codegen_report.py exit $($script:lastExit))" }
+
+    # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
+    # same layout as TTT2 Web's (all eight save/restore helper addresses match); compare the reports.
+    $helperScan = Invoke-Tool { & $xexinfo $plain --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() } }
+    if ($helperScan -match "Layout vs TTT2 Web: 8 of 8") {
+        Log "Layout matches TTT2 Web: recompiling again with its 18k function boundaries (ttt2_manifest.ttt2web.toml)"
+        $codegenLog2 = Join-Path $Work "codegen-ttt2web.log"
+        Push-Location recomp
+        try {
+            Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.ttt2web.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog2 }
+            Log "(rexglue exit code $LASTEXITCODE for the TTT2 Web variant; informative, the host builds from the default variant)"
+        } finally { Pop-Location }
+        $reportMd2 = Join-Path $Work "codegen-ttt2web-REPORT.md"
+        Run $python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\ttt2web", "--log", $codegenLog2, "--project", "ttt2", "--md", $reportMd2, "--json", (Join-Path $Work "codegen-ttt2web-report.json"), "--quiet") | Out-Null
+        if (Test-Path $reportMd2) { Get-Content $reportMd2 | ForEach-Object { Log $_ } }
     } else {
-        Log "Image:     $imageLabel"
-
-        if ($Rexglue -eq "" -and $SdkInstall -ne "" -and (Test-Path (Join-Path $SdkInstall "bin\rexglue.exe"))) {
-            $Rexglue = (Resolve-Path (Join-Path $SdkInstall "bin\rexglue.exe")).Path
-        }
-        if ($Rexglue -eq "") {
-            $found = Get-ChildItem -Path "third_party\rexglue-sdk\src\out" -Recurse -Filter rexglue.exe -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -notmatch "CMakeFiles" } | Select-Object -First 1
-            if ($found) { $Rexglue = $found.FullName }
-        }
-        if ($Rexglue -eq "" -or -not (Test-Path $Rexglue)) {
-            Log "rexglue.exe not found: build it with scripts\build-rexglue-windows.ps1 or pass -Rexglue, or download"
-            Log "the artifact of the 'ReXGlue codegen tool (Windows)' workflow."
-        } else {
-            New-Item -ItemType Directory -Force -Path "recomp\game" | Out-Null
-            Copy-Item $image "recomp\game\default.xex" -Force
-            Log "Copied the $imageLabel to recomp\game\default.xex (git-ignored)."
-            # Jump tables: the SDK's own detector misses or miscompiles several of the shapes TTT2's compiler
-            # emits (measured), so the symbolic finder runs first and the manifests include its output.
-            Section "6a. Switch jump tables (recomp\tools\find_switch_tables.py; the manifests include the result)"
-            $tablesJson = Join-Path $Work "switch_tables.json"
-            Run python @("-I", "recomp\tools\find_switch_tables.py", "recomp\game\default.xex", "--toml", "recomp\game\ttt2_switch_tables.toml", "--json", $tablesJson) | Out-Null
-            if (-not (Test-Path "recomp\game\ttt2_switch_tables.toml")) { Log "PROBLEM: the finder wrote no recomp\game\ttt2_switch_tables.toml; codegen will fail (is Python 3 on PATH as 'python'?)" }
-            Section "6b. Recompile"
-            Push-Location recomp
-            try {
-                $codegenLog = Join-Path $Work "codegen.log"
-                Log "> rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml  (log: $codegenLog)"
-                Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog }
-                Log "(rexglue exit code $LASTEXITCODE; last lines:)"
-                Get-Content $codegenLog | Select-Object -Last 25 | ForEach-Object { Log $_ }
-            } finally { Pop-Location }
-            $reportMd = Join-Path $Work "codegen-REPORT.md"
-            $reportJson = Join-Path $Work "codegen-report.json"
-            Run python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet") | Out-Null
-            if (Test-Path $reportMd) { Get-Content $reportMd | ForEach-Object { Log $_ } }
-
-            # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
-            # same layout as TTT2 Web's (all eight save/restore helper addresses match); compare the reports.
-            $helperScan = Invoke-Tool { & $xexinfo $image --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() } }
-            if ($helperScan -match "Layout vs TTT2 Web: 8 of 8") {
-                Log "Layout matches TTT2 Web: recompiling again with its 18k function boundaries (ttt2_manifest.ttt2web.toml)"
-                Push-Location recomp
-                try {
-                    $codegenLog2 = Join-Path $Work "codegen-ttt2web.log"
-                    Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.ttt2web.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog2 }
-                    Log "(rexglue exit code $LASTEXITCODE for the TTT2 Web variant)"
-                } finally { Pop-Location }
-                $reportMd2 = Join-Path $Work "codegen-ttt2web-REPORT.md"
-                Run python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\ttt2web", "--log", $codegenLog2, "--project", "ttt2", "--md", $reportMd2, "--json", (Join-Path $Work "codegen-ttt2web-report.json"), "--quiet") | Out-Null
-                if (Test-Path $reportMd2) { Get-Content $reportMd2 | ForEach-Object { Log $_ } }
-            } else {
-                Log "Layout does not match TTT2 Web's published helper addresses: its function boundaries are not used."
-            }
-        }
+        Log "Layout does not match TTT2 Web's published helper addresses: its function boundaries are not used."
     }
 }
 
 # --- 7. host build and game data ----------------------------------------------------------------
 if ($BuildHost) {
     Section "7. Build the native host (ttt2.exe) against the installed ReXGlue SDK"
-    if (-not $image) {
-        Log "skipped: no image to build from (the title update was given but could not be applied)"
-    } else {
-        Log "Image:     $imageLabel"
-        $hostArgs = @("-Game", $image)
-        if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
-        if ($InstallSdk) { $hostArgs += "-InstallSdk" }
+    Log "Image:     $imageLabel, prepared as $plain"
+    $hostArgs = @("-Game", $plain)
+    if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
+    if ($InstallSdk) { $hostArgs += "-InstallSdk" }
+    $hostCode = 1
+    try {
         $hostOut = Invoke-Tool { & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() } }
         $hostCode = $LASTEXITCODE
         foreach ($o in $hostOut) { Log $o }
-        if ($hostCode -ne 0) { Log "(host build exit code $hostCode)" }
-        $listing = "recomp\out\build\win-amd64-release\host-listing.txt"
-        if (Test-Path $listing) { Log "Host binaries:"; Get-Content $listing | ForEach-Object { Log "  $_" } }
+    } catch {
+        Log "build-host.ps1 stopped: $($_.Exception.Message)"
     }
+    $hostExe = "recomp\out\build\win-amd64-release\ttt2.exe"
+    $listing = "recomp\out\build\win-amd64-release\host-listing.txt"
+    if ($hostCode -ne 0 -or -not (Test-Path $hostExe)) {
+        Fail-Pipeline "the host build failed (exit $hostCode) or left no $hostExe; see the lines above (scripts\build-host.ps1)"
+    }
+    if (Test-Path $listing) { Log "Host binaries:"; Get-Content $listing | ForEach-Object { Log "  $_" } }
 }
 if ($ExtractGame) {
     Section "8. Extract the disc into $Work\game (the host's game data root)"
     $gameRoot = Join-Path $Work "game"
     Run $isoTool @("extract-all", $Iso, $gameRoot) | Out-Null
+    if ($script:lastExit -ne 0 -or -not (Test-Path (Join-Path $gameRoot "default.xex"))) {
+        Fail-Pipeline "the disc could not be extracted into $gameRoot (ttt2-iso extract-all exit $($script:lastExit))"
+    }
+    Log "The disc's default.xex is extracted as it is (retail form); the host decrypts and decompresses it itself when it loads it."
     # The title update's own files (next to game\, where the host mounts them as update:).
     if ($baseMode) {
         Log "No title update: nothing to extract into $Work\update (the host runs the base game without update: data)."
     } else {
         $updateRoot = Join-Path $Work "update"
         Run $stfsTool @("extract-all", $tuFile, $updateRoot) | Out-Null
+        if ($script:lastExit -ne 0) { Fail-Pipeline "the title update's files could not be extracted into $updateRoot (ttt2-stfs extract-all exit $($script:lastExit))" }
         Log "Title update files extracted to $updateRoot; the host picks that folder up as update: when it sits next to game\."
     }
     Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
@@ -300,10 +384,15 @@ if ($Boot) {
     } else {
         if (Test-Path $triageMd) { Remove-Item $triageMd -Force }
         $bootArgs = @("-GameRoot", $bootRoot, "-Work", $Work, "-TimeoutSeconds", $BootTimeout)
-        $bootOut = Invoke-Tool { & (Join-Path $PSScriptRoot "run-host.ps1") @bootArgs 2>&1 | ForEach-Object { $_.ToString() } }
-        $bootCode = $LASTEXITCODE
-        foreach ($o in $bootOut) { Log $o }
-        Log "(run-host exit code $bootCode)"
+        $bootCode = 1
+        try {
+            $bootOut = Invoke-Tool { & (Join-Path $PSScriptRoot "run-host.ps1") @bootArgs 2>&1 | ForEach-Object { $_.ToString() } }
+            $bootCode = $LASTEXITCODE
+            foreach ($o in $bootOut) { Log $o }
+        } catch {
+            Log "run-host.ps1 stopped: $($_.Exception.Message)"
+        }
+        Log "(run-host exit code ${bootCode}: the host's own exit code, 1 = closed by the timeout, 2 = prerequisites missing)"
         if (Test-Path $triageMd) {
             Log ""
             Log "--- $triageMd ---"
@@ -314,6 +403,7 @@ if ($Boot) {
 
 Section "Done"
 Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work, recomp\game or recomp\out."
+if ($plain) { Log "The prepared image $plain is the game executable in decrypted form: keep it private like the disc image." }
 if ($Boot -and (Test-Path $triageMd)) { Log "Also send $triageMd and the log copy in $(Join-Path $Work 'boot-logs') (names, addresses and counts only)." }
-$lines | Set-Content -Path $Report -Encoding UTF8
+Write-Report
 Write-Host "`nReport: $Report"

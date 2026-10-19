@@ -3,10 +3,12 @@
 # PASS_REGULAR_EXPRESSION cannot be combined that way).
 #
 #   cmake -DCMD=<program|arg|arg...> [-DEXPECT_RC=<n>] [-DEXPECT_RE=<regex@@regex...>]
-#         [-DEXPECT_FILES=<path|path...>] -P run_expect.cmake
+#         [-DEXPECT_FILES=<path|path...>] [-DEXPECT_MISSING=<path|path...>] -P run_expect.cmake
 #
-# CMD and EXPECT_FILES are '|'-separated lists, EXPECT_RE is a '@@'-separated list of CMake
-# regular expressions that must all match stdout+stderr. The combined output is printed on failure.
+# CMD, EXPECT_FILES and EXPECT_MISSING are '|'-separated lists, EXPECT_RE is a '@@'-separated list of
+# CMake regular expressions that must all match stdout+stderr. EXPECT_FILES must exist afterwards,
+# EXPECT_MISSING must not (a tool that refuses must leave nothing behind). The combined output is
+# printed on failure.
 if(NOT DEFINED CMD)
     message(FATAL_ERROR "run_expect: CMD is required")
 endif()
@@ -37,6 +39,15 @@ if(DEFINED EXPECT_FILES)
     foreach(file IN LISTS files)
         if(NOT EXISTS "${file}")
             message(STATUS "run_expect: expected file is missing: ${file}")
+            set(failed TRUE)
+        endif()
+    endforeach()
+endif()
+if(DEFINED EXPECT_MISSING)
+    string(REPLACE "|" ";" files "${EXPECT_MISSING}")
+    foreach(file IN LISTS files)
+        if(EXISTS "${file}")
+            message(STATUS "run_expect: file should not exist: ${file}")
             set(failed TRUE)
         endif()
     endforeach()

@@ -2,8 +2,10 @@
 // involved: every byte is produced here.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -101,6 +103,38 @@ class XexBuilder {
       b.insert(b.end(), e, e + 8);
     }
     return b;
+  }
+
+  /// Basic compression of a PE image, the way retail executables store it: `granule`-sized runs of
+  /// zero bytes are left out and recorded as zero_size of the preceding data block. The stream is
+  /// padded with zeros to a 16-byte boundary so it can be AES-CBC encrypted as a whole.
+  struct BasicCompressed {
+    std::vector<std::uint8_t> data;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> blocks;  ///< (data_size, zero_size) for file_format_basic()
+  };
+  static BasicCompressed basic_compress(std::span<const std::uint8_t> image, std::size_t granule = 0x1000) {
+    BasicCompressed out;
+    std::uint32_t data_size = 0;
+    std::uint32_t zero_size = 0;
+    for (std::size_t pos = 0; pos < image.size(); pos += granule) {
+      const std::size_t n = std::min(granule, image.size() - pos);
+      const auto begin = image.begin() + static_cast<std::ptrdiff_t>(pos);
+      const auto end = begin + static_cast<std::ptrdiff_t>(n);
+      if (std::all_of(begin, end, [](std::uint8_t b) { return b == 0; })) {
+        zero_size += static_cast<std::uint32_t>(n);
+        continue;
+      }
+      if (zero_size > 0) {  // data after a zero run: the previous block is complete
+        out.blocks.emplace_back(data_size, zero_size);
+        data_size = 0;
+        zero_size = 0;
+      }
+      out.data.insert(out.data.end(), begin, end);
+      data_size += static_cast<std::uint32_t>(n);
+    }
+    out.blocks.emplace_back(data_size, zero_size);
+    while (out.data.size() % 16) out.data.push_back(0);
+    return out;
   }
 
   /// Body of a FILE_FORMAT_INFO header for normal (LZX) or delta compression: window size and
