@@ -80,6 +80,13 @@ TEST_CASE("import records are parsed from the table and resolved against the ima
   CHECK(im.functions == 2);
   CHECK(im.variables == 2);
   CHECK(im.unnamed == 1);
+  CHECK(im.entries[0].runtime == RuntimeSupport::kImplemented);  // NtClose is hooked
+  CHECK(im.entries[1].runtime == RuntimeSupport::kImplemented);  // KeTimeStampBundle is a mapped variable
+  CHECK(im.entries[2].runtime == RuntimeSupport::kImplemented);  // XamShowSigninUI is hooked
+  CHECK(im.entries[3].runtime == RuntimeSupport::kUnknown);      // unknown ordinal
+  CHECK(im.runtime_implemented == 3);
+  CHECK(im.runtime_stubbed == 0);
+  CHECK(im.runtime_missing == 0);
   CHECK(im.entries[0].name == "NtClose");
   CHECK(im.entries[0].is_function);
   CHECK(im.entries[0].slot_address == kBase + 0x1800);
@@ -127,4 +134,23 @@ TEST_CASE("PE sections are read and the helper scan covers only executable ones"
   auto truncated = image;
   truncated.resize(0x90);
   CHECK_FALSE(pe_sections(truncated).has_value());
+}
+
+TEST_CASE("the runtime support tables classify exports as implemented, stub or missing") {
+  CHECK(runtime_function_support("NtClose") == RuntimeSupport::kImplemented);
+  CHECK(runtime_function_support("XamShowSigninUI") == RuntimeSupport::kImplemented);
+  CHECK(runtime_function_support("AniStartBootAnimation") == RuntimeSupport::kStub);
+  // Both hooked and stubbed in the SDK sources: the hook is what links, so it counts as implemented.
+  CHECK(runtime_function_support("KeInitializeTimerEx") == RuntimeSupport::kImplemented);
+  CHECK(runtime_function_support("NoSuchExport") == RuntimeSupport::kMissing);
+  CHECK(runtime_function_support("") == RuntimeSupport::kUnknown);
+  CHECK(runtime_variable_support("xboxkrnl.exe", 0x00AD) ==
+        RuntimeSupport::kImplemented);  // KeTimeStampBundle
+  CHECK(runtime_variable_support("XBOXKRNL.EXE", 173) == RuntimeSupport::kImplemented);
+  CHECK(runtime_variable_support("xboxkrnl", 0x0156) == RuntimeSupport::kImplemented);  // XboxHardwareInfo
+  CHECK(runtime_variable_support("xboxkrnl.exe", 0x0001) == RuntimeSupport::kMissing);
+  CHECK(runtime_variable_support("xam.xex", 0x00AD) == RuntimeSupport::kMissing);
+  CHECK_FALSE(runtime_exports_sdk_commit().empty());
+  CHECK(std::string(runtime_support_name(RuntimeSupport::kStub)) == "stub");
+  CHECK(std::string(runtime_support_name(RuntimeSupport::kUnknown)) == "unknown");
 }

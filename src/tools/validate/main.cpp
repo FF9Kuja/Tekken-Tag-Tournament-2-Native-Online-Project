@@ -157,6 +157,19 @@ void describe_image(Report& rep, const std::string& prefix, const ttt2::xex::Xex
     rep.add(prefix + " imports", std::to_string(summary->functions) + " functions, " +
                                      std::to_string(summary->variables) + " variables, " +
                                      std::to_string(summary->unnamed) + " unnamed ordinals");
+    rep.add(prefix + " runtime support",
+            "ReXGlue SDK " + std::string(ttt2::xex::runtime_exports_sdk_commit()).substr(0, 12) + ": " +
+                std::to_string(summary->runtime_implemented) + " implemented, " +
+                std::to_string(summary->runtime_stubbed) + " stubs, " +
+                std::to_string(summary->runtime_missing) + " missing");
+    std::string stubs;
+    std::string missing;
+    for (const auto& e : summary->entries) {
+      if (e.runtime == ttt2::xex::RuntimeSupport::kStub) stubs += (stubs.empty() ? "" : ", ") + e.name;
+      if (e.runtime == ttt2::xex::RuntimeSupport::kMissing) missing += (missing.empty() ? "" : ", ") + e.name;
+    }
+    if (!stubs.empty()) rep.add(prefix + " runtime stubs", stubs);
+    if (!missing.empty()) rep.add(prefix + " runtime missing", missing);
     for (const auto& w : summary->warnings) rep.add(prefix + " import warning", w);
   } else {
     rep.add(prefix + " imports", "not resolved: " + summary.error().message);

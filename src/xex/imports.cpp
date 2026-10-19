@@ -15,6 +15,13 @@ namespace ttt2::xex {
 
 namespace {
 
+struct RuntimeVariableExport {
+  const char* library;
+  std::uint16_t ordinal;
+};
+
+#include "../rexglue_runtime_exports.inc"
+
 char lower_ascii(char c) noexcept {
   return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
 }
@@ -28,6 +35,24 @@ bool library_is(std::string_view library, std::string_view stem) noexcept {
     if (lower_ascii(library[i]) != stem[i]) return false;
   }
   return true;
+}
+
+/// The part of a library name before its extension, compared case-insensitively.
+bool same_library(std::string_view a, std::string_view b) noexcept {
+  const std::string_view stem_a = a.substr(0, a.find('.'));
+  const std::string_view stem_b = b.substr(0, b.find('.'));
+  if (stem_a.size() != stem_b.size()) return false;
+  for (std::size_t i = 0; i < stem_a.size(); ++i) {
+    if (lower_ascii(stem_a[i]) != lower_ascii(stem_b[i])) return false;
+  }
+  return true;
+}
+
+bool name_in(std::span<const char* const> table, std::string_view name) noexcept {
+  const auto it =
+      std::lower_bound(table.begin(), table.end(), name,
+                       [](const char* entry, std::string_view n) { return std::string_view(entry) < n; });
+  return it != table.end() && std::string_view(*it) == name;
 }
 
 std::optional<XboxExport> lookup(std::span<const XboxExport> table, std::uint16_t ordinal) noexcept {
@@ -67,6 +92,38 @@ std::optional<XboxExport> find_export(std::string_view library, std::uint16_t or
   if (library_is(library, "xboxkrnl")) return lookup(kXboxkrnlExports, ordinal);
   if (library_is(library, "xam")) return lookup(kXamExports, ordinal);
   return std::nullopt;
+}
+
+const char* runtime_support_name(RuntimeSupport s) noexcept {
+  switch (s) {
+    case RuntimeSupport::kImplemented:
+      return "implemented";
+    case RuntimeSupport::kStub:
+      return "stub";
+    case RuntimeSupport::kMissing:
+      return "missing";
+    case RuntimeSupport::kUnknown:
+      break;
+  }
+  return "unknown";
+}
+
+RuntimeSupport runtime_function_support(std::string_view name) noexcept {
+  if (name.empty()) return RuntimeSupport::kUnknown;
+  if (name_in(kRuntimeImplementedExports, name)) return RuntimeSupport::kImplemented;
+  if (name_in(kRuntimeStubExports, name)) return RuntimeSupport::kStub;
+  return RuntimeSupport::kMissing;
+}
+
+RuntimeSupport runtime_variable_support(std::string_view library, std::uint16_t ordinal) noexcept {
+  for (const auto& v : kRuntimeVariableExports) {
+    if (v.ordinal == ordinal && same_library(v.library, library)) return RuntimeSupport::kImplemented;
+  }
+  return RuntimeSupport::kMissing;
+}
+
+std::string_view runtime_exports_sdk_commit() noexcept {
+  return kRuntimeExportsSdkCommit;
 }
 
 Expected<std::vector<PeSection>> pe_sections(std::span<const std::uint8_t> image) {
@@ -144,7 +201,25 @@ Expected<ImportSummary> resolve_imports(const Xex2Image& xex, std::span<const st
       } else {
         ++out.variables;
       }
-      if (e.name.empty()) ++out.unnamed;
+      if (e.name.empty()) {
+        ++out.unnamed;
+      } else {
+        e.runtime = (e.known_variable || !e.is_function) ? runtime_variable_support(lib.name, ordinal)
+                                                         : runtime_function_support(e.name);
+        switch (e.runtime) {
+          case RuntimeSupport::kImplemented:
+            ++out.runtime_implemented;
+            break;
+          case RuntimeSupport::kStub:
+            ++out.runtime_stubbed;
+            break;
+          case RuntimeSupport::kMissing:
+            ++out.runtime_missing;
+            break;
+          case RuntimeSupport::kUnknown:
+            break;
+        }
+      }
       out.entries.push_back(std::move(e));
     }
   }

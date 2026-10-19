@@ -61,7 +61,7 @@ if(TARGET ttt2-validate)
     add_test(NAME validate_synthetic_pair COMMAND "${CMAKE_COMMAND}"
         "-DCMD=${_validate}|${_fx}/synthetic.iso|${_fx}/TU_SYNTHETIC|--no-patch|--json|--work|${_fx}/work"
         -DEXPECT_RC=0
-        "-DEXPECT_RE=\"ok\": true@@Pre-check\": \"passed\"@@SHA-1 of the base's headers@@Patch versions\": \"0\\.0\\.0\\.2 -> 0\\.0\\.3\\.2\"@@Base image\": \"PE image, 8192 bytes\"@@Base imports\": \"2 functions, 2 variables, 1 unnamed ordinals\"@@Base __restvmx_64\": \"0x82001300\"@@Base __savegprlr_14\": \"0x82001200 0x82001400 \\(ambiguous\\)\"@@Patch\": \"not applied \\(--no-patch\\)\""
+        "-DEXPECT_RE=\"ok\": true@@Pre-check\": \"passed\"@@SHA-1 of the base's headers@@Patch versions\": \"0\\.0\\.0\\.2 -> 0\\.0\\.3\\.2\"@@Base image\": \"PE image, 8192 bytes\"@@Base imports\": \"2 functions, 2 variables, 1 unnamed ordinals\"@@Base runtime support\": \"ReXGlue SDK [0-9a-f]+: 3 implemented, 0 stubs, 0 missing\"@@Base __restvmx_64\": \"0x82001300\"@@Base __savegprlr_14\": \"0x82001200 0x82001400 \\(ambiguous\\)\"@@Patch\": \"not applied \\(--no-patch\\)\""
         "-DEXPECT_FILES=${_fx}/work/base.xex|${_fx}/work/Default.xexp"
         -P "${_run_expect}")
     add_test(NAME validate_synthetic_folder COMMAND "${CMAKE_COMMAND}"

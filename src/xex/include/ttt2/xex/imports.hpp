@@ -36,6 +36,27 @@ struct XboxExport {
 /// the extension) and ordinal.
 [[nodiscard]] std::optional<XboxExport> find_export(std::string_view library, std::uint16_t ordinal) noexcept;
 
+/// What the pinned ReXGlue SDK runtime provides for an import (`src/xex/rexglue_runtime_exports.inc`,
+/// generated from the SDK sources by `scripts/gen_runtime_exports.py`). Generated code calls kernel
+/// functions directly by name, so a function the runtime neither implements nor stubs does not even
+/// link; a stub logs "<name> STUB" and returns; a variable the runtime does not map reads a marker.
+enum class RuntimeSupport {
+  kUnknown,      ///< the ordinal is not in the export tables, nothing can be said
+  kImplemented,  ///< a real implementation, or a variable mapped into guest memory
+  kStub,         ///< a logging stub (REX_EXPORT_STUB / REX_EXPORT_STUB_RETURN)
+  kMissing,      ///< nothing at all in the runtime
+};
+
+/// "unknown", "implemented", "stub" or "missing".
+[[nodiscard]] const char* runtime_support_name(RuntimeSupport s) noexcept;
+/// Support for a function export, by name.
+[[nodiscard]] RuntimeSupport runtime_function_support(std::string_view name) noexcept;
+/// Support for a variable export of `library` ("xboxkrnl.exe", case-insensitive) and ordinal.
+[[nodiscard]] RuntimeSupport runtime_variable_support(std::string_view library,
+                                                      std::uint16_t ordinal) noexcept;
+/// The SDK commit the runtime tables were generated from.
+[[nodiscard]] std::string_view runtime_exports_sdk_commit() noexcept;
+
 struct ImportEntry {
   std::string library;
   std::uint16_t ordinal = 0;
@@ -44,13 +65,17 @@ struct ImportEntry {
   std::uint32_t thunk_address = 0;  ///< type-1 record: the 16-byte call thunk (0 for variables)
   std::string name;                 ///< export name, empty if the ordinal is unknown
   bool known_variable = false;      ///< the export table says this is a data export
+  RuntimeSupport runtime = RuntimeSupport::kUnknown;  ///< what the pinned SDK runtime provides
 };
 
 struct ImportSummary {
   std::vector<ImportEntry> entries;  ///< one per (library, ordinal), in table order
   std::size_t functions = 0;
   std::size_t variables = 0;
-  std::size_t unnamed = 0;  ///< ordinals missing from the export tables
+  std::size_t unnamed = 0;              ///< ordinals missing from the export tables
+  std::size_t runtime_implemented = 0;  ///< named imports the pinned SDK runtime implements
+  std::size_t runtime_stubbed = 0;      ///< named imports that reach a logging stub
+  std::size_t runtime_missing = 0;      ///< named imports the runtime lacks entirely
   std::vector<std::string> warnings;
 };
 

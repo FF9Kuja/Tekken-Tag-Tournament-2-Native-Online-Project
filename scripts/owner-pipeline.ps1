@@ -10,7 +10,9 @@
 #   3. identifies the title update (ttt2-stfs identify); -TitleUpdate may be a folder, in which case
 #      the package whose Default.xexp targets 0.0.3.2 is picked, as TTT2Recomp's installer does;
 #   4. extracts default.xex and Default.xexp into the work folder;
-#   5. applies the title update with ttt2-xexpatch (Clang builds only) and hashes the result;
+#   5. applies the title update with ttt2-xexpatch (Clang builds only) and hashes the result, then lists
+#      the kernel/XAM imports (marking which ones the pinned ReXGlue runtime implements, stubs or lacks)
+#      and the save/restore helper addresses (ttt2-xexinfo --imports --helpers);
 #   6. with -Codegen, copies the patched executable to recomp\game\default.xex, runs
 #      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py.
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
@@ -135,6 +137,12 @@ if (Test-Path $patchTool) {
     Log "ttt2-xexpatch.exe not built (preset $Preset): the patch tool needs the windows-clang-cl preset"
     Log "(install the 'C++ Clang tools for Windows' component, then rerun with -Preset windows-clang-cl)."
 }
+
+# --- 5b. imports and helpers -------------------------------------------------------------------
+Section "5b. Imports (with the ReXGlue runtime's support for each) and save/restore helpers"
+$scanned = $(if ($patchedOk) { $patched } else { $baseXex })
+Log "Image:     $scanned"
+Run $xexinfo @($scanned, "--imports", "--helpers", "--no-hash") | Out-Null
 
 # --- 6. codegen -------------------------------------------------------------------------------
 if ($Codegen) {

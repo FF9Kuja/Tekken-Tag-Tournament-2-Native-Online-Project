@@ -4,7 +4,8 @@
 //   ttt2-xexinfo <file> [--json] [--no-hash] [--headers] [--image-hash] [--imports] [--helpers]
 //
 // --imports and --helpers decrypt and decompress the executable image in memory (like
-// --image-hash) and report, respectively, the kernel/XAM imports by name and the addresses of
+// --image-hash) and report, respectively, the kernel/XAM imports by name (with what the pinned
+// ReXGlue runtime provides for each: implemented, stub or missing) and the addresses of
 // the compiler's register save/restore helpers: names, ordinals and addresses only.
 // Exit code 0 on success, 1 on a parse error or bad arguments.
 
@@ -192,14 +193,23 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     const auto& im = *scan->imports;
     std::printf("Imports:            %zu functions, %zu variables, %zu unnamed ordinals\n", im.functions,
                 im.variables, im.unnamed);
+    std::printf(
+        "Runtime support:    ReXGlue SDK %s: %zu implemented, %zu stubs, %zu missing (named imports)\n",
+        std::string(ttt2::xex::runtime_exports_sdk_commit()).substr(0, 12).c_str(), im.runtime_implemented,
+        im.runtime_stubbed, im.runtime_missing);
     std::string current;
     for (const auto& e : im.entries) {
       if (e.library != current) {
         current = e.library;
         std::printf("  %s\n", current.c_str());
       }
-      std::printf("    %5u  %-40s %s", e.ordinal, e.name.empty() ? "(unknown ordinal)" : e.name.c_str(),
-                  e.is_function ? "function" : "variable");
+      const char* runtime = e.runtime == ttt2::xex::RuntimeSupport::kUnknown ? "-"
+                            : e.runtime == ttt2::xex::RuntimeSupport::kMissing
+                                ? "MISSING"
+                                : ttt2::xex::runtime_support_name(e.runtime);
+      std::printf("    %5u  %-40s %-8s %-11s", e.ordinal,
+                  e.name.empty() ? "(unknown ordinal)" : e.name.c_str(),
+                  e.is_function ? "function" : "variable", runtime);
       if (e.thunk_address) std::printf("  thunk 0x%08X", e.thunk_address);
       if (e.slot_address) std::printf("  slot 0x%08X", e.slot_address);
       std::printf("\n");
@@ -281,15 +291,24 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     const auto& im = *scan->imports;
     std::printf("  \"import_functions\": %zu,\n  \"import_variables\": %zu,\n  \"import_unnamed\": %zu,\n",
                 im.functions, im.variables, im.unnamed);
+    std::printf(
+        "  \"runtime_sdk_commit\": \"%s\",\n  \"runtime_implemented\": %zu,\n  \"runtime_stubbed\": %zu,\n"
+        "  \"runtime_missing\": %zu,\n",
+        std::string(ttt2::xex::runtime_exports_sdk_commit()).c_str(), im.runtime_implemented,
+        im.runtime_stubbed, im.runtime_missing);
     std::printf("  \"imports\": [");
     for (std::size_t i = 0; i < im.entries.size(); ++i) {
       const auto& e = im.entries[i];
+      const std::string name = e.name.empty() ? "null" : ("\"" + json_escape(e.name) + "\"");
+      const std::string runtime =
+          e.runtime == ttt2::xex::RuntimeSupport::kUnknown
+              ? "null"
+              : ("\"" + std::string(ttt2::xex::runtime_support_name(e.runtime)) + "\"");
       std::printf(
           "%s\n    {\"library\": \"%s\", \"ordinal\": %u, \"name\": %s, \"function\": %s, "
-          "\"thunk\": \"%s\", \"slot\": \"%s\"}",
-          i ? "," : "", json_escape(e.library).c_str(), e.ordinal,
-          e.name.empty() ? "null" : ("\"" + json_escape(e.name) + "\"").c_str(),
-          e.is_function ? "true" : "false", ttt2::hex_u32(e.thunk_address).c_str(),
+          "\"runtime\": %s, \"thunk\": \"%s\", \"slot\": \"%s\"}",
+          i ? "," : "", json_escape(e.library).c_str(), e.ordinal, name.c_str(),
+          e.is_function ? "true" : "false", runtime.c_str(), ttt2::hex_u32(e.thunk_address).c_str(),
           ttt2::hex_u32(e.slot_address).c_str());
     }
     std::printf("\n  ],\n");
