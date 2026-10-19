@@ -37,3 +37,4 @@ programs in `tests/ppc/`, see `docs/DEVELOPMENT.md`.
 | `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog with stall detector, kernel stub report, host crash report |
 | `src/stub_counter.{h,cpp}`, `src/stub_name.hpp` | counts the runtime's `<name> STUB` warnings per export (also used by the headless harness) |
 | `src/kernel_overrides.cpp` | host-side `__imp__` definitions replacing runtime stubs (five XAM UI/stats calls, TTT2 Web's results), verified natively by `tests/ppc/imports_ttt2.s`; add one line per stub the boot log shows the game reaching |
+| `tools/triage_boot_log.py`, `tools/ttt2web_kernel_functions.txt` | turns a host boot log into an action list: outcome, crash block (fault address -> guest region), stall dumps, stubs reached with TTT2 Web's (CC0) reference for each |

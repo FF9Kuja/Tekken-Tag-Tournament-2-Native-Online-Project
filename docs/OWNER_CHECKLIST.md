@@ -151,9 +151,16 @@ Expect the first boot to fail somewhere: the point is the log. The host writes i
 seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
 **kernel stub report** when the main thread exits or you close the window (every system call the game reached
 that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
-guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder.** It contains names,
-addresses and counts only. Also say what you saw on screen, if anything. Never send `work\game`, `recomp\game`,
-`recomp\generated` or `recomp\out`.
+guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder** together with the
+triage report the next command writes from it (outcome, crash block, stubs reached with where TTT2 Web implements
+them, stalls):
+
+```powershell
+python -I recomp\tools\triage_boot_log.py recomp\out\build\win-amd64-release\logs --md work\boot-triage.md --quiet
+```
+
+Both contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
+`work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails
 

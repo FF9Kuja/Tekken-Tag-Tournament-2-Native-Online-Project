@@ -30,6 +30,13 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   launched, `XamShowFriendsUI` and `XamUserCreateStatsEnumerator` reached the host overrides, program returned,
   exit code 0 in 0.3 s. Both workflows now run it (Linux under Xvfb; Windows on the runner's desktop) and upload
   the boot log. SDL's dummy video driver is not compiled into the SDK's SDL3 ("dummy not available"), so Xvfb it is.
+* **Boot-log triage tool** (`recomp/tools/triage_boot_log.py`): reads one host log session (rotated parts in
+  order) and writes the action list for it: outcome (clean exit / crash / stall / closed / incomplete), facts,
+  timeline, the HOST CRASH block with the fault address translated through the logged arena bases to a guest
+  address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation for
+  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 136 names with file:line), unimplemented variable imports,
+  distinct errors. Unit-tested on synthetic logs shaped like today's real ones; the owner checklist runs it on the
+  first-boot log and sends its report with the log.
 * **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
   clang and gcc, Windows MSVC and clang-cl, hygiene + Python tools (CI), and the SDK validation workflow on a
   GitHub runner: SDK built with Clang 20, 1458 PPC instruction test cases / 5725 assertions, all codegen smoke

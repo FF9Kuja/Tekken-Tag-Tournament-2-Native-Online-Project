@@ -91,6 +91,12 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   ones that run everywhere. A `<source>.imports` file next to the source (`library: slot_symbol, thunk_symbol, ...`)
   adds a real XEX2 import table (`IMPORT_LIBRARIES` header) so the program calls kernel exports like the game does:
   `recomp/tests/ppc/imports_ttt2.s` is the example (slots in `.rodata`, 16-byte thunks at the end of `.text`).
+* `recomp/tools/triage_boot_log.py <log file | logs dir> [--md out.md] [--json out.json]` - reads one host log
+  session (rotated parts in order) and reports the outcome (clean exit, crash, stall, closed, incomplete), the
+  facts (image, backend, roots, imports), the timeline, the HOST CRASH block with the fault address translated to a
+  guest address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation
+  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 136 names), unimplemented variable imports, the distinct
+  errors, and a numbered action list. Unit-tested on synthetic logs shaped like the real ones.
 * `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash]` - boots the real game host on
   the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as `recomp/game/default.xex`)
   without GPU emulation (`--gpu_plugin=none`; under `xvfb-run` on a display-less Linux) and checks its log: image
