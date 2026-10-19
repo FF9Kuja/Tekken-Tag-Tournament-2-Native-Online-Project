@@ -47,7 +47,9 @@ run_case() {
     name="$1"; src="$2"; funcs="$3"; switches="$4"; unimpl="$5"; extra="${6:-}"
     dir="$work/$name"
     mkdir -p "$dir/generated"
-    if ! "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+    # The packer gets this script's compiler, so a versioned toolchain (clang-20 + ld.lld-20, as the
+    # SDK workflow installs) is used consistently instead of whatever unversioned clang is on the PATH.
+    if ! CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
         echo "FAIL $name: could not build the test image (see $dir/pack.log)"
         tail -5 "$dir/pack.log"
         status=1
