@@ -94,6 +94,22 @@ jobs:
         if: inputs.build_host
         shell: bash
         run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Boot ttt2.exe with the Xenos GPU plugin (D3D12 on the runner's software adapter; informative)
+        # The first exercise of the graphics path: plugin load, D3D12 device, presentation. The runner
+        # has no GPU, so this may fail for reasons the owner's machine will not have; it never blocks.
+        if: inputs.build_host
+        continue-on-error: true
+        shell: bash
+        run: |
+          scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120 --gpu
+          cp recomp/out/build/win-amd64-release/logs/*.log out/host-gpu-boot.log 2>/dev/null || true
+      - name: Upload the GPU boot log
+        if: always() && inputs.build_host
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-win-amd64-gpu-boot-log
+          path: out/host-gpu-boot.log
+          if-no-files-found: ignore
       - name: Boot ttt2.exe on the crashing and the stalling programs (crash report, stall dump)
         # The same host rebuilt on recomp/tests/ppc/crash_ttt2.s (writes to the null page: HOST CRASH
         # block, exit code 3) and stall_ttt2.s (spins forever: the watchdog's per-thread stall dump).

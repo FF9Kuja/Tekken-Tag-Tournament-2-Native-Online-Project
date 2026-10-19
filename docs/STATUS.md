@@ -137,6 +137,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   purpose as described above; finder -> codegen -> host -> boot verified after the manifest change.
 
 **Not verified / open**
+* The graphics path: `host-boot-test.sh --gpu` lets the host load the staged Xenos plugin. Here (no Vulkan
+  device) the plugin loads and the SDK then fails to create a Vulkan instance ("ErrorIncompatibleDriver",
+  "Graphics presentation setup failed"), after which the app exits without launching the module - the expected
+  outcome on a GPU-less box, and the first evidence that the plugin file, its exports and the load path work. The
+  Windows workflow runs the form as a non-blocking step on the runner's software D3D12 adapter; its result is in
+  PR #6. The GPU path on real hardware is still the owner's first boot.
 * The stall detector fired natively on a license-free program that spins forever (`recomp/tests/ppc/stall_ttt2.s`,
   `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
   1 s watchdog period); the crash reporter fired on the illegal-instruction case and on `crash_ttt2.s` (a write
