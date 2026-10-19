@@ -58,11 +58,19 @@ function Section([string]$title) {
     Log $title
     Log ("=" * 78)
 }
+function Invoke-Tool([scriptblock]$command) {
+    # Native tools write progress and warnings to stderr. Under Windows PowerShell 5.1 with
+    # $ErrorActionPreference = "Stop", a 2>&1 redirection turns every such line into a terminating
+    # NativeCommandError; run them with "Continue" and let the exit code speak (PowerShell 7 is unaffected).
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $command } finally { $ErrorActionPreference = $saved }
+}
 function Run([string]$exe, [string[]]$arguments) {
     # Runs a tool, echoes its output into the report, returns the output lines; never throws on
     # a non-zero exit code (the report records it).
     Log ("> " + (Split-Path $exe -Leaf) + " " + ($arguments -join " "))
-    $output = & $exe @arguments 2>&1 | ForEach-Object { $_.ToString() }
+    $output = Invoke-Tool { & $exe @arguments 2>&1 | ForEach-Object { $_.ToString() } }
     $code = $LASTEXITCODE
     foreach ($o in $output) { Log $o }
     if ($code -ne 0) { Log "(exit code $code)" }
@@ -81,9 +89,9 @@ Section "1. Build the tools"
 if (-not $SkipBuild) {
     if ($Preset -eq "windows-clang-cl" -and -not (Test-Path "third_party\xenonrecomp\src\XenonUtils\xex_patcher.cpp")) {
         Log "Fetching the pinned XenonRecomp sources for ttt2-xexpatch..."
-        & scripts\fetch-xenonrecomp.ps1 2>&1 | ForEach-Object { Log $_.ToString() }
+        Invoke-Tool { & scripts\fetch-xenonrecomp.ps1 2>&1 | ForEach-Object { Log $_.ToString() } }
     }
-    & scripts\build.ps1 -Preset $Preset 2>&1 | Select-Object -Last 15 | ForEach-Object { Log $_.ToString() }
+    Invoke-Tool { & scripts\build.ps1 -Preset $Preset 2>&1 | Select-Object -Last 15 | ForEach-Object { Log $_.ToString() } }
     if ($LASTEXITCODE -ne 0) { Log "BUILD FAILED (exit $LASTEXITCODE)"; $lines | Set-Content $Report; throw "build failed; see $Report" }
 } else {
     Log "skipped (-SkipBuild)"
@@ -112,7 +120,7 @@ if ((Get-Item $TitleUpdate).PSIsContainer) {
     Log "Folder given; looking for the Tekken Tag Tournament 2 Title Update 3 package..."
     $tuFile = $null
     foreach ($candidate in Get-ChildItem -Path $TitleUpdate -File -Recurse | Where-Object { $_.Length -lt 256MB }) {
-        $out = & $stfsTool identify $candidate.FullName 2>&1 | ForEach-Object { $_.ToString() }
+        $out = Invoke-Tool { & $stfsTool identify $candidate.FullName 2>&1 | ForEach-Object { $_.ToString() } }
         if ($LASTEXITCODE -eq 0 -and ($out -match "Identified:\s+Tekken Tag Tournament 2 Title Update 3")) {
             $tuFile = $candidate.FullName
             Log "Found:     $tuFile"
@@ -183,7 +191,7 @@ if ($Codegen) {
             try {
                 $codegenLog = Join-Path $Work "codegen.log"
                 Log "> rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml  (log: $codegenLog)"
-                & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog
+                Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog }
                 Log "(rexglue exit code $LASTEXITCODE; last lines:)"
                 Get-Content $codegenLog | Select-Object -Last 25 | ForEach-Object { Log $_ }
             } finally { Pop-Location }
@@ -194,13 +202,13 @@ if ($Codegen) {
 
             # Second run with TTT2 Web's (CC0) explicit function boundaries, only when the image has the
             # same layout as TTT2 Web's (all eight save/restore helper addresses match); compare the reports.
-            $helperScan = & $xexinfo $patched --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() }
+            $helperScan = Invoke-Tool { & $xexinfo $patched --helpers --no-hash 2>&1 | ForEach-Object { $_.ToString() } }
             if ($helperScan -match "Layout vs TTT2 Web: 8 of 8") {
                 Log "Layout matches TTT2 Web: recompiling again with its 18k function boundaries (ttt2_manifest.ttt2web.toml)"
                 Push-Location recomp
                 try {
                     $codegenLog2 = Join-Path $Work "codegen-ttt2web.log"
-                    & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.ttt2web.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog2
+                    Invoke-Tool { & $Rexglue --log-level debug codegen --ignore-stamp ttt2_manifest.ttt2web.toml 2>&1 | ForEach-Object { $_.ToString() } | Set-Content $codegenLog2 }
                     Log "(rexglue exit code $LASTEXITCODE for the TTT2 Web variant)"
                 } finally { Pop-Location }
                 $reportMd2 = Join-Path $Work "codegen-ttt2web-REPORT.md"
@@ -221,7 +229,7 @@ if ($BuildHost) {
     } else {
         $hostArgs = @("-Game", $patched)
         if ($InstallSdk) { $hostArgs += "-InstallSdk" }
-        $hostOut = & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() }
+        $hostOut = Invoke-Tool { & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() } }
         $hostCode = $LASTEXITCODE
         foreach ($o in $hostOut) { Log $o }
         if ($hostCode -ne 0) { Log "(host build exit code $hostCode)" }
