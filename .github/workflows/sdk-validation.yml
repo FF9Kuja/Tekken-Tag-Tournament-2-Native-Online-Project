@@ -62,12 +62,24 @@ jobs:
           cmake --build out/host-linux --parallel
           ls -la out/host-linux/
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 120
+          # The owner's one-command boot step (scripts/run-host.ps1 under the runner's pwsh) on the same image,
+          # with an Xvfb of this step's own: the host must end by itself and the triage report a clean exit.
+          Xvfb :97 -screen 0 1280x720x24 -nolisten tcp > /dev/null 2>&1 &
+          xvfb_pid=$!
+          sleep 1
+          DISPLAY=:97 SDL_AUDIO_DRIVER=dummy pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host -TimeoutSeconds 120 -NoGpu
+          grep -q "clean exit" out/run-host/boot-triage.md
           # The same host rebuilt on a program that spins forever: the watchdog's stall dump must fire.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/stall_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-stall.json
           (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-stall
+          # The boot step on it: the 8 s timeout sends the close request (SIGTERM) after the 1 s watchdog's stall
+          # dump; the host must exit 0 and the triage report the stall and the close.
+          DISPLAY=:97 SDL_AUDIO_DRIVER=dummy TTT2_WATCHDOG_MS=1000 pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host-stall -TimeoutSeconds 8 -NoGpu
+          grep -q '^\*\*stall: .*closed afterwards\*\*' out/run-host-stall/boot-triage.md
+          kill "$xvfb_pid"
           # And on a program that writes to the null page: the crash report must be logged and the host exit 3.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/crash_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-crash.json
@@ -79,7 +91,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: host-linux-boot-log
-          path: out/host-linux/logs/
+          path: |
+            out/host-linux/logs/
+            out/run-host/
+            out/run-host-stall/
           if-no-files-found: ignore
       - name: "Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)"
         run: python3 -I scripts/check_instruction_coverage.py --expect-missing 2

@@ -115,6 +115,14 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   no load or presentation-setup failure); the Windows workflow runs it as a non-blocking, informative step on the
   runner's software D3D12 adapter. On a Linux box without a Vulkan device the plugin loads but the instance
   creation fails ("ErrorIncompatibleDriver"), which the form reports.
+* `scripts/run-host.ps1 [-GameRoot work\game] [-Exe ttt2.exe] [-Work work] [-TimeoutSeconds N] [-NoGpu]` - the
+  owner's boot step as one command: runs the host on the game data root, waits for its exit (with a timeout it
+  sends the close request a player's X button sends: `taskkill`, SIGTERM on Linux, and kills a host that ignores
+  it for 20 s), runs the triage tool on the log session, copies the log to `<work>\boot-logs\` and writes
+  `boot-triage.md`/`.json` and `boot-report.txt` (how the host ended, exit code, duration, outcome); its exit code
+  is the host's. `owner-pipeline.ps1 -Boot [-BootTimeout N]` chains it after the build and the extraction. Both
+  workflows run it under pwsh on the kernel-import image (clean exit) and on the stall image (timeout close: the
+  triage reports the stall and the close).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

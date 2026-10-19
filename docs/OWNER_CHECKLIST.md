@@ -137,17 +137,20 @@ does it, or let the pipeline do it with `-InstallSdk`) and the whole disc extrac
 `game_data_root` the host runs from:
 
 ```powershell
-scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame -Boot
 # by hand instead:
 scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
 .\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
-recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
+scripts\run-host.ps1                                          # ttt2.exe --game_data_root work\game, then the triage below
 ```
 
 `build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` also extracts the
 title update's own files into `work\update`, which the host mounts as `update:` because it sits next to
-`work\game`.
+`work\game`. `-Boot` (or `scripts\run-host.ps1` by hand) then starts the host on `work\game`, waits until it
+ends and runs the triage described below. When the window stays black or freezes, close it with the X button
+(the host writes its kernel stub report on the way out) and the script carries on; `-BootTimeout 60` (or
+`run-host.ps1 -TimeoutSeconds 60`) closes it for you after 60 seconds.
 
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
@@ -161,15 +164,16 @@ draws): `ttt2: executable title
 seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
 **kernel stub report** when the main thread exits or you close the window (every system call the game reached
 that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
-guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder** together with the
-triage report the next command writes from it (outcome, crash block, stubs reached with where TTT2 Web implements
-them, stalls):
+guest thread, the most recent stub calls). `run-host.ps1` copies that file to `work\boot-logs\` and writes the
+triage report `work\boot-triage.md` (outcome, crash block, stubs reached with where TTT2 Web implements them,
+stalls) and the run summary `work\boot-report.txt` (how the host ended, exit code, duration). **Send those three
+files.** By hand, the triage is:
 
 ```powershell
 python -I recomp\tools\triage_boot_log.py recomp\out\build\win-amd64-release\logs --md work\boot-triage.md --quiet
 ```
 
-Both contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
+All of them contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
 `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails

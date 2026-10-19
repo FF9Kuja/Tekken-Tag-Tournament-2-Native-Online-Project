@@ -3,7 +3,7 @@
 #   scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
-#                              [-BuildHost] [-InstallSdk] [-ExtractGame]
+#                              [-BuildHost] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -21,7 +21,10 @@
 #      SDK package (scripts\build-host.ps1; -InstallSdk builds and installs the SDK first, which takes
 #      a long time); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
 #      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`), and the title update's
-#      files into update\ next to it (the host mounts that as update:).
+#      files into update\ next to it (the host mounts that as update:);
+#   8. with -Boot, runs the host on that game data through scripts\run-host.ps1: waits for it to end (or
+#      closes its window after -BootTimeout seconds), triages its log (<work>\boot-triage.md) and copies the
+#      log file to <work>\boot-logs\; the triage goes into the report too.
 # Everything the tools print is collected in the report file. The report holds hashes, versions,
 # counts and addresses only; game files stay in the work folder and recomp\game (both git-ignored).
 # Send the report file, never the work folder.
@@ -36,7 +39,9 @@ param(
     [string]$Rexglue = "",
     [switch]$BuildHost,
     [switch]$InstallSdk,
-    [switch]$ExtractGame
+    [switch]$ExtractGame,
+    [switch]$Boot,
+    [int]$BootTimeout = 0
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -248,7 +253,33 @@ if ($ExtractGame) {
     Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
 }
 
+# --- 9. boot ------------------------------------------------------------------------------------
+$triageMd = Join-Path $Work "boot-triage.md"
+if ($Boot) {
+    Section "9. Boot the host on the extracted game data (scripts\run-host.ps1) and triage its log"
+    $hostExe = "recomp\out\build\win-amd64-release\ttt2.exe"
+    $bootRoot = Join-Path $Work "game"
+    if (-not (Test-Path $hostExe)) {
+        Log "skipped: $hostExe is missing (build it with -BuildHost or scripts\build-host.ps1)"
+    } elseif (-not (Test-Path (Join-Path $bootRoot "default.xex"))) {
+        Log "skipped: no default.xex in $bootRoot (extract the disc with -ExtractGame)"
+    } else {
+        if (Test-Path $triageMd) { Remove-Item $triageMd -Force }
+        $bootArgs = @("-GameRoot", $bootRoot, "-Work", $Work, "-TimeoutSeconds", $BootTimeout)
+        $bootOut = Invoke-Tool { & (Join-Path $PSScriptRoot "run-host.ps1") @bootArgs 2>&1 | ForEach-Object { $_.ToString() } }
+        $bootCode = $LASTEXITCODE
+        foreach ($o in $bootOut) { Log $o }
+        Log "(run-host exit code $bootCode)"
+        if (Test-Path $triageMd) {
+            Log ""
+            Log "--- $triageMd ---"
+            Get-Content $triageMd | ForEach-Object { Log $_ }
+        }
+    }
+}
+
 Section "Done"
 Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work, recomp\game or recomp\out."
+if ($Boot -and (Test-Path $triageMd)) { Log "Also send $triageMd and the log copy in $(Join-Path $Work 'boot-logs') (names, addresses and counts only)." }
 $lines | Set-Content -Path $Report -Encoding UTF8
 Write-Host "`nReport: $Report"

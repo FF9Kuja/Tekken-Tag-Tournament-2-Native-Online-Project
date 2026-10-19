@@ -2,6 +2,53 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 5: PR #6 merged, the owner's boot step as one command
+
+**Completed**
+* **PR #6 merged into `main`** (merge commit `5acfb19`): `host-boot-test.sh --gpu` and the Windows workflow's
+  informative GPU step, which passed on the runner's software D3D12 adapter (run 39227512735; see session 4).
+  The Windows workflow was dispatched on `main` afterwards (run 39230244565).
+* **The owner's boot step as one command: `scripts/run-host.ps1`** (Windows PowerShell 5.1 / PowerShell 7; pwsh
+  on Linux for CI). It checks `ttt2.exe`, the game data root and Python 3, starts the host from its own folder
+  with `--game_data_root`, waits for its exit, and with `-TimeoutSeconds N` sends a host still running after N
+  seconds the close request the X button sends (`taskkill`; SIGTERM on Linux), killing it 20 s later if it
+  ignores that. Then it runs the triage tool on the log session the run wrote, copies the log to
+  `<work>\boot-logs\`, writes `boot-triage.md`/`.json` and a `boot-report.txt` (how the host ended, exit code,
+  duration, outcome line, the files to send), and exits with the host's exit code. A host that never opened its
+  log is reported with the tails of its stdout/stderr instead. `owner-pipeline.ps1 -Boot [-BootTimeout N]`
+  chains it after the build and the extraction and copies the triage into the report; the checklist's step 6 is
+  now the pipeline command plus closing the window when it freezes.
+* Triage outcome order: a stall dump followed by the window close is reported as the stall ("...; the window was
+  closed afterwards") rather than as a plain close, since that is the owner's most likely first-boot shape; unit
+  test added (18 Python tests).
+* Both workflows run the boot step (`pwsh`) on the kernel-import image (host ends by itself, triage "clean exit")
+  and on the stall image (1 s watchdog, 8 s timeout closes the window, triage "stall ...; closed afterwards");
+  the CI dry run of the pipeline passes `-Boot` without a host and must report the skip.
+
+**Verified (where)**
+* Linux container, PowerShell 7.4.6 under Xvfb, the real host built against the installed SDK package:
+  kernel-import image -> "Ended: by itself; exit code 0; 0.2 s", log copied, triage "clean exit", script exit 0;
+  stall image with `TTT2_WATCHDOG_MS=1000 -TimeoutSeconds 8` -> "still running after 8 s; sending the close
+  request", "Ended: after the close request (8 s timeout); exit code 0; 8.2 s", the log holds the stall dump, the
+  stub report at window close and "Window closing", triage "stall: ...; the window was closed afterwards";
+  without a display the script reported "none written to .../logs" with the SDL error from stdout. 18 Python
+  unit tests OK; hygiene check clean.
+* The CI, SDK validation and Windows runs of this change are recorded in PR #7 (pending when this was written).
+
+**Not verified / open**
+* `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
+  `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
+* Everything on license-free programs; the real image still waits for the owner's run.
+
+**Blocked / pending**
+* Owner's files for Milestone 3 steps 3-5 and the first boot (Milestone 4): the owner path is now
+  `scripts\owner-pipeline.ps1 -Iso ... -TitleUpdate ... -Codegen -Rexglue ... -BuildHost -InstallSdk -ExtractGame -Boot`
+  and the three files it names (`work\boot-triage.md`, the log copy, `work\boot-report.txt`) plus `work\report.txt`.
+
+**Next task (resumable state)**
+* PR #7 (this boot step): CI, SDK validation and Windows `build_host` runs green, merge, restart the branch, Windows
+  run on `main`. Then iterate on the owner's first-boot report as described in session 4's next task.
+
 ## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
 
 **Completed**

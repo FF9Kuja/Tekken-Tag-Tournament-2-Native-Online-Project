@@ -74,6 +74,8 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    against the installed SDK on a Windows runner; recompiled test programs executed natively on Windows).
    [x] The real host boots a license-free image headless (Linux under Xvfb, Windows runner): module launched,
    kernel overrides reached, clean exit (`scripts/host-boot-test.sh`); the crash path exits with a report.
+   [x] The owner's boot step as one command (`scripts/run-host.ps1`, `owner-pipeline.ps1 -Boot`): run, close on
+   timeout, triage, report; both workflows run it on the kernel-import and the stall images.
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime

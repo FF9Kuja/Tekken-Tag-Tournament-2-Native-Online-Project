@@ -94,6 +94,18 @@ jobs:
         if: inputs.build_host
         shell: bash
         run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Run the owner's boot step (scripts\run-host.ps1) on the same image
+        # The one command of docs\OWNER_CHECKLIST.md step 6: runs the host, waits for its exit, triages the
+        # log (recomp\tools\triage_boot_log.py), copies it and writes the run report. The program ends by
+        # itself here, so the host must exit 0 and the triage report a clean exit.
+        if: inputs.build_host
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          scripts\run-host.ps1 -GameRoot recomp\game -Work out\run-host -TimeoutSeconds 120 -NoGpu
+          if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
+          if (-not (Select-String -Path out\run-host\boot-triage.md -Pattern "clean exit" -Quiet)) { throw "the triage did not report a clean exit" }
+          if (-not (Get-ChildItem out\run-host\boot-logs -File)) { throw "no log copy in out\run-host\boot-logs" }
       - name: Boot ttt2.exe with the Xenos GPU plugin (D3D12 on the runner's software adapter; informative)
         # The first exercise of the graphics path: plugin load, D3D12 device, presentation. The runner
         # has no GPU, so this may fail for reasons the owner's machine will not have; it never blocks.
@@ -124,12 +136,29 @@ jobs:
             (cd recomp && "$rexglue" codegen --ignore-stamp ttt2_manifest.toml && cmake --build --preset win-amd64-release)
             scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game "--expect-$program"
           done
-      - name: Upload the host boot log
+      - name: Run the owner's boot step on the stalling program (the timeout closes the window)
+        # The host is still built on stall_ttt2.s: with a 1 s watchdog period the stall dump appears within a
+        # few seconds, the 8 s timeout sends the close request the X button sends (taskkill), the host writes
+        # its stub report and exits 0, and the triage must report the stall and the close.
+        if: inputs.build_host
+        env:
+          SDL_AUDIO_DRIVER: dummy
+          TTT2_WATCHDOG_MS: "1000"
+        run: |
+          scripts\run-host.ps1 -GameRoot recomp\game -Work out\run-host-stall -TimeoutSeconds 8 -NoGpu
+          if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
+          $md = Get-Content out\run-host-stall\boot-triage.md -Raw
+          if ($md -notmatch "\*\*stall: .*closed afterwards\*\*") { throw "the triage did not report the stall and the close" }
+          Get-Content out\run-host-stall\boot-report.txt
+      - name: Upload the host boot log and the boot-step reports
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4
         with:
           name: host-win-amd64-boot-log
-          path: recomp/out/build/win-amd64-release/logs/
+          path: |
+            recomp/out/build/win-amd64-release/logs/
+            out/run-host/
+            out/run-host-stall/
           if-no-files-found: ignore
       - name: Upload the host build listing
         if: always() && inputs.build_host
