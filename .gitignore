@@ -34,8 +34,10 @@ dumps/
 private/
 
 # --- Code generated from the game executable (ReXGlue / XenonRecomp output) ---
-generated/
-recomp/generated/
+# codegen output (the SDK-generated rexglue.cmake next to it IS committed)
+generated/default/
+recomp/generated/default/
+recomp.*.cpp
 re/ppc/
 ppc_recomp*.cpp
 ppc_recomp*.h

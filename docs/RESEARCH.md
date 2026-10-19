@@ -26,9 +26,9 @@ reproduced).*
    makes it the only TTT2-specific code we may legally borrow from, and its documentation records concrete
    TTT2 runtime behaviours (thread set, vblank/DPC needs, XAM calls) that any runtime must satisfy.
 4. **Toolchains verified on Linux in this session:** XenonRecomp + XenonAnalyse (MIT) built with Clang 18 here;
-   the ReXGlue SDK v0.10.0 (BSD-3) submodules were fetched and the codegen tool build was started (see
-   `docs/STATUS.md` for the outcome). This container's Clang can also emit big-endian PowerPC ELF objects, which
-   gives us license-free recompiler test inputs.
+   the ReXGlue SDK v0.10.0 (BSD-3) codegen tool built with Clang 20 here, and its `init` and PPC instruction-test
+   generator (`recompile-tests`) ran successfully (`docs/STATUS.md`). This container's Clang can also emit
+   big-endian PowerPC ELF objects, which the SDK loads but cannot analyse without a PE `.pdata` directory.
 5. **Recommended architecture: ReXGlue SDK as codegen + runtime, with the XenonRecomp family as an independent
    cross-check and as the title-update patch tool.** Rationale and risks in section 7 and
    `docs/decisions/0001-use-rexglue-sdk.md`. The decisive factor: ReXGlue ships a Xenia-derived runtime (kernel,
@@ -207,6 +207,9 @@ select and fights at 60 fps natively; audio, saves and sign-in missing. Verified
   SPIRV-Tools, ImGui, spdlog, fmt, tomlplusplus, inja, xxHash, simde, ...; 709 MB shallow). On Ubuntu it also needs
   GTK3 and the SDL3 X11/XCB/Wayland/audio development packages (verified here by trial: the configure step failed on
   missing `libgtk-3-dev`, `libxss-dev` and `libx11-xcb-dev` before they were installed).
+* **Verified here (2026-10-19):** the `rexglue` tool builds on Ubuntu 24.04 with Clang 20 (not 18) and
+  `-mssse3`; `rexglue init` and `rexglue recompile-tests` work; `rexglue codegen` loads a plain PowerPC ELF but
+  requires a PE `.pdata` exception directory, so license-free codegen inputs must be wrapped as XEX2/PE images.
 * **Known project-specific needs:** Tekken 6 NO carries a 97-file patch against the SDK. Expect TTT2 to need its own
   SDK modifications (deterministic audio stepping, snapshot support, exports used by netplay), to be maintained as
   patches or an SDK fork under the BSD-3 license.

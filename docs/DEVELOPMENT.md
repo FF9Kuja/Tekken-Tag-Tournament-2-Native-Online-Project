@@ -77,4 +77,10 @@ cmake -S rexglue-sdk -B build/sdk -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_C
 cmake --build build/sdk --target rexglue --parallel        # the codegen tool only
 ```
 
-The result of this build in the first session is recorded in `docs/STATUS.md`.
+Verified in the first session: the tool builds (809 steps) and `rexglue init`, `rexglue codegen` (loads ELF/XEX;
+analysis needs a PE `.pdata` directory) and `rexglue recompile-tests` run. To regenerate the SDK's PowerPC
+instruction tests as Catch2 sources without any game file:
+
+```sh
+scripts/sdk-recompile-tests.sh /path/to/rexglue-sdk /path/to/rexglue-sdk/out/linux-amd64/rexglue out/ppc-tests
+```

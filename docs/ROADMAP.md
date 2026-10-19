@@ -27,11 +27,12 @@ steps that cannot run in the Linux development container. Status legend: done / 
 
 Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations documented.
 
-1. Vendor the ReXGlue SDK as a pinned submodule; add `recomp/ttt2_manifest.toml` / `ttt2_config.toml` from
-   `rexglue init`; script the Linux build of the `rexglue` tool (deps list from this session).
-2. License-free codegen smoke test in CI: compile small PowerPC ELF programs with Clang (`--target=powerpc`) and
-   run `rexglue codegen` on them; compare results with expectations (instruction coverage harness, including the
-   ~70 instructions TTT2 Web lists).
+1. Vendor the ReXGlue SDK as a pinned submodule (the `recomp/` skeleton from `rexglue init` is already in the
+   tree); script the Linux build of the `rexglue` tool (Clang 20 + package list in `docs/DEVELOPMENT.md`).
+2. License-free validation in CI: (a) the SDK's PPC instruction tests through `scripts/sdk-recompile-tests.sh`
+   (works on Linux, verified); (b) a small XEX2/PE packer so Clang-built PowerPC test programs get the `.pdata`
+   directory `rexglue codegen` requires, then codegen smoke tests with expected function counts; (c) an
+   instruction-coverage check for the ~70 instructions TTT2 Web lists.
 3. Ingestion tools: STFS reader (TU3), XDVDFS reader (ISO), XEX decrypt/decompress, XEXP patching
    (first via XenonUtils `XexPatcher`, MIT) -> patched image + hashes. Extend `ttt2-xexinfo`/`known_titles` with
    verified hashes once the owner runs the tools on their copy (**needs the owner's files; run locally, report
