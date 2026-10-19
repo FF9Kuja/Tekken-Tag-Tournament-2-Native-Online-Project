@@ -83,4 +83,15 @@ if(TARGET ttt2-validate)
         -P "${_run_expect}")
     set_tests_properties(validate_synthetic_pair validate_synthetic_folder validate_synthetic_mismatch
                          validate_synthetic_no_update PROPERTIES FIXTURES_REQUIRED validate_inputs)
+
+    # The whole-disc extraction the native host's game data root comes from, on the synthetic image.
+    if(TARGET ttt2-iso)
+        add_test(NAME iso_extract_all_synthetic COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:ttt2-iso>|extract-all|${_fx}/synthetic.iso|${_fx}/extracted"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=extracted 3 files \\([0-9]+ bytes\\) in 1 directories"
+            "-DEXPECT_FILES=${_fx}/extracted/default.xex|${_fx}/extracted/readme.txt|${_fx}/extracted/data/table.bin"
+            -P "${_run_expect}")
+        set_tests_properties(iso_extract_all_synthetic PROPERTIES FIXTURES_REQUIRED validate_inputs)
+    endif()
 endif()
