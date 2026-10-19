@@ -99,7 +99,7 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   session (rotated parts in order) and reports the outcome (clean exit, crash, stall, closed, incomplete), the
   facts (image, backend, roots, imports), the timeline, the HOST CRASH block with the fault address translated to a
   guest address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation
-  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 136 names), unimplemented variable imports, the distinct
+  for each (`recomp/tools/ttt2web_kernel_functions.txt`, 135 names), unimplemented variable imports, the distinct
   errors, and a numbered action list. Unit-tested on synthetic logs shaped like the real ones.
 * `scripts/host-boot-test.sh <ttt2[.exe]> <game root> [timeout] [--expect-crash | --expect-stall]` - boots the
   real game host on the license-free kernel-import image (`recomp/tests/ppc/imports_ttt2.s` packed as
@@ -115,6 +115,14 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   no load or presentation-setup failure); the Windows workflow runs it as a non-blocking, informative step on the
   runner's software D3D12 adapter. On a Linux box without a Vulkan device the plugin loads but the instance
   creation fails ("ErrorIncompatibleDriver"), which the form reports.
+* `scripts/run-host.ps1 [-GameRoot work\game] [-Exe ttt2.exe] [-Work work] [-TimeoutSeconds N] [-NoGpu]` - the
+  owner's boot step as one command: runs the host on the game data root, waits for its exit (with a timeout it
+  sends the close request a player's X button sends: `taskkill`, SIGTERM on Linux, and kills a host that ignores
+  it for 20 s), runs the triage tool on the log session, copies the log to `<work>\boot-logs\` and writes
+  `boot-triage.md`/`.json` and `boot-report.txt` (how the host ended, exit code, duration, outcome); its exit code
+  is the host's. `owner-pipeline.ps1 -Boot [-BootTimeout N]` chains it after the build and the extraction. Both
+  workflows run it under pwsh on the kernel-import image (clean exit) and on the stall image (timeout close: the
+  triage reports the stall and the close).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
@@ -197,7 +205,12 @@ configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `
 `scripts\build-rexglue-windows.ps1` follows the SDK's own CI (LLVM clang + Ninja, `win-amd64` preset; needs
 Visual Studio 2022's C++ workload for the Windows SDK headers). `.github/workflows/rexglue-windows.yml` runs the
 same steps on a Windows runner on demand and uploads `rexglue.exe` as an artifact, so the owner can also download
-the tool instead of building it.
+the tool instead of building it. With the `build_host` input the run also installs the SDK as a CMake package,
+moves the package away from its install location, adds the SDK's licence, every vendored component's licence file
+and the source commit under `share/licenses/`, uploads it as `rexglue-sdk-install-win-amd64` (90 days) and builds
+`ttt2.exe` from the moved copy (`build-host.ps1 -SdkInstall`), which proves the package works from any folder: the
+owner unzips it and passes `-SdkInstall <dir>` to the pipeline instead of building the SDK (30-60 minutes). On
+Linux the same relocation was verified by hand (package copied, host built and booted from the copy).
 
 Without a Windows machine the PowerShell scripts are checked with the PowerShell 7 parser
 (`pwsh -Command '[System.Management.Automation.Language.Parser]::ParseFile(...)'`) and the workflow files with

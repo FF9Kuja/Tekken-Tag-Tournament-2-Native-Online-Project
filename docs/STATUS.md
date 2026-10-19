@@ -2,6 +2,85 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 5: PR #6 merged, the owner's boot step as one command
+
+**Completed**
+* **PR #6 merged into `main`** (merge commit `5acfb19`): `host-boot-test.sh --gpu` and the Windows workflow's
+  informative GPU step, which passed on the runner's software D3D12 adapter (run 39227512735; see session 4).
+  The Windows workflow was dispatched on `main` afterwards (run 39230244565).
+* **The owner's boot step as one command: `scripts/run-host.ps1`** (Windows PowerShell 5.1 / PowerShell 7; pwsh
+  on Linux for CI). It checks `ttt2.exe`, the game data root and Python 3, starts the host from its own folder
+  with `--game_data_root`, waits for its exit, and with `-TimeoutSeconds N` sends a host still running after N
+  seconds the close request the X button sends (`taskkill`; SIGTERM on Linux), killing it 20 s later if it
+  ignores that. Then it runs the triage tool on the log session the run wrote, copies the log to
+  `<work>\boot-logs\`, writes `boot-triage.md`/`.json` and a `boot-report.txt` (how the host ended, exit code,
+  duration, outcome line, the files to send), and exits with the host's exit code. A host that never opened its
+  log is reported with the tails of its stdout/stderr instead. `owner-pipeline.ps1 -Boot [-BootTimeout N]`
+  chains it after the build and the extraction and copies the triage into the report; the checklist's step 6 is
+  now the pipeline command plus closing the window when it freezes.
+* Triage outcome order: a stall dump followed by the window close is reported as the stall ("...; the window was
+  closed afterwards") rather than as a plain close, since that is the owner's most likely first-boot shape; unit
+  test added (18 Python tests).
+* Kernel-surface check repeated against a fresh TTT2 Web checkout (`4d6dd61`): its 135 `GUEST_IMPORT` functions
+  (a macro parameter had been counted as a 136th name; `recomp/tools/ttt2web_kernel_functions.txt` fixed) are all
+  implemented (130) or stubbed (5, overridden) by the pinned runtime, and the seven kernel variable imports its
+  loader fills (`KeTimeStampBundle`, `XboxHardwareInfo`, `XboxKrnlVersion`, `XexExecutableModuleHandle`,
+  `ExLoadedCommandLine`, `VdGpuClockInMHz`, `VdHSIOCalibrationLock`) are all among the runtime's 24 mapped
+  variable exports (`docs/RESEARCH.md` 8a). No kernel preparation is left that does not need the owner's log.
+* Both workflows run the boot step (`pwsh`) on the kernel-import image (host ends by itself, triage "clean exit")
+  and on the stall image (1 s watchdog, 8 s timeout closes the window, triage "stall ...; closed afterwards");
+  the CI dry run of the pipeline passes `-Boot` without a host and must report the skip.
+* **Prebuilt SDK package for the owner.** The Windows workflow's `build_host` stage now moves the installed SDK
+  package away from where CMake installed it, adds the SDK's BSD-3 licence, every vendored component's licence
+  file and the source commit under `share/licenses/`, uploads it as the `rexglue-sdk-install-win-amd64` artifact
+  (90 days) and builds `ttt2.exe` from the moved copy (`build-host.ps1 -SdkInstall`), which is the proof that
+  the owner can unzip it anywhere. `owner-pipeline.ps1 -SdkInstall <dir>` passes it through and takes
+  `rexglue.exe` from its `bin\`; `build-host.ps1` resolves the package path before configuring inside `recomp\`
+  (a relative `-SdkInstall` broke there). The checklist's step 6 now starts with the download instead of the
+  30-60 minute SDK build (`docs/DEPENDENCIES.md` records the artifact's contents and licences).
+
+**Verified (where)**
+* Linux container, PowerShell 7.4.6 under Xvfb, the real host built against the installed SDK package:
+  kernel-import image -> "Ended: by itself; exit code 0; 0.2 s", log copied, triage "clean exit", script exit 0;
+  stall image with `TTT2_WATCHDOG_MS=1000 -TimeoutSeconds 8` -> "still running after 8 s; sending the close
+  request", "Ended: after the close request (8 s timeout); exit code 0; 8.2 s", the log holds the stall dump, the
+  stub report at window close and "Window closing", triage "stall: ...; the window was closed afterwards";
+  without a display the script reported "none written to .../logs" with the SDL error from stdout. 18 Python
+  unit tests OK; hygiene check clean.
+* Relocation of the installed package, Linux: `out/sdk-install` copied to another folder, `rexglue codegen` from
+  the copy, `recomp/` configured with `CMAKE_PREFIX_PATH` on the copy, host built (runtime and GPU plugin staged
+  from the copy) and booted on the kernel-import image: `host-boot-test: PASS`. The package's CMake files hold
+  no absolute paths.
+* PR #7 runs: CI 10/10 green on every head after the PowerShell 5.1 capture fix (`873294c`); SDK validation run
+  39231479253 (`a4d9cef`) green with the boot step under `pwsh` + Xvfb on both images ("clean exit"; "stall ...;
+  the window was closed afterwards" after the 8 s close request, exit 0 in 8.2 s); Windows run 39231482868
+  (`a4d9cef`) green: **first run of `run-host.ps1` on Windows**, both forms passed, the `taskkill` close through
+  `Start-Process` ended the host with exit 0 in 8.3 s; Windows run 39232181325 (`42bd2b3`) green: the package
+  relocated, the licence bundle added (23 components with licence files at that commit; 54 MB unpacked, 13.5 MB
+  as the `rexglue-sdk-install-win-amd64` artifact), `ttt2.exe` built from the moved copy, every boot form passing.
+  The Windows workflow on `main` after the PR #6 merge (run 39230244565, `5acfb19`) was green too. Windows run
+  39234438770 (`15e09bd`) green with the completed licence bundle: 25 entries (the SDK's own, 23 components'
+  files incl. `crypto/des` and `libmspack` one level down, and `NOTICES.txt` naming the nine header-only
+  components whose licence text lives in their sources: disasm, disruptorplus, dxbc, dxc, ffmpeg-overlay, pe,
+  renderdoc, stb, tiny-aes-c).
+
+**Not verified / open**
+* `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
+  `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
+* A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
+  link (same MSVC ABI) but is unverified until the owner's run.
+* Everything on license-free programs; the real image still waits for the owner's run.
+
+**Blocked / pending**
+* Owner's files for Milestone 3 steps 3-5 and the first boot (Milestone 4): the owner path is now the
+  `rexglue-sdk-install-win-amd64` download plus
+  `scripts\owner-pipeline.ps1 -Iso ... -TitleUpdate ... -Codegen -BuildHost -SdkInstall <dir> -ExtractGame -Boot`
+  and the three files it names (`work\boot-triage.md`, the log copy, `work\boot-report.txt`) plus `work\report.txt`.
+
+**Next task (resumable state)**
+* PR #7 (this boot step): CI, SDK validation and Windows `build_host` runs green, merge, restart the branch, Windows
+  run on `main`. Then iterate on the owner's first-boot report as described in session 4's next task.
+
 ## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
 
 **Completed**
@@ -43,7 +122,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   order) and writes the action list for it: outcome (clean exit / crash / stall / closed / incomplete), facts,
   timeline, the HOST CRASH block with the fault address translated through the logged arena bases to a guest
   address and region, stall dumps, the kernel stubs reached with TTT2 Web's (CC0) reference implementation for
-  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 136 names with file:line), unimplemented variable imports,
+  each (`recomp/tools/ttt2web_kernel_functions.txt`: the 135 names with file:line), unimplemented variable imports,
   distinct errors. Unit-tested on synthetic logs shaped like today's real ones; the owner checklist runs it on the
   first-boot log and sends its report with the log.
 * **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
@@ -82,7 +161,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
   the variant codegen as a second pass only on a match (both reports are written for comparison).
 * **Predicted kernel coverage for TTT2** (`docs/RESEARCH.md` 8a): TTT2 Web, playable natively on its own CC0
-  runtime, implements 136 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
+  runtime, implements 135 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
   stats calls). The runtime-export generator now counts `REX_HOOK_RAW` hooks (11, e.g. `DbgPrint`) as
   implemented, which it had classified as missing.
 * **First kernel overrides in the host** (`recomp/src/kernel_overrides.cpp`): the five XAM calls above

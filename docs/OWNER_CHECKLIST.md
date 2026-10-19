@@ -18,9 +18,9 @@ whether the ReXGlue runtime implements, stubs or lacks it):
 
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
-# or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically
-# add -Codegen once rexglue.exe exists (step 5) to also recompile and summarise the result, and
-# -BuildHost -InstallSdk -ExtractGame to build and prepare the native host (step 6)
+# or point -TitleUpdate at the folder that holds your title updates; the TU3 package is picked automatically.
+# The whole path to the first boot, with the SDK package downloaded and unzipped to D:\rexglue-sdk (step 6):
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
 ```
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
@@ -95,7 +95,8 @@ Expected: `output: ... version 0.0.3.2`, `image: PE image, N bytes, SHA-1 ...`. 
 ## Step 5 - run the recompiler and report what it found
 
 You need `rexglue.exe` (the ReXGlue codegen tool). Either download it from the latest run of the
-"ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`), or build it:
+"ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`; the
+`rexglue-sdk-install-win-amd64` artifact of step 6 holds it too, as `bin\rexglue.exe`), or build it:
 
 ```powershell
 # needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja, Python 3 (winget install Python.Python.3.12) and
@@ -132,22 +133,29 @@ is addresses only too and stays on your PC with the image (git-ignored). The gen
 ## Step 6 - build the native host and attempt the first boot
 
 The host is `ttt2.exe`: your recompiled code plus the ReXGlue runtime, built the way every player will build it.
-It needs the SDK installed as a CMake package once (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`
-does it, or let the pipeline do it with `-InstallSdk`) and the whole disc extracted into a folder, which is the
-`game_data_root` the host runs from:
+It needs the SDK as an installed CMake package and the whole disc extracted into a folder, which is the
+`game_data_root` the host runs from. The quick way to the package: download the `rexglue-sdk-install-win-amd64`
+artifact from a run of the "ReXGlue codegen tool (Windows)" workflow that had `build_host` on (Actions tab; the
+runs on `main` after each merge have it), unzip it anywhere, say `D:\rexglue-sdk`, and pass `-SdkInstall
+D:\rexglue-sdk` (the pipeline then also takes `rexglue.exe` from its `bin\` folder). The slow way builds it on
+your PC (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`, or `-InstallSdk` on the pipeline):
 
 ```powershell
-scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
+# (with -InstallSdk -Rexglue "path\to\rexglue.exe" instead of -SdkInstall to build the SDK yourself)
 # by hand instead:
-scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
+scripts\build-host.ps1 -Game work\default_tu3.xex -SdkInstall D:\rexglue-sdk   # -> recomp\out\build\win-amd64-release\ttt2.exe
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
 .\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
-recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
+scripts\run-host.ps1                                          # ttt2.exe --game_data_root work\game, then the triage below
 ```
 
 `build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` also extracts the
 title update's own files into `work\update`, which the host mounts as `update:` because it sits next to
-`work\game`.
+`work\game`. `-Boot` (or `scripts\run-host.ps1` by hand) then starts the host on `work\game`, waits until it
+ends and runs the triage described below. When the window stays black or freezes, close it with the X button
+(the host writes its kernel stub report on the way out) and the script carries on; `-BootTimeout 60` (or
+`run-host.ps1 -TimeoutSeconds 60`) closes it for you after 60 seconds.
 
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
@@ -161,15 +169,16 @@ draws): `ttt2: executable title
 seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
 **kernel stub report** when the main thread exits or you close the window (every system call the game reached
 that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
-guest thread, the most recent stub calls). **Send the newest file from that `logs\` folder** together with the
-triage report the next command writes from it (outcome, crash block, stubs reached with where TTT2 Web implements
-them, stalls):
+guest thread, the most recent stub calls). `run-host.ps1` copies that file to `work\boot-logs\` and writes the
+triage report `work\boot-triage.md` (outcome, crash block, stubs reached with where TTT2 Web implements them,
+stalls) and the run summary `work\boot-report.txt` (how the host ended, exit code, duration). **Send those three
+files.** By hand, the triage is:
 
 ```powershell
 python -I recomp\tools\triage_boot_log.py recomp\out\build\win-amd64-release\logs --md work\boot-triage.md --quiet
 ```
 
-Both contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
+All of them contain names, addresses and counts only. Also say what you saw on screen, if anything. Never send
 `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails

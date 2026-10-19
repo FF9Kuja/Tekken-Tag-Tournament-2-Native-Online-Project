@@ -227,10 +227,13 @@ def triage(lines, ttt2web=None):
         outcome = f"crash: {crash['kind']}"
     elif ended is not None:
         outcome = "clean exit: the program returned from its entry point and the host ended"
+    elif stalls:
+        # The owner's most likely first boot: a black or frozen window, the stall dump, then the X button.
+        outcome = "stall: the thread census and stub calls stopped changing while the main thread ran"
+        if closed:
+            outcome += "; the window was closed afterwards"
     elif closed:
         outcome = "closed by the user while the game was running"
-    elif stalls:
-        outcome = "stall: the thread census and stub calls stopped changing while the main thread ran"
     elif main_created:
         outcome = "incomplete: the log ends while the game runs (killed, still running, or the log was cut)"
     elif facts["title_id"]:

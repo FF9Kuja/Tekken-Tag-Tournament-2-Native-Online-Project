@@ -78,6 +78,52 @@ jobs:
       - name: Install the SDK as a CMake package (runtime, GPU plugin, SDL3; long)
         if: inputs.build_host
         run: scripts\build-rexglue-windows.ps1 -Install
+      - name: Relocate the installed package and add the licences (the owner's download)
+        # The package is moved away from where CMake installed it: the host below is built from the moved
+        # copy, which proves the owner can unzip the artifact anywhere (-SdkInstall). The SDK installs only
+        # SDL3's licence, so its own BSD-3-Clause text, every vendored component's licence file and the
+        # source commit are added for redistribution (docs/DEPENDENCIES.md).
+        if: inputs.build_host
+        shell: bash
+        run: |
+          sdk=third_party/rexglue-sdk/src
+          mkdir -p out
+          mv "$sdk/out/install/win-amd64" out/rexglue-sdk-install
+          lic=out/rexglue-sdk-install/share/licenses
+          mkdir -p "$lic/rexglue-sdk"
+          cp "$sdk/LICENSE" "$lic/rexglue-sdk/LICENSE"
+          git -C "$sdk" rev-parse HEAD > "$lic/rexglue-sdk/SOURCE_COMMIT.txt"
+          echo "https://github.com/rexglue/rexglue-sdk" >> "$lic/rexglue-sdk/SOURCE_COMMIT.txt"
+          notices="$lic/NOTICES.txt"
+          {
+            echo "Third-party components vendored by the ReXGlue SDK at the commit in rexglue-sdk/SOURCE_COMMIT.txt."
+            echo "Each folder here holds the licence file(s) a component ships at its top level or one level down."
+            echo "Components without such a file carry their licence text in their source file headers in the SDK tree"
+            echo "(thirdparty/<name>/); they are listed below."
+            echo
+          } > "$notices"
+          for d in "$sdk"/thirdparty/*/; do
+            name=$(basename "$d")
+            found=0
+            for f in "$d"LICENSE* "$d"License* "$d"license* "$d"COPYING* "$d"COPYRIGHT* "$d"UNLICENSE* \
+                     "$d"*/LICENSE* "$d"*/License* "$d"*/license* "$d"*/COPYING* "$d"*/COPYRIGHT* "$d"*/UNLICENSE*; do
+              [ -f "$f" ] || continue
+              mkdir -p "$lic/$name"
+              cp "$f" "$lic/$name/"
+              found=1
+            done
+            [ "$found" = 1 ] || echo "no licence file: $name (licence text in its source headers)" >> "$notices"
+          done
+          ls "$lic"
+          cat "$notices"
+          du -sh out/rexglue-sdk-install
+      - name: Upload the installed SDK package (the owner downloads this instead of building the SDK)
+        if: inputs.build_host
+        uses: actions/upload-artifact@v4
+        with:
+          name: rexglue-sdk-install-win-amd64
+          path: out/rexglue-sdk-install/
+          retention-days: 90
       - name: Pack the license-free kernel-import program as the host's game image
         if: inputs.build_host
         shell: bash
@@ -85,15 +131,27 @@ jobs:
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
           mkdir -p recomp/game
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/imports_ttt2.s recomp/game/default.xex
-      - name: Build ttt2.exe against the installed SDK (codegen runs inside the build)
+      - name: Build ttt2.exe against the relocated SDK package (codegen runs inside the build)
         if: inputs.build_host
-        run: scripts\build-host.ps1
+        run: scripts\build-host.ps1 -SdkInstall out\rexglue-sdk-install
       - name: Boot ttt2.exe on the license-free image (no GPU plugin) and check its log
         # The real host on Windows: window, runtime, recompiled code, Ttt2App hooks and the kernel
         # overrides; the program ends and the host must exit with code 0 (scripts/host-boot-test.sh).
         if: inputs.build_host
         shell: bash
         run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Run the owner's boot step (scripts\run-host.ps1) on the same image
+        # The one command of docs\OWNER_CHECKLIST.md step 6: runs the host, waits for its exit, triages the
+        # log (recomp\tools\triage_boot_log.py), copies it and writes the run report. The program ends by
+        # itself here, so the host must exit 0 and the triage report a clean exit.
+        if: inputs.build_host
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          scripts\run-host.ps1 -GameRoot recomp\game -Work out\run-host -TimeoutSeconds 120 -NoGpu
+          if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
+          if (-not (Select-String -Path out\run-host\boot-triage.md -Pattern "clean exit" -Quiet)) { throw "the triage did not report a clean exit" }
+          if (-not (Get-ChildItem out\run-host\boot-logs -File)) { throw "no log copy in out\run-host\boot-logs" }
       - name: Boot ttt2.exe with the Xenos GPU plugin (D3D12 on the runner's software adapter; informative)
         # The first exercise of the graphics path: plugin load, D3D12 device, presentation. The runner
         # has no GPU, so this may fail for reasons the owner's machine will not have; it never blocks.
@@ -117,19 +175,36 @@ jobs:
         shell: bash
         run: |
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
-          rexglue="$PWD/third_party/rexglue-sdk/src/out/install/win-amd64/bin/rexglue.exe"
+          rexglue="$PWD/out/rexglue-sdk-install/bin/rexglue.exe"
           for program in crash stall; do
             scripts/make-ppc-test-xex.sh "recomp/tests/ppc/${program}_ttt2.s" recomp/game/default.xex
             python -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json "out/host-switch_tables-$program.json"
             (cd recomp && "$rexglue" codegen --ignore-stamp ttt2_manifest.toml && cmake --build --preset win-amd64-release)
             scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game "--expect-$program"
           done
-      - name: Upload the host boot log
+      - name: Run the owner's boot step on the stalling program (the timeout closes the window)
+        # The host is still built on stall_ttt2.s: with a 1 s watchdog period the stall dump appears within a
+        # few seconds, the 8 s timeout sends the close request the X button sends (taskkill), the host writes
+        # its stub report and exits 0, and the triage must report the stall and the close.
+        if: inputs.build_host
+        env:
+          SDL_AUDIO_DRIVER: dummy
+          TTT2_WATCHDOG_MS: "1000"
+        run: |
+          scripts\run-host.ps1 -GameRoot recomp\game -Work out\run-host-stall -TimeoutSeconds 8 -NoGpu
+          if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
+          $md = Get-Content out\run-host-stall\boot-triage.md -Raw
+          if ($md -notmatch "\*\*stall: .*closed afterwards\*\*") { throw "the triage did not report the stall and the close" }
+          Get-Content out\run-host-stall\boot-report.txt
+      - name: Upload the host boot log and the boot-step reports
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4
         with:
           name: host-win-amd64-boot-log
-          path: recomp/out/build/win-amd64-release/logs/
+          path: |
+            recomp/out/build/win-amd64-release/logs/
+            out/run-host/
+            out/run-host-stall/
           if-no-files-found: ignore
       - name: Upload the host build listing
         if: always() && inputs.build_host

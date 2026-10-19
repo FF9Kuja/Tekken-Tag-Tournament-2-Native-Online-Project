@@ -8,7 +8,8 @@
 #   1. -Game copies the player's own, Title-Update-3-patched executable to recomp\game\default.xex
 #      (git-ignored; codegen reads it during the build). Without -Game the file must already exist.
 #   2. Checks the SDK package under -SdkInstall (default: the SDK checkout's
-#      out\install\win-amd64, which scripts\build-rexglue-windows.ps1 -Install produces); with
+#      out\install\win-amd64, which scripts\build-rexglue-windows.ps1 -Install produces; or the unzipped
+#      rexglue-sdk-install-win-amd64 artifact of the Windows workflow, which works from any folder); with
 #      -InstallSdk it builds and installs the SDK first (long: runtime, GPU plugin, SDL3).
 #   2b. Runs recomp\tools\find_switch_tables.py on the image: ReXGlue's own jump-table detector misses or
 #      miscompiles several of the shapes TTT2's compiler emits, so the manifests include the finder's
@@ -91,6 +92,7 @@ if (-not (Test-Path $config)) {
         throw "ReXGlue SDK package not found at $SdkInstall (run scripts\build-rexglue-windows.ps1 -Install, or pass -SdkInstall / -InstallSdk)"
     }
 }
+$SdkInstall = (Resolve-Path $SdkInstall).Path   # the configure runs inside recomp\: no relative paths
 Write-Host "SDK package: $SdkInstall"
 
 # 3. codegen first (fresh trees have no generated/default yet), then configure and build the host

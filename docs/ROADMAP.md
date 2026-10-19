@@ -74,13 +74,17 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    against the installed SDK on a Windows runner; recompiled test programs executed natively on Windows).
    [x] The real host boots a license-free image headless (Linux under Xvfb, Windows runner): module launched,
    kernel overrides reached, clean exit (`scripts/host-boot-test.sh`); the crash path exits with a report.
+   [x] The owner's boot step as one command (`scripts/run-host.ps1`, `owner-pipeline.ps1 -Boot`): run, close on
+   timeout, triage, report; both workflows run it on the kernel-import and the stall images. [x] Prebuilt SDK
+   package artifact (`rexglue-sdk-install-win-amd64`, licences included) so the owner skips the SDK build; the
+   Windows workflow builds and boots the host from the relocated package (`-SdkInstall`).
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime
    (implemented / stub / missing; `ttt2-xexinfo --imports`, `ttt2-validate`, `scripts/gen_runtime_exports.py`);
    the SDK's stubs log `<name> STUB` at warn level, which is the import trace. [x] stub-call counter in
    `Ttt2App` and the headless harness (`recomp/src/stub_counter.*`: which stubbed system calls the game reaches,
-   how often, logged on watchdog ticks and in full at exit). Prediction from TTT2 Web's 136-function runtime:
+   how often, logged on watchdog ticks and in full at exit). Prediction from TTT2 Web's 135-function runtime:
    130 implemented in ReXGlue, 5 XAM UI/stats stubs (`docs/RESEARCH.md` 8a); those five are overridden in the
    host already (`recomp/src/kernel_overrides.cpp`, TTT2 Web's results), the mechanism for the rest, and the
    mechanism is executed natively by the kernel-import test program (`recomp/tests/ppc/imports_ttt2.s`, in the

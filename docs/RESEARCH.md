@@ -367,13 +367,19 @@ stubs or nothing before anything is run.
 
 **TTT2's real kernel surface, from TTT2 Web.** TTT2 Web (CC0) reports itself *playable natively*: boot logos, intro
 movie, title screen, menus, character select and fights run on its own runtime. That runtime implements exactly
-136 kernel/XAM functions (`GUEST_IMPORT(...)` in its `runtime/kernel`), which is therefore a measured list of what
+135 kernel/XAM functions (`GUEST_IMPORT(...)` in its `runtime/kernel`), which is therefore a measured list of what
 TTT2 needs up to gameplay. Against the pinned ReXGlue runtime: **130 are implemented, 5 are logging stubs, none is
 missing**. The five stubs are XAM UI / stats calls (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`,
 `XamShowMarketplaceDownloadItemsUI`, `XamShowMarketplaceUI`, `XamUserCreateStatsEnumerator`), which TTT2 Web
 answers with "not available" results; they are the first candidates for host-side overrides if the stub counter
 shows the game reaching them. This is the strongest evidence so far that the SDK runtime can carry TTT2 to the
-menus without large kernel work; the owner's stub report will confirm or correct it.
+menus without large kernel work; the owner's stub report will confirm or correct it. **Variable imports:** TTT2
+Web's loader (`runtime/kernel/module.cpp`, checkout `4d6dd61`) fills seven kernel data imports by name from its
+scan, `KeTimeStampBundle`, `XboxHardwareInfo`, `XboxKrnlVersion`, `XexExecutableModuleHandle`,
+`ExLoadedCommandLine`, `VdGpuClockInMHz` and `VdHSIOCalibrationLock` (ordinals 173, 342, 344, 403, 430, 448,
+449), so those are the ones TTT2 reads; all seven are among the 24 variable exports the pinned ReXGlue runtime
+maps into guest memory (`src/xex/rexglue_runtime_exports.inc`), so no "Variable import ... not implemented"
+poison is expected for them.
 
 **Other facts measured.** `rexglue codegen` skips a project whose stamp is current ("up to date"); re-runs need
 `--ignore-stamp`. `--log-level trace` prints the detector's reasoning (`detectJumpTable:` lines). The runtime

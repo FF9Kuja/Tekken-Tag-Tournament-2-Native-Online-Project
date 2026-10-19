@@ -138,4 +138,3 @@ XexGetModuleSection	runtime/kernel/module.cpp:212	implemented
 XexGetProcedureAddress	runtime/kernel/module.cpp:249	implemented
 XexLoadImage	runtime/kernel/module.cpp:239	implemented
 XexUnloadImage	runtime/kernel/module.cpp:256	implemented
-name	runtime/kernel/guest.h:67	implemented
