@@ -23,36 +23,51 @@ steps that cannot run in the Linux development container. Status legend: done / 
       workflow first runs on GitHub - see `docs/STATUS.md`).
 * Exit criterion met on Linux; Windows CI result pending the first push.
 
-## Milestone 3 - Recompilation foundation  (next)
+## Milestone 3 - Recompilation foundation  (in progress)
 
 Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations documented.
 
 1. [x] ReXGlue SDK pinned (`third_party/rexglue-sdk/PIN`, fetch + Linux build scripts; the `recomp/` skeleton
-   from `rexglue init` is in the tree). [ ] Windows build recipe for the `rexglue` tool.
+   from `rexglue init` is in the tree). [x] Windows build recipe for the `rexglue` tool
+   (`scripts/build-rexglue-windows.ps1`, proven by `.github/workflows/rexglue-windows.yml` on demand).
 2. License-free validation in CI: [x] (a) the SDK's PPC instruction tests through
    `scripts/sdk-recompile-tests.sh` (1458 cases pass on Linux); [x] (b) `scripts/ppc_elf_to_xex.py` +
    `scripts/codegen-smoke-test.sh`: Clang-built PowerPC programs wrapped as XEX2/PE images with `.pdata`,
-   recompiled end to end with expected function counts and syntax-checked output; [ ] (c) an
-   instruction-coverage check for the ~70 instructions TTT2 Web lists (test programs exercising halfword VMX,
-   update-form loads/stores and half-float pack/unpack).
+   recompiled end to end with expected function counts and syntax-checked output; [x] (c) instruction coverage
+   for the 66 instructions TTT2 Web lists: `scripts/check_instruction_coverage.py` (64 have builders;
+   `macchwu`/`maclhwu` decode as VMX128 and matter only in data-as-code) and `recomp/tests/ppc/insn_ttt2.s`
+   translated end to end; [x] (d) jump tables: `recomp/tests/ppc/switch_ttt2.s` (9 TTT2-shaped dispatches) and
+   `recomp/tools/find_switch_tables.py` producing `[[switch_tables]]`, proven by native execution
+   (`--exec`); [x] (e) codegen reports: `recomp/tools/codegen_report.py`.
 3. [x] Ingestion tools (session 2): XDVDFS reader + `ttt2-iso`, STFS reader + `ttt2-stfs`, XEX decrypt /
    basic decompress + `ttt2-xexinfo --image-hash`, XEXP patching via `ttt2-xexpatch` (XenonUtils, MIT, Clang-only).
-   [ ] Run them on the owner's copy (`docs/OWNER_CHECKLIST.md`) and record the verified hashes in
-   `known_titles.hpp` (**needs the owner's files; run locally, report hashes only**).
-4. Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): measure unresolved calls,
-   missing instructions, jump tables found vs. the 526-535 expected; iterate the config; port TTT2 Web's
-   switch-table finder (CC0) if needed; cross-check with XenonAnalyse.
-5. Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others.
-6. Diagnostic pipeline: codegen logs, validation reports, a `recomp/REPORT.md` template.
+   [x] (session 3) `ttt2-validate` one-command check, TU-vs-base pre-check, `--imports` / `--helpers` scans,
+   `scripts/owner-pipeline.ps1`. [ ] Run them on the owner's copy (`docs/OWNER_CHECKLIST.md`) and record the
+   verified hashes in `known_titles.hpp` (**needs the owner's files; run locally, report hashes only**).
+4. [ ] Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): the report tool
+   gives unresolved calls, missing instructions, jump tables found; run the finder on the same image and compare
+   with the 526-535 tables the other ports report; add its `[[switch_tables]]` and the data-as-code
+   `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse.
+5. [ ] Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others
+   (the tools already refuse other titles/versions; the owner's hashes complete the table).
+6. [x] Diagnostic pipeline: codegen logs, validation reports (`codegen_report.py`, `ttt2-validate --json`,
+   `owner-pipeline.ps1` report). [ ] `recomp/REPORT.md` of the real image.
 
 Exit: codegen of the TU3 image completes with zero validation errors (or every remaining error explained), and the
 generated code compiles (**needs Windows for the host link**; a Linux compile-only check of the generated TUs is
 possible).
 
-## Milestone 4 - Native runtime
+**Measured so far (SDK 0.10.0, license-free inputs, session 3):** the SDK's own jump-table detector misses all
+byte/halfword-offset tables and switches on the wrong register for several absolute shapes; manual
+`[[switch_tables]]` entries from our finder are therefore mandatory for TTT2 and are the path the pipeline uses.
 
-1. `src/host` with `Ttt2App` on the SDK; Windows build via CMake preset + CI (host only, no game code).
-2. Boot diagnostics: kernel/XAM import trace, thread watchdog, stall dumps (as both references built).
+## Milestone 4 - Native runtime  (started)
+
+1. [x] `recomp/src/ttt2_app.{h,cpp}` (`Ttt2App` on the SDK; compile-checked on Linux against the SDK with a
+   license-free program as the game). [ ] Windows build via CMake preset + CI (host only, no game code).
+2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
+   harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
+   [ ] kernel/XAM import trace, stall dumps (as both references built).
 3. Iterate on boot failures with the owner's test reports (**needs Windows + GPU + game files**): threads, waits,
    vblank/DPC timing, XAM UI/content calls, TLS, file I/O through the SDK VFS (`game:`, `update:`).
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.

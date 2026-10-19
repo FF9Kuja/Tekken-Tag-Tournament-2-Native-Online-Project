@@ -5,9 +5,11 @@ An independent, in-development **native Windows port of Tekken Tag Tournament 2 
 The Xbox 360 PowerPC code is statically recompiled to C++ and linked against a native runtime; no emulator runs
 during gameplay.
 
-> **Status: early development (Milestones 1-2 of 8 complete).** Nothing is playable yet. What exists today is the
-> research, the architecture, and a tested tooling foundation (XEX2 executable identification). See
-> [`docs/STATUS.md`](docs/STATUS.md) for an honest, dated account of what works.
+> **Status: early development (Milestones 1-2 of 8 complete, 3 and 4 in progress).** Nothing is playable yet.
+> What exists today: the research and architecture, tested tooling to identify, validate and patch a player's own
+> game files, a license-free test suite for the recompiler (jump tables, TTT2's instruction set), a switch-table
+> finder the recompiler needs, and a headless runtime harness in which recompiled test programs already run
+> natively. See [`docs/STATUS.md`](docs/STATUS.md) for an honest, dated account of what works.
 
 **This repository contains no game content.** Players will build the port on their own PC from their own copy of
 the game (disc image + Title Update 3). See [`docs/LEGAL.md`](docs/LEGAL.md).
@@ -38,6 +40,8 @@ scripts\build.ps1 -Preset windows-msvc
 
 `ttt2-xexinfo` reads the plaintext headers of an Xbox 360 executable or title-update patch and reports title ID,
 version, media ID, imports, encryption and hashes, so a player's copy can be identified without decrypting it.
+`ttt2-iso`, `ttt2-stfs`, `ttt2-xexpatch` and `ttt2-validate` cover the disc image, the title update, patching and
+the whole check in one command; `docs/OWNER_CHECKLIST.md` has the copy-paste instructions for a player's own files.
 
 ## Planned feature set
 

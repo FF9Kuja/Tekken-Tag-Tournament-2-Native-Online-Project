@@ -303,10 +303,9 @@ threading model work against that, which is exactly why the T6 project recompile
 * A4. Players own the disc and TU3 and can provide an ISO and the TU file; the project never ships game content.
 
 **Open questions (to be answered by Milestone 3/4)**
-* Q1. Does ReXGlue detect TTT2's jump-table pattern? If not: port TTT2 Web's symbolic finder (CC0) to emit
-  `[[switch_tables]]`.
-* Q2. Which of the ~70 "missing" instructions does ReXGlue already implement (its builders are newer than
-  XenonRecomp `ddd128b`)?
+* Q1. Does ReXGlue detect TTT2's jump-table pattern? **Partly, and not reliably (section 8a):** our finder
+  (`recomp/tools/find_switch_tables.py`) emits the `[[switch_tables]]` entries instead.
+* Q2. Which of the ~70 "missing" instructions does ReXGlue already implement? **64 of 66 (section 8a).**
 * Q3. Exact frame-boundary, input and seed hook addresses in the TU3 image.
 * Q4. Does the SDK's XMA/XAudio path allow a deterministic "audio step" without the T6 patch approach?
 * Q5. Licensing choice for this repository (owner decision; MIT recommended for compatibility with BSD-3/MIT deps).
@@ -317,6 +316,48 @@ threading model work against that, which is exactly why the T6 project recompile
 * R3. Windows-only validation gap: codegen can be exercised on Linux, but boot/gameplay need a Windows PC with a
   D3D12 GPU and the owner's game files.
 * R4. Effort: T6 NO's netplay layer alone is ~30 source files; expect months, not weeks, for Milestones 4-6.
+
+## 8a. Measurements on the pinned ReXGlue SDK (session 3, 2026-10-19, license-free inputs)
+
+All of this was reproduced here with SDK 0.10.0 (`c94f5eb`) built with Clang 20 on Ubuntu 24.04; the test
+programs are in `recomp/tests/ppc/` and the checks in `scripts/codegen-smoke-test.sh`.
+
+**Jump tables (answers Q1).** `switch_ttt2.s` holds nine switch dispatches: TTT2's `lis, rlwinm, addi, lwzx`
+order, a `bgtlr` bounds check, a compare on an `mr` copy, a recomputed biased index with in-place scaling,
+byte-offset and halfword-offset tables, interleaved unrelated instructions, an `ori` low half in a leaf without
+`.pdata`, and the `lwzx` operands in both orders. The SDK's detector (`detectJumpTable` in
+`src/codegen/function_scanner.cpp`) recognises 7 of 9, but:
+* it finds **no** byte- or halfword-offset table, not even in the order its own comments document (a separate
+  probe with four canonical offset forms: 0 of 4). Its `add` heuristic follows the first source operand unless it
+  equals the destination, so any `add` that accumulates into the offset register loses the load chain;
+* for the absolute tables it takes the index register from the `lwzx` *second* operand; with the index in the
+  first operand it ends up switching on the register that holds the loaded target (or on `r12` for the
+  recomputed-index shape), i.e. a miscompile that traps at run time;
+* the table length comes from scanning entries until an invalid one, not from the `cmplwi` bound (the first test
+  table absorbed the next three, 23 entries instead of 8).
+
+Proven by execution rather than inspection: the program recompiled with the SDK's tables traps and never finishes
+in the headless runtime harness (`recomp/tests/host`); recompiled with the `[[switch_tables]]` entries of our
+finder (`recomp/tools/find_switch_tables.py`, symbolic execution between the bounds check and the `bctr`, after
+TTT2 Web's CC0 approach) it returns all 12 expected values. Manual tables override the detector (checked first in
+`discoverBlocks`). Consequence for TTT2: the finder's output is a required input of the codegen config, and the
+owner's first codegen run should include it from the start.
+
+**Instructions (answers Q2).** Of the 66 instructions TTT2 Web added to XenonRecomp for TTT2
+(`recomp/ttt2_instructions.txt`), 64 have builders in the SDK's dispatch table
+(`scripts/check_instruction_coverage.py`); all 64 translate from `insn_ttt2.s`. `macchwu` and `maclhwu` (the
+PowerPC 405 multiply-accumulate forms) have no builder, and the SDK's decoder interprets those opcode-4 words as
+`vsldoi128`, so they are neither reported nor trapped. TTT2 Web found them only in data mistaken for code; in
+ReXGlue 0.10.0 `[[invalid_instructions]]` entries are addresses consulted only when following branches
+(`phase_discover.cpp`), so such words simply must not be reachable.
+
+**Other facts measured.** `rexglue codegen` skips a project whose stamp is current ("up to date"); re-runs need
+`--ignore-stamp`. `--log-level trace` prints the detector's reasoning (`detectJumpTable:` lines). The runtime
+runs recompiled code without a window in tool mode (`Runtime::Setup(PPCImageConfig, {kernel_init, tool_mode})`,
+`LaunchModule()`); the main guest thread's exit sets the kernel object's signal state and `exit_status` to `r3`.
+Clang 18 lowers both C smoke programs' switches to value tables (no `bctr`), so C sources cannot exercise jump
+tables; assembly through the SDK's bundled `powerpc-none-elf-as` can (VMX128 included; `vrlw128`/`vsel128` need
+raw words because of an operand-table defect in that binutils build).
 
 ## 9. Sources
 

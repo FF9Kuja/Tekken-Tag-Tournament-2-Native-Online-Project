@@ -24,7 +24,9 @@ Microsoft is a dependency: game content is supplied by the player at install tim
 | libmspack `lzxd.c` | XenonRecomp submodule | LGPL-2.1 | compiled into `ttt2_xexpatcher` (static); sources of the combined work are public, satisfying relinking | LZX delta decoding |
 | tiny-AES-c | XenonRecomp submodule | Unlicense | compiled into `ttt2_xexpatcher` | AES for the patcher |
 | TinySHA1 | in XenonRecomp tree | MIT | header | digests in the patcher |
-| ReXGlue SDK | `c94f5eb` = v0.10.0 (`third_party/rexglue-sdk/PIN`) | BSD-3 | `scripts/fetch-rexglue-sdk.{sh,ps1}` + `scripts/build-rexglue-linux.sh` | codegen tool (`rexglue`) and, later, the runtime |
+| ReXGlue SDK | `c94f5eb` = v0.10.0 (`third_party/rexglue-sdk/PIN`) | BSD-3 | `scripts/fetch-rexglue-sdk.{sh,ps1}` + `scripts/build-rexglue-linux.sh` / `build-rexglue-windows.ps1` | codegen tool (`rexglue`), the runtime (`recomp/`, `recomp/tests/host`), bundled `powerpc-none-elf` binutils (GPL, developer tool only: assembles test programs) |
+| Xbox 360 export tables (`src/xex/xbox_exports_table.inc`) | generated from the XenonRecomp pin above by `scripts/gen_xbox_exports.py` | MIT (XenonRecomp), originally Xenia BSD-3 | committed, regenerated on pin bumps | ordinal -> name of kernel/XAM exports for `ttt2-xexinfo --imports` / `ttt2-validate` |
+| LLVM 20.1.8 release tarball | `llvmorg-20.1.8` (GitHub release) | Apache-2.0 with LLVM exception | developer tool, only where apt.llvm.org is unreachable | Clang 20 for the SDK build on Linux |
 
 ## Planned (Milestone 3+)
 

@@ -2,6 +2,72 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
+
+**Completed**
+* **Toolchain in the container**: LLVM 20.1.8 from the GitHub release tarball (apt.llvm.org is blocked by the
+  session proxy), the SDK's Linux dependencies, the pinned ReXGlue SDK built (`rexglue` 0.10.0.2-dev, 809 steps,
+  about 6 minutes), the runtime library built twice more for the host tests below.
+* **Jump tables, measured** (`recomp/tests/ppc/switch_ttt2.s`, nine dispatch shapes including TTT2's
+  `lis, rlwinm, addi, lwzx` order, `bgtlr` bounds checks, `mr` aliases, recomputed indices, byte- and
+  halfword-offset tables, `ori` low halves, a leaf without `.pdata`, both `lwzx` operand orders):
+  - SDK 0.10.0 recognises 7 of 9 dispatches; it misses every offset-table form (its `add` operand heuristic
+    tracks the base register) in its own documented order too (`probe_offset.s` experiment, 0 of 4).
+  - Several of the 7 are emitted with the **wrong switch register** (the register that holds the loaded target,
+    or `r12`), and the table length comes from an entry-validity scan, not the bounds check.
+  - **Proof by execution**: the recompiled program run natively through the ReXGlue runtime (headless harness,
+    `recomp/tests/host`) traps and never finishes with the SDK's tables; with the tables from our own finder it
+    produces all 12 expected values, 3 runs out of 3 (`scripts/codegen-smoke-test.sh --exec`).
+* **`recomp/tools/find_switch_tables.py`**: clean-room symbolic finder (approach after TTT2 Web, CC0) that emits
+  ReXGlue `[[switch_tables]]` entries; finds 9/9 on the test image, 4/4 on the offset probe, 0 false positives on
+  the C programs; handles the compare-on-a-copy and scaled-in-place index cases (stretched label lists) and
+  reports unresolved dispatches with the reason.
+* **Instruction coverage, measured** (`scripts/check_instruction_coverage.py`, `recomp/ttt2_instructions.txt`):
+  64 of the 66 instructions TTT2 Web added for TTT2 have builders in SDK 0.10.0; `macchwu`/`maclhwu` have none and
+  the SDK's decoder reads those opcode-4 words as `vsldoi128` (they occur only in data-as-code in TTT2). All 64
+  translate from `recomp/tests/ppc/insn_ttt2.s` (verified per mnemonic in the generated code).
+* **Diagnostics**: `recomp/tools/codegen_report.py` (functions, imports, switches, unimplemented sites,
+  analysis errors, instruction mix; REPORT.md + JSON; unit-tested on synthetic output, `tests/python`);
+  `scripts/codegen-smoke-test.sh` rebuilt around it (two-pass switch case, instruction case, `--exec`).
+* **Game-file validation**: `ttt2::xex::check_patch_compatibility` (title IDs, versions, delta-descriptor
+  windows, digest notes) wired into `ttt2-xexpatch` (refuses mismatched pairs, `--force` overrides);
+  `ttt2-validate <iso> <tu-or-folder>` one-command report (finds the TU3 package in a folder, applies the update
+  in memory when built with Clang, hashes, imports, helper addresses, `--json`, `--work`);
+  `ttt2-xexinfo --imports` (ordinal names from the kernel/XAM export tables, `src/xex/xbox_exports_table.inc`
+  generated from the pinned XenonRecomp checkout) and `--helpers` (the eight save/restore helpers by byte pattern).
+  Known-hash table gains the reported TU3 image SHA-1.
+* **Host**: `recomp/src/ttt2_app.{h,cpp}` implements the `ReXApp` hooks (paths, backend log, executable
+  identification against title `4E4D0859` / version 0.0.3.2, import summary, guest-thread watchdog);
+  `recomp/tests/host/headless_main.cpp` is the headless runtime harness.
+* **Windows**: `scripts/build-rexglue-windows.ps1` (the SDK's own CI recipe: LLVM clang + Ninja, `win-amd64`
+  preset), `.github/workflows/rexglue-windows.yml` (builds `rexglue.exe` on a Windows runner, runs the smoke
+  test, uploads the tool), `scripts/owner-pipeline.ps1` (one command from ISO + TU to a text report, optional
+  codegen + report). `sdk-validation.yml` installs Clang 20 through `llvm.sh` and runs the new checks.
+* `recomp/ttt2_config.toml`: the `[[invalid_instructions]]` entry copied from XenonRecomp semantics removed
+  (in ReXGlue `data` is an address, consulted only when following branches).
+
+**Verified (where)**
+* Linux container, Clang 18 and GCC 13 `-Werror`: 49 doctest cases / 573 assertions, 9 ctest entries; Python unit
+  tests 6/6; hygiene check clean.
+* `scripts/codegen-smoke-test.sh --exec` with the SDK built here: smoke 6/0/0, jumptable 2/0/0, switch_ttt2
+  12 functions / 7 SDK switches / 9 with the finder, insn_ttt2 8 functions with 64 mnemonics translated; the
+  native run passes with the finder's tables and fails with the SDK's; all generated units compile against the
+  SDK headers.
+* Everything above on license-free programs only. Nothing was run on game files (none here, by design).
+
+**Not verified / open**
+* Windows: the ReXApp host (`recomp/`, `Ttt2App`) builds and links on Linux against the SDK with a license-free
+  program as its game (verified here); it was not run (no display in the container). The Windows build of the
+  host and of `rexglue.exe` are exercised only by the GitHub workflows (run on demand).
+* `scripts/owner-pipeline.ps1` and `scripts/build-rexglue-windows.ps1` are untested here (no PowerShell).
+* Which `lwzx`/`add` operand orders TTT2's compiler emits is unknown until the owner's codegen report; the finder
+  handles both, the SDK one.
+* The real TU3 image: counts of unresolved calls, jump tables (526-535 expected) and data-as-code sites come
+  from the owner's run (`docs/OWNER_CHECKLIST.md`, step 5).
+
+**Blocked / pending**
+* Owner's files for Milestone 3 steps 3-5 (hashes, codegen report). Nothing else blocks.
+
 ## 2026-10-19 - Session 2: synchronisation attempt and Milestone 3 pipeline tools
 
 **Completed**

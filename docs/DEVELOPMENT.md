@@ -42,9 +42,33 @@ the Linux jobs; the Windows jobs will get it once their first run shows a clean 
   the decrypted image); `extract` copies one file out.
 * `ttt2-stfs info|identify|extract <package> ...` - reads a title-update package (LIVE/PIRS/CON); `identify`
   reports the contained `.xexp`'s source -> target version.
-* `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex>` - applies a title update (Clang builds only; needs
-  `scripts/fetch-xenonrecomp.sh` or `.ps1` first).
-* The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`.
+* `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]` - applies a title update (Clang builds only; needs
+  `scripts/fetch-xenonrecomp.sh` or `.ps1` first). The plaintext headers of both files are checked against each
+  other first (title ID, versions, descriptor windows); a pair that cannot match is refused unless `--force`.
+* `ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR]` - everything above in one
+  command: identifies the disc executable and the update (a folder is searched for the package whose
+  `Default.xexp` targets 0.0.3.2), runs the pre-check, applies the update in memory when the patcher is compiled
+  in, and reports hashes, import counts and the save/restore helper addresses of the image the recompiler sees.
+* `ttt2-xexinfo --imports` names every kernel/XAM import (ordinal, thunk and slot address) from the export
+  tables in `src/xex/xbox_exports_table.inc` (regenerate with `scripts/gen_xbox_exports.py` after bumping the
+  XenonRecomp pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
+* The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+
+## Recompiler tooling (`recomp/tools`, `scripts`)
+
+* `recomp/tools/codegen_report.py <generated dir> [--log codegen.log]` - summarises a `rexglue codegen` run
+  (functions, imports, jump tables, unimplemented sites, analysis errors, instruction mix) as REPORT.md / JSON
+  with counts and addresses only; `--expect-*` options turn it into a check. Unit tests: `tests/python`
+  (`python3 -I -m unittest discover -s tests/python`).
+* `recomp/tools/find_switch_tables.py <image.xex> --toml tables.toml` - finds switch jump tables by symbolic
+  execution and writes ReXGlue `[[switch_tables]]` entries; include the file from the codegen config. Needed
+  because SDK 0.10.0's own detector misses offset tables and picks wrong registers (`docs/RESEARCH.md` 8a).
+* `scripts/check_instruction_coverage.py [--expect-missing 2]` - compares `recomp/ttt2_instructions.txt` with
+  the SDK's instruction builders.
+* `scripts/make-ppc-test-xex.sh <source.c|.s> <out.xex>` - builds a license-free PowerPC test program and packs
+  it as an XEX2 image (assembly through the SDK's bundled binutils); writes `<out.xex>.syms`.
+* `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
+  runs the program natively and checks the values it stores (`scripts/codegen-smoke-test.sh --exec`).
 
 ## Repository hygiene
 
@@ -61,14 +85,18 @@ it on every push. Install it as a pre-commit hook with `scripts/install-git-hook
 
 ## Continuous integration
 
-`.github/workflows/ci.yml`: hygiene check; Linux clang and gcc (`-Werror`); Windows MSVC (VS 2022 generator) and
-clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also smoke-test `ttt2-xexinfo`.
+`.github/workflows/ci.yml`: hygiene check and Python unit tests; Linux clang and gcc (`-Werror`); Windows MSVC (VS
+2022 generator) and clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also smoke-test the
+tools. `sdk-validation.yml` (weekly/manual) builds the SDK and runs the codegen checks; `rexglue-windows.yml`
+(weekly/manual) builds `rexglue.exe` on Windows.
 
 ## Working with the ReXGlue SDK on Linux (Milestone 3 preview)
 
 Measured in the first session on Ubuntu 24.04 (the SDK wiki is right: **Clang 20** is needed on Linux - Clang 18
 reports `__cpp_concepts 201907L`, so libstdc++ 13 hides `std::expected`, which `rex/result.h` uses). The SDK's
-core also needs SSSE3 enabled (`-mssse3`; the tekken6-recomp README passes the same flag).
+core also needs SSSE3 enabled (`-mssse3`; the tekken6-recomp README passes the same flag). Where apt.llvm.org is
+unreachable, the LLVM GitHub release tarball works (`LLVM-20.1.8-Linux-X64.tar.xz`, 2 GB; symlink
+`clang-20`/`clang++-20`/`ld.lld-20` into the PATH), which is how session 3 built the SDK.
 
 ```sh
 sudo apt-get install -y clang-20 lld-20 libclang-rt-20-dev cmake ninja-build nasm \
@@ -102,4 +130,14 @@ scripts/codegen-smoke-test.sh /path/to/rexglue-sdk/out/linux-amd64/rexglue /path
 ```
 
 `scripts/ppc_elf_to_xex.py` is the packer behind it (PE32 for PowerPC-BE with a `.pdata` exception directory
-synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers).
+synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers). Add `--exec` to
+also build `recomp/tests/host` and run the switch-table program natively (slow: it builds the runtime). To
+compile-check the real host (`recomp/`, `Ttt2App`) on Linux, put any test image at `recomp/game/default.xex` and
+configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `-mssse3`).
+
+## Windows build of the codegen tool
+
+`scripts\build-rexglue-windows.ps1` follows the SDK's own CI (LLVM clang + Ninja, `win-amd64` preset; needs
+Visual Studio 2022's C++ workload for the Windows SDK headers). `.github/workflows/rexglue-windows.yml` runs the
+same steps on a Windows runner on demand and uploads `rexglue.exe` as an artifact, so the owner can also download
+the tool instead of building it.
