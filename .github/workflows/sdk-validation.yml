@@ -50,6 +50,9 @@ jobs:
           cmake --install third_party/rexglue-sdk/src/build/linux --prefix "$PWD/out/sdk-install"
           mkdir -p recomp/game
           cp out/codegen-smoke/switch_ttt2/switch_ttt2.xex recomp/game/default.xex
+          # codegen before the first configure: the generated glue only picks the recompiled sources up
+          # when generated/default exists at configure time (a fresh tree has none)
+          (cd recomp && ../out/sdk-install/bin/rexglue codegen ttt2_manifest.toml)
           cmake -S recomp -B out/host-linux -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
                 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/out/sdk-install"
           cmake --build out/host-linux --parallel

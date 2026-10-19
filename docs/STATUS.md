@@ -40,6 +40,11 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   "Layout vs TTT2 Web: N of 8 helper addresses match", and only a full match makes the boundaries applicable;
   `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
   the variant codegen as a second pass only on a match (both reports are written for comparison).
+* Two findings from the first CI runs of the host-build route, fixed and reproduced locally: on a fresh tree the
+  SDK's generated CMake glue only picks the recompiled sources up when `generated/default` exists at configure
+  time (the link failed with an undefined `PPCImageConfig`), so `build-host.ps1` and the SDK workflow run
+  `rexglue codegen` before the first configure; and the smoke test's positional-argument re-split dropped the
+  empty SDK argument the Windows workflow passes, shifting the work directory into the SDK slot.
 * Windows workflow fixes from its first run on `main`: the SDK checkout failed with "Filename too long"
   (vulkan-loader fuzzer test data beyond 260 characters) - `fetch-rexglue-sdk.ps1` now clones with
   `core.longpaths=true`; the LLVM install falls back to the latest package when the pinned version is missing;
@@ -51,8 +56,10 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Linux container: 52 doctest cases / 612 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
   Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
   against the package.
-* Windows: CI jobs (tools) green; the ReXGlue Windows workflow's first run on `main` reached the LLVM install
-  (pinned 20.1.8 installs) and failed at the SDK checkout (fixed as above, to be re-run after this PR).
+* Windows: CI jobs (tools) green. The ReXGlue Windows workflow: the first run on `main` failed at the SDK
+  checkout (long paths); after the fix, on the PR branch, **`rexglue.exe` built on the Windows runner in 4.5
+  minutes and was uploaded as an artifact** (LLVM 20.1.8 from Chocolatey); its smoke test then failed on the
+  empty-argument bug above, fixed here.
 
 **Not verified / open**
 * `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of

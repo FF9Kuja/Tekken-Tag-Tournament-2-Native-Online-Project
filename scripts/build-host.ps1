@@ -10,9 +10,11 @@
 #   2. Checks the SDK package under -SdkInstall (default: the SDK checkout's
 #      out\install\win-amd64, which scripts\build-rexglue-windows.ps1 -Install produces); with
 #      -InstallSdk it builds and installs the SDK first (long: runtime, GPU plugin, SDL3).
-#   3. Configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
-#      CMAKE_PREFIX_PATH pointing at the package, then builds. `rexglue codegen` runs inside the
-#      build (recomp\generated\rexglue.cmake), so the generated C++ never has to be run by hand.
+#   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml, then
+#      configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
+#      CMAKE_PREFIX_PATH pointing at the package, and builds. The generated glue only picks the
+#      recompiled sources up when they exist at configure time, so codegen comes first; the build
+#      re-runs it whenever the manifest's inputs change.
 #   4. Prints the executable and the DLLs copied next to it, and writes host-listing.txt into the
 #      build directory (names and sizes only).
 # Requirements: LLVM clang 20+ on PATH (winget install LLVM.LLVM), CMake 3.25+, Ninja, Visual Studio
@@ -69,7 +71,9 @@ if (-not (Test-Path $config)) {
 }
 Write-Host "SDK package: $SdkInstall"
 
-# 3. configure and build the host
+# 3. codegen first (fresh trees have no generated/default yet), then configure and build the host
+$rexglue = Join-Path $SdkInstall "bin\rexglue.exe"
+if (-not (Test-Path $rexglue)) { throw "rexglue.exe not found in the SDK package: $rexglue" }
 $clangDir = Find-Clang
 if (-not $clangDir) { throw "clang.exe not found: install LLVM 20+ (winget install LLVM.LLVM)" }
 $env:PATH = "$clangDir;$env:PATH"
@@ -78,6 +82,10 @@ foreach ($tool in @("cmake", "ninja")) {
 }
 Push-Location (Join-Path $root "recomp")
 try {
+    Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml)..."
+    & $rexglue codegen ttt2_manifest.toml
+    if ($LASTEXITCODE -ne 0) { throw "rexglue codegen failed ($LASTEXITCODE)" }
+    if (-not (Test-Path "generated\default\sources.cmake")) { throw "codegen produced no generated\default\sources.cmake" }
     cmake --preset $Preset "-DCMAKE_PREFIX_PATH=$SdkInstall"
     if ($LASTEXITCODE -ne 0) { throw "CMake configure failed ($LASTEXITCODE)" }
     cmake --build --preset $Preset

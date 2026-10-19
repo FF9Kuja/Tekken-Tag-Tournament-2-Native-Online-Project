@@ -20,16 +20,19 @@
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# Positional arguments are kept by position (an empty SDK argument, as the Windows workflow passes
+# when it skips the native run, must not shift the work directory into the SDK slot).
 exec_mode=0
-positional=""
+n=0
+p1=""; p2=""; p3=""
 for a in "$@"; do
-    if [ "$a" = "--exec" ]; then exec_mode=1; else positional="$positional $a"; fi
+    if [ "$a" = "--exec" ]; then exec_mode=1; continue; fi
+    n=$((n + 1))
+    case $n in 1) p1="$a" ;; 2) p2="$a" ;; 3) p3="$a" ;; esac
 done
-# shellcheck disable=SC2086
-set -- $positional
-rexglue="${1:?rexglue executable}"
-sdk="${2:-}"
-work="${3:-$root/out/codegen-smoke}"
+rexglue="${p1:?rexglue executable}"
+sdk="$p2"
+work="${p3:-$root/out/codegen-smoke}"
 cxx="${CXX:-clang++-20}"
 cc="${CC:-clang-20}"
 report="$root/recomp/tools/codegen_report.py"
