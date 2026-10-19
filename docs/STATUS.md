@@ -139,7 +139,9 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 **Not verified / open**
 * The stall detector fired natively on a license-free program that spins forever (`recomp/tests/ppc/stall_ttt2.s`,
   `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
-  1 s watchdog period); the crash reporter fired on the illegal-instruction case. The GPU plugin loads only when
+  1 s watchdog period); the crash reporter fired on the illegal-instruction case and on `crash_ttt2.s` (a write
+  to the null page; HOST CRASH block with the fault address, exit 3 in 0.2 s). Both workflows run the normal,
+  crash and stall forms of the boot test, rebuilding the host on each image. The GPU plugin loads only when
   a GPU is present: never exercised in CI (no GPU; the boot test runs with
   `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
 * `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the

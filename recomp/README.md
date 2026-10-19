@@ -30,7 +30,7 @@ programs in `tests/ppc/`, see `docs/DEVELOPMENT.md`.
 |---|---|
 | `tools/find_switch_tables.py` | symbolic switch-table finder; writes `[[switch_tables]]` for the config (required: the SDK's detector misses/miscompiles several shapes) |
 | `tools/codegen_report.py` | summarises a codegen run as REPORT.md / JSON (counts, addresses, names only) |
-| `tests/ppc/*.c`, `*.s` | license-free PowerPC test programs: smoke, jump-table shapes (`switch_ttt2.s`), the TTT2 instruction list (`insn_ttt2.s`), kernel imports through a real XEX import table (`imports_ttt2.s` + `.imports`) |
+| `tests/ppc/*.c`, `*.s` | license-free PowerPC test programs: smoke, jump-table shapes (`switch_ttt2.s`), the TTT2 instruction list (`insn_ttt2.s`), kernel imports through a real XEX import table (`imports_ttt2.s` + `.imports`), a deliberate crash (`crash_ttt2.s`) and an endless spin (`stall_ttt2.s`) for the host's crash report and stall dump |
 | `tests/host/` | headless host: runs a recompiled test program through the runtime, checks its results and reports the kernel stubs it reached |
 | `ttt2_functions.ttt2web.toml`, `ttt2_manifest.ttt2web.toml`, `tools/import_ttt2web_functions.py` | TTT2 Web's (CC0) 18k explicit function boundaries in ReXGlue form and the manifest variant that includes them, used only when the image's helper addresses match TTT2 Web's |
 | `ttt2_instructions.txt` | the 66 instructions TTT2 needs beyond XenonRecomp's original set (from TTT2 Web, CC0) |

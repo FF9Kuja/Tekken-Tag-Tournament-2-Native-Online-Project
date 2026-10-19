@@ -68,6 +68,12 @@ jobs:
           (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-stall
+          # And on a program that writes to the null page: the crash report must be logged and the host exit 3.
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/crash_ttt2.s recomp/game/default.xex
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-crash.json
+          (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-crash
       - name: Upload the host boot log
         if: always()
         uses: actions/upload-artifact@v4

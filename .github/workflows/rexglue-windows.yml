@@ -94,6 +94,20 @@ jobs:
         if: inputs.build_host
         shell: bash
         run: scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 120
+      - name: Boot ttt2.exe on the crashing and the stalling programs (crash report, stall dump)
+        # The same host rebuilt on recomp/tests/ppc/crash_ttt2.s (writes to the null page: HOST CRASH
+        # block, exit code 3) and stall_ttt2.s (spins forever: the watchdog's per-thread stall dump).
+        if: inputs.build_host
+        shell: bash
+        run: |
+          export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
+          rexglue="$PWD/third_party/rexglue-sdk/src/out/install/win-amd64/bin/rexglue.exe"
+          for program in crash stall; do
+            scripts/make-ppc-test-xex.sh "recomp/tests/ppc/${program}_ttt2.s" recomp/game/default.xex
+            python -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json "out/host-switch_tables-$program.json"
+            (cd recomp && "$rexglue" codegen --ignore-stamp ttt2_manifest.toml && cmake --build --preset win-amd64-release)
+            scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game "--expect-$program"
+          done
       - name: Upload the host boot log
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4
