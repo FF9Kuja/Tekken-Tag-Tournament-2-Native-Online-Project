@@ -26,6 +26,11 @@ Binaries land in `out/build/<preset>/bin/` (MSVC: `bin/<Config>/`).
 Options: `TTT2_BUILD_TESTS` (ON), `TTT2_BUILD_TOOLS` (ON), `TTT2_WARNINGS_AS_ERRORS` (OFF; CI turns it on for
 the Linux jobs; the Windows jobs will get it once their first run shows a clean log).
 
+`ctest` runs the doctest unit tests, the Python unit tests, the tools' version/rejection smoke tests and four
+end-to-end runs of `ttt2-validate` on synthetic fixtures: `tests/tools/make_validate_fixtures.cpp` writes a disc
+image, two title-update packages and a folder tree into the build directory, `tests/tools/run_expect.cmake` runs
+the tool and checks exit code, printed reasons and the files written to `--work`. All inputs are synthetic.
+
 ## Tools
 
 * `ttt2-xexinfo <file.xex|.xexp> [--json] [--headers] [--no-hash]` - identify an Xbox 360 executable or title
@@ -45,10 +50,11 @@ the Linux jobs; the Windows jobs will get it once their first run shows a clean 
 * `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]` - applies a title update (Clang builds only; needs
   `scripts/fetch-xenonrecomp.sh` or `.ps1` first). The plaintext headers of both files are checked against each
   other first (title ID, versions, descriptor windows); a pair that cannot match is refused unless `--force`.
-* `ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR]` - everything above in one
-  command: identifies the disc executable and the update (a folder is searched for the package whose
+* `ttt2-validate <image.iso> <title-update-file-or-folder> [--json] [--work DIR] [--no-patch]` - everything
+  above in one command: identifies the disc executable and the update (a folder is searched for the package whose
   `Default.xexp` targets 0.0.3.2), runs the pre-check, applies the update in memory when the patcher is compiled
   in, and reports hashes, import counts and the save/restore helper addresses of the image the recompiler sees.
+  `--no-patch` stops after the pre-check (the end-to-end tests use it).
 * `ttt2-xexinfo --imports` names every kernel/XAM import (ordinal, thunk and slot address) from the export
   tables in `src/xex/xbox_exports_table.inc` (regenerate with `scripts/gen_xbox_exports.py` after bumping the
   XenonRecomp pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
@@ -141,3 +147,7 @@ configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `
 Visual Studio 2022's C++ workload for the Windows SDK headers). `.github/workflows/rexglue-windows.yml` runs the
 same steps on a Windows runner on demand and uploads `rexglue.exe` as an artifact, so the owner can also download
 the tool instead of building it.
+
+Without a Windows machine the PowerShell scripts are checked with the PowerShell 7 parser
+(`pwsh -Command '[System.Management.Automation.Language.Parser]::ParseFile(...)'`) and the workflow files with
+`actionlint`; both are cheap and worth running before a push, actionlint caught an invalid YAML step name once.

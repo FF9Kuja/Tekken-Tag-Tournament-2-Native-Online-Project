@@ -38,7 +38,9 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
    `macchwu`/`maclhwu` decode as VMX128 and matter only in data-as-code) and `recomp/tests/ppc/insn_ttt2.s`
    translated end to end; [x] (d) jump tables: `recomp/tests/ppc/switch_ttt2.s` (9 TTT2-shaped dispatches) and
    `recomp/tools/find_switch_tables.py` producing `[[switch_tables]]`, proven by native execution
-   (`--exec`); [x] (e) codegen reports: `recomp/tools/codegen_report.py`.
+   (`--exec`); [x] (e) codegen reports: `recomp/tools/codegen_report.py`; [x] (f) end-to-end runs of
+   `ttt2-validate` on synthetic disc/title-update fixtures in ctest (matching pair, folder search, mismatch, no
+   update).
 3. [x] Ingestion tools (session 2): XDVDFS reader + `ttt2-iso`, STFS reader + `ttt2-stfs`, XEX decrypt /
    basic decompress + `ttt2-xexinfo --image-hash`, XEXP patching via `ttt2-xexpatch` (XenonUtils, MIT, Clang-only).
    [x] (session 3) `ttt2-validate` one-command check, TU-vs-base pre-check, `--imports` / `--helpers` scans,

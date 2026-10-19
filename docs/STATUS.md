@@ -45,10 +45,21 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   codegen + report). `sdk-validation.yml` installs Clang 20 through `llvm.sh` and runs the new checks.
 * `recomp/ttt2_config.toml`: the `[[invalid_instructions]]` entry copied from XenonRecomp semantics removed
   (in ReXGlue `data` is an address, consulted only when following branches).
+* **End-to-end tool test on synthetic inputs** (`tests/tools/make_validate_fixtures.cpp`, `run_expect.cmake`):
+  a generator writes a disc image whose `default.xex` is a synthetic PE title executable, a matching title-update
+  package (its patch's source digest is the SHA-1 of the base's headers), a mismatching package and a
+  console-style `Content` tree with decoys; four ctest entries run `ttt2-validate` the way the owner does and
+  check exit codes, the printed reasons (digest note, import counts, helper addresses, "version mismatch", "no
+  Title Update 3 package found") and the files written to `--work`. New `--no-patch` option keeps the runs
+  identical with and without the Clang-only patcher.
+* **Windows files checked without Windows**: all five PowerShell scripts parse with PowerShell 7.4.6 (parser API
+  only, not executed); `actionlint` 1.7.7 found that `sdk-validation.yml` was invalid YAML (an unquoted `:` in a
+  step name) - fixed, all workflows lint clean.
 
 **Verified (where)**
-* Linux container, Clang 18 and GCC 13 `-Werror`: 49 doctest cases / 573 assertions, 9 ctest entries; Python unit
-  tests 6/6; hygiene check clean.
+* Linux container, Clang 18 and GCC 13 `-Werror`: 49 doctest cases / 573 assertions, 13 ctest entries (4 of them
+  end-to-end runs of `ttt2-validate` on synthetic fixtures); Python unit tests 6/6; hygiene check clean;
+  `actionlint` clean; PowerShell parse clean.
 * `scripts/codegen-smoke-test.sh --exec` with the SDK built here: smoke 6/0/0, jumptable 2/0/0, switch_ttt2
   12 functions / 7 SDK switches / 9 with the finder, insn_ttt2 8 functions with 64 mnemonics translated; the
   native run passes with the finder's tables and fails with the SDK's; all generated units compile against the
@@ -59,14 +70,19 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Windows: the ReXApp host (`recomp/`, `Ttt2App`) builds and links on Linux against the SDK with a license-free
   program as its game (verified here); it was not run (no display in the container). The Windows build of the
   host and of `rexglue.exe` are exercised only by the GitHub workflows (run on demand).
-* `scripts/owner-pipeline.ps1` and `scripts/build-rexglue-windows.ps1` are untested here (no PowerShell).
+* `scripts/owner-pipeline.ps1` and `scripts/build-rexglue-windows.ps1` parse (PowerShell 7.4.6) but were not
+  executed here (they need Visual Studio); their first real run is the owner's or the Windows workflow's.
 * Which `lwzx`/`add` operand orders TTT2's compiler emits is unknown until the owner's codegen report; the finder
   handles both, the SDK one.
 * The real TU3 image: counts of unresolved calls, jump tables (526-535 expected) and data-as-code sites come
   from the owner's run (`docs/OWNER_CHECKLIST.md`, step 5).
 
 **Blocked / pending**
-* Owner's files for Milestone 3 steps 3-5 (hashes, codegen report). Nothing else blocks.
+* Owner's files for Milestone 3 steps 3-5 (hashes, codegen report).
+* At the end of the session `git push` and the GitHub API both answered 403 for this repository ("Claude doesn't
+  have GitHub access ... for your organization" / "Resource not accessible by integration"): the Claude GitHub App
+  had lost access. The branch `claude/ttt2-native-execution-vw1vio` was kept locally and handed to the owner as a
+  git bundle; re-linking the app lets the push and the pull request go through.
 
 ## 2026-10-19 - Session 2: synchronisation attempt and Milestone 3 pipeline tools
 
