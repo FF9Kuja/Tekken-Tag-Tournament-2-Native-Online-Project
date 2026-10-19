@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 
 set(TTT2_SOURCES
     src/main.cpp
+    src/ttt2_app.cpp
 )
 
 if(WIN32)
@@ -22,3 +23,9 @@ else()
 endif()
 
 rexglue_setup_target(ttt2)
+
+# rex/rex_app.h pulls in the SDK's ImGui-based UI headers; in a source-tree build (REXSDK_DIR) the
+# ImGui target is not propagated to consumers, so link it explicitly for the include directories.
+if(TARGET imgui::imgui)
+    target_link_libraries(ttt2 PRIVATE imgui::imgui)
+endif()
