@@ -11,11 +11,15 @@ permissions:
 
 jobs:
   hygiene:
-    name: Repository hygiene (no game content, no secrets)
+    name: Repository hygiene (no game content, no secrets) and Python tools
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: python3 scripts/check_repo_hygiene.py
+      - name: Python tool unit tests (codegen report on synthetic output)
+        run: python3 -I -m unittest discover -s tests/python -v
+      - name: Switch-table finder and packer compile
+        run: python3 -I -m py_compile recomp/tools/find_switch_tables.py scripts/ppc_elf_to_xex.py scripts/check_instruction_coverage.py scripts/gen_xbox_exports.py
 
   linux:
     name: Linux ${{ matrix.compiler }}
@@ -48,7 +52,11 @@ jobs:
           ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo --version
           ./out/build/${{ matrix.preset }}/bin/ttt2-iso --version
           ./out/build/${{ matrix.preset }}/bin/ttt2-stfs --version
+          ./out/build/${{ matrix.preset }}/bin/ttt2-validate --version
           if [ -x ./out/build/${{ matrix.preset }}/bin/ttt2-xexpatch ]; then ./out/build/${{ matrix.preset }}/bin/ttt2-xexpatch --version; fi
+          # license-free PowerPC test images pack with the Linux toolchain (Clang + LLD + the packer)
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/smoke.c out/smoke-test.xex && ./out/build/${{ matrix.preset }}/bin/ttt2-xexinfo out/smoke-test.xex --no-hash | head -5
+          python3 -I recomp/tools/find_switch_tables.py out/smoke-test.xex
       - name: Hygiene check on the build tree (no game content may appear)
         run: python3 scripts/check_repo_hygiene.py
 
@@ -64,7 +72,9 @@ jobs:
       - name: Test
         run: ctest --preset windows-msvc
       - name: Tool smoke test
-        run: .\out\build\windows-msvc\bin\Release\ttt2-xexinfo.exe --version
+        run: |
+          .\out\build\windows-msvc\bin\Release\ttt2-xexinfo.exe --version
+          .\out\build\windows-msvc\bin\Release\ttt2-validate.exe --version
 
   windows-clang-cl:
     name: Windows clang-cl (Ninja)
