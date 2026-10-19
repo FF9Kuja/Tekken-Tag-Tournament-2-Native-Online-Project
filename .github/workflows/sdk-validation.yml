@@ -6,6 +6,11 @@ name: SDK validation (ReXGlue on Linux)
 
 on:
   workflow_dispatch:
+    inputs:
+      sdk_commit:
+        description: "ReXGlue SDK commit to build instead of the pin (third_party/rexglue-sdk/PIN): for evaluating a snapshot; empty = the pin"
+        type: string
+        default: ""
   schedule:
     - cron: "17 4 * * 1"
 
@@ -30,7 +35,9 @@ jobs:
             libxinerama-dev libxcursor-dev libxi-dev libxrandr-dev libasound2-dev libpulse-dev libwayland-dev \
             libdecor-0-dev libxkbcommon-dev libdrm-dev libgbm-dev libibus-1.0-dev libudev-dev libegl1-mesa-dev \
             libgl1-mesa-dev libdbus-1-dev xvfb
-      - name: Fetch the pinned SDK
+      - name: Fetch the pinned SDK (or the sdk_commit snapshot)
+        env:
+          REXGLUE_SDK_COMMIT: ${{ inputs.sdk_commit }}
         run: scripts/fetch-rexglue-sdk.sh
       - name: Build the codegen tool and run the PPC instruction tests
         run: scripts/build-rexglue-linux.sh third_party/rexglue-sdk/src --with-tests

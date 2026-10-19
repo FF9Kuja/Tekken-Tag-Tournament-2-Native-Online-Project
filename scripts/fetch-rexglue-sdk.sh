@@ -3,11 +3,17 @@
 # third_party/rexglue-sdk/src with its submodules (shallow), and applies the
 # project's patches from third_party/rexglue-patches/*.patch if any exist.
 #   scripts/fetch-rexglue-sdk.sh [destination]
+# REXGLUE_SDK_COMMIT=<sha> checks out that commit instead of the pin, for experiments with an SDK
+# snapshot (the workflows pass their sdk_commit input through it); the PIN file stays the source of truth.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 pin="$root/third_party/rexglue-sdk/PIN"
 url="$(sed -n 's/^url=//p' "$pin")"
 commit="$(sed -n 's/^commit=//p' "$pin")"
+if [ -n "${REXGLUE_SDK_COMMIT:-}" ]; then
+    echo "rexglue-sdk: using commit $REXGLUE_SDK_COMMIT from REXGLUE_SDK_COMMIT instead of the pin ($commit)"
+    commit="$REXGLUE_SDK_COMMIT"
+fi
 dest="${1:-$root/third_party/rexglue-sdk/src}"
 if [ -d "$dest/.git" ]; then
     current="$(git -C "$dest" rev-parse HEAD)"

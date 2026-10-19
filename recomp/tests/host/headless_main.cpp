@@ -125,7 +125,17 @@ int main(int argc, char** argv) {
   }
 
   rex::InitLoggingEarly();
-  auto log_config = rex::BuildLogConfig(nullptr, opt.log_level, std::map<std::string, std::string>{});
+  // SDK 0.10.0 declares BuildLogConfig(log_file, level, categories); its development branch dropped the
+  // log_file parameter (the path moved into LogConfig). Call whichever signature the SDK in use declares, so
+  // the harness builds against both (the SDK snapshot evaluations run it, docs/RESEARCH.md 4.1).
+  const std::map<std::string, std::string> no_categories;
+  auto log_config = [&] {
+    if constexpr (requires { rex::BuildLogConfig(opt.log_level, no_categories); }) {
+      return rex::BuildLogConfig(opt.log_level, no_categories);
+    } else {
+      return rex::BuildLogConfig(nullptr, opt.log_level, no_categories);
+    }
+  }();
   log_config.log_to_console = true;
   rex::InitLogging(log_config);
   // Count the "<name> STUB" warnings the runtime logs for kernel exports it does not implement.

@@ -1,12 +1,22 @@
 # Windows equivalent of scripts/fetch-rexglue-sdk.sh: clones the ReXGlue SDK at the pinned commit
 # (third_party\rexglue-sdk\PIN) with its submodules and applies third_party\rexglue-patches\*.patch.
-#   scripts\fetch-rexglue-sdk.ps1 [-Destination <dir>]
-param([string]$Destination = "")
+#   scripts\fetch-rexglue-sdk.ps1 [-Destination <dir>] [-Commit <sha>]
+# -Commit (or the REXGLUE_SDK_COMMIT environment variable) checks out that commit instead of the pin, for
+# experiments with an SDK snapshot (the workflows pass their sdk_commit input through it); the PIN file
+# stays the source of truth.
+param([string]$Destination = "", [string]$Commit = "")
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $pin = Get-Content (Join-Path $root "third_party\rexglue-sdk\PIN")
 $url = ($pin | Where-Object { $_ -like "url=*" }) -replace "^url=", ""
-$commit = ($pin | Where-Object { $_ -like "commit=*" }) -replace "^commit=", ""
+# PowerShell variable names are case-insensitive: $Commit is the parameter, $pinCommit the pin.
+$pinCommit = ($pin | Where-Object { $_ -like "commit=*" }) -replace "^commit=", ""
+if (-not $Commit -and $env:REXGLUE_SDK_COMMIT) { $Commit = $env:REXGLUE_SDK_COMMIT }
+if ($Commit) {
+    Write-Host "rexglue-sdk: using commit $Commit instead of the pin ($pinCommit)"
+} else {
+    $Commit = $pinCommit
+}
 if (-not $Destination) { $Destination = Join-Path $root "third_party\rexglue-sdk\src" }
 if (Test-Path (Join-Path $Destination ".git")) {
     $current = (git -C $Destination rev-parse HEAD).Trim()
