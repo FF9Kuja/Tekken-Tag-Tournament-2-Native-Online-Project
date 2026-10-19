@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "ttt2/core/file_io.hpp"
+#include "ttt2/core/format.hpp"
 #include "ttt2/core/hash.hpp"
 #include "ttt2/core/project_version.hpp"
 #include "ttt2/xex/known_titles.hpp"
@@ -34,12 +35,6 @@ void print_usage() {
                "Nothing is decrypted; no game data is written anywhere.\n");
 }
 
-std::string hex8(std::uint32_t v) {
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "%08X", static_cast<unsigned>(v));
-  return buf;
-}
-
 std::string json_escape(std::string_view s) {
   std::string out;
   for (const char c : s) {
@@ -54,7 +49,9 @@ std::string json_escape(std::string_view s) {
         out += "\\n";
         break;
       default:
-        if (static_cast<unsigned char>(c) < 0x20) {
+        // Control characters and any non-ASCII byte are escaped so the output stays
+        // valid JSON even when a damaged file carries arbitrary bytes.
+        if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x7F) {
           char buf[8];
           std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
           out += buf;
@@ -85,13 +82,13 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
   if (img.execution_info) {
     const auto& e = *img.execution_info;
     const auto name = known_title_name(e.title_id);
-    std::printf("Title ID:           %s%s%s\n", hex8(e.title_id).c_str(), name ? "  " : "",
+    std::printf("Title ID:           %s%s%s\n", ttt2::hex_u32(e.title_id).c_str(), name ? "  " : "",
                 name ? std::string(*name).c_str() : "");
     std::printf("Version:            %s (base %s)\n", e.version.to_string().c_str(),
                 e.base_version.to_string().c_str());
-    std::printf("Media ID:           %s\n", hex8(e.media_id).c_str());
+    std::printf("Media ID:           %s\n", ttt2::hex_u32(e.media_id).c_str());
     std::printf("Disc:               %u of %u, platform %u, savegame ID %s\n", e.disc_number, e.disc_count,
-                e.platform, hex8(e.savegame_id).c_str());
+                e.platform, ttt2::hex_u32(e.savegame_id).c_str());
   }
   if (img.delta_patch) {
     const auto& d = *img.delta_patch;
@@ -175,10 +172,11 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
   if (img.execution_info) {
     const auto& e = *img.execution_info;
     const auto name = known_title_name(e.title_id);
-    std::printf("  \"title_id\": \"%s\",\n  \"title_name\": %s,\n", hex8(e.title_id).c_str(),
+    std::printf("  \"title_id\": \"%s\",\n  \"title_name\": %s,\n", ttt2::hex_u32(e.title_id).c_str(),
                 name ? ("\"" + json_escape(*name) + "\"").c_str() : "null");
     std::printf("  \"version\": \"%s\",\n  \"base_version\": \"%s\",\n  \"media_id\": \"%s\",\n",
-                e.version.to_string().c_str(), e.base_version.to_string().c_str(), hex8(e.media_id).c_str());
+                e.version.to_string().c_str(), e.base_version.to_string().c_str(),
+                ttt2::hex_u32(e.media_id).c_str());
     std::printf("  \"disc_number\": %u,\n  \"disc_count\": %u,\n", e.disc_number, e.disc_count);
   }
   if (img.delta_patch) {
@@ -186,8 +184,8 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
                 img.delta_patch->source_version.to_string().c_str(),
                 img.delta_patch->target_version.to_string().c_str());
   }
-  if (img.entry_point) std::printf("  \"entry_point\": \"%s\",\n", hex8(*img.entry_point).c_str());
-  if (img.image_base) std::printf("  \"image_base\": \"%s\",\n", hex8(*img.image_base).c_str());
+  if (img.entry_point) std::printf("  \"entry_point\": \"%s\",\n", ttt2::hex_u32(*img.entry_point).c_str());
+  if (img.image_base) std::printf("  \"image_base\": \"%s\",\n", ttt2::hex_u32(*img.image_base).c_str());
   if (img.original_pe_name)
     std::printf("  \"original_pe_name\": \"%s\",\n", json_escape(*img.original_pe_name).c_str());
   if (img.file_format) {
@@ -197,8 +195,8 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
   }
   if (img.security) {
     std::printf("  \"load_address\": \"%s\",\n  \"image_size\": %u,\n  \"region\": \"%s\",\n",
-                hex8(img.security->load_address).c_str(), img.security->image_size,
-                hex8(img.security->region).c_str());
+                ttt2::hex_u32(img.security->load_address).c_str(), img.security->image_size,
+                ttt2::hex_u32(img.security->region).c_str());
   }
   std::printf("  \"import_libraries\": [");
   for (std::size_t i = 0; i < img.import_libraries.size(); ++i) {

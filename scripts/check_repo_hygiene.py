@@ -25,8 +25,12 @@ FORBIDDEN_SUFFIXES = (
 FORBIDDEN_NAME_PATTERNS = (
     re.compile(r"^TU_[0-9A-Z]+_", re.IGNORECASE),        # title update packages
     re.compile(r"^default\.xex", re.IGNORECASE),
-    re.compile(r"^ppc_recomp", re.IGNORECASE),             # recompiler output
+    re.compile(r"^ppc_recomp", re.IGNORECASE),             # XenonRecomp output
     re.compile(r"^ppc_func_mapping", re.IGNORECASE),
+    re.compile(r"^recomp\.\d+\.cpp$", re.IGNORECASE),      # ReXGlue output
+    re.compile(r"^codegen\.(d|build\.stamp)$", re.IGNORECASE),
+    re.compile(r"_(init|register|funcs|pch)\.(h|cpp)$", re.IGNORECASE),
+    re.compile(r"^(dll_targets|sources)\.cmake$", re.IGNORECASE),
     re.compile(r"^(data|nrfo)\d*\.(bin|ofs)$", re.IGNORECASE),  # TTT2 disc data containers
 )
 # Magic bytes of the formats we must never ship.
@@ -61,7 +65,18 @@ def git_files(staged):
     return [line for line in out.splitlines() if line]
 
 
-def check_file(path):
+def read_content(path, staged):
+    """Bytes to scan: the index copy when checking a staged file, else the working tree."""
+    if staged:
+        result = subprocess.run(["git", "show", f":{path}"], capture_output=True)
+        return result.stdout if result.returncode == 0 else None
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return f.read(MAX_FILE_BYTES + 1)
+
+
+def check_file(path, staged=False):
     findings = []
     rel = path.replace(os.sep, "/")
     if rel in ALLOWLIST:
@@ -74,15 +89,13 @@ def check_file(path):
         if pattern.search(name):
             findings.append("forbidden file name (game content or generated code)")
             break
-    if not os.path.isfile(path):
+    data = read_content(path, staged)
+    if data is None:
         return findings
-    size = os.path.getsize(path)
+    size = len(data)
     if size > MAX_FILE_BYTES:
         findings.append(f"file is {size} bytes (limit {MAX_FILE_BYTES})")
-    with open(path, "rb") as f:
-        head = f.read(64)
-        f.seek(0)
-        data = f.read(MAX_FILE_BYTES + 1)
+    head = data[:64]
     for magic, what in MAGICS:
         if head.startswith(magic) or (magic in head and len(magic) > 8):
             findings.append(f"starts with the magic of a(n) {what}")
@@ -109,7 +122,7 @@ def main(argv):
         return 2
     problems = 0
     for path in files:
-        for finding in check_file(path):
+        for finding in check_file(path, staged=staged and not paths):
             problems += 1
             print(f"HYGIENE: {path}: {finding}")
     if problems:

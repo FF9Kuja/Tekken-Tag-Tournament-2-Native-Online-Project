@@ -226,6 +226,89 @@ TEST_CASE("a security offset outside the header area is reported, not parsed") {
   CHECK_FALSE(result->security.has_value());
 }
 
+TEST_CASE("duplicate optional headers are reported and the first one wins") {
+  XexBuilder b;
+  b.add_struct(header_key::kExecutionInfo,
+               XexBuilder::execution_info(1, 0x00000002u, 0x00000002u, 0x4E4D0859u, 1, 1, 0));
+  b.add_struct(header_key::kExecutionInfo,
+               XexBuilder::execution_info(2, 0x00000002u, 0x00000002u, 0x12345678u, 1, 1, 0));
+  b.set_security(XexBuilder::security_info(0x1000, 0, 0x82000000u, 0xFFFFFFFFu, 0, {}));
+  const auto result = parse(b.build());
+  REQUIRE(result.has_value());
+  REQUIRE(result->execution_info.has_value());
+  CHECK(result->execution_info->title_id == 0x4E4D0859u);
+  CHECK(result->optional_headers.size() == 2);
+  REQUIRE(result->warnings.size() == 1);
+  CHECK(result->warnings[0].find("duplicate") != std::string::npos);
+}
+
+TEST_CASE("oversized tables are capped instead of exhausting memory") {
+  XexBuilder b;
+  std::vector<std::uint8_t> ids(5000 * 4, 0x11);
+  b.add_sized(header_key::kAlternateTitleIds, ids);
+  std::vector<std::uint8_t> libs(5000 * 0x10, 0x22);
+  b.add_sized(header_key::kStaticLibraries, libs);
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> blocks(5000, {0x1000, 0});
+  b.add_sized(header_key::kFileFormatInfo, XexBuilder::file_format_basic(1, blocks));
+  b.set_security(XexBuilder::security_info(0x1000, 0, 0x82000000u, 0xFFFFFFFFu, 0, {}));
+  ParseOptions options;
+  options.max_table_entries = 100;
+  const auto result = parse(b.build(), options);
+  REQUIRE(result.has_value());
+  CHECK(result->alternate_title_ids.size() == 100);
+  CHECK(result->static_libraries.size() == 100);
+  REQUIRE(result->file_format.has_value());
+  CHECK(result->file_format->basic_blocks.size() == 100);
+  CHECK(result->warnings.size() == 3);
+}
+
+TEST_CASE("optional header data must lie between the header table and the basefile") {
+  auto image = make_title_image();
+  const std::uint32_t header_size = load_be32(image.data() + 0x8);
+  for (std::size_t i = 0; i < 12; ++i) {
+    const std::size_t e = 0x18 + i * 8;
+    if (load_be32(image.data() + e) == header_key::kExecutionInfo) {
+      SUBCASE("offset 0 aliases the file header") {
+        store_be32(image.data() + e + 4, 0);
+      }
+      SUBCASE("offset inside the header table") {
+        store_be32(image.data() + e + 4, 0x20);
+      }
+      SUBCASE("offset past the basefile start") {
+        store_be32(image.data() + e + 4, header_size);
+      }
+    }
+  }
+  const auto result = parse(image);
+  REQUIRE(result.has_value());
+  CHECK_FALSE(result->execution_info.has_value());
+  CHECK_FALSE(result->warnings.empty());
+}
+
+TEST_CASE("page descriptors that run past the header area are reported") {
+  XexBuilder b;
+  b.add_inline(header_key::kEntryPoint, 0x82110000u);
+  // Security info claims 4 page descriptors but only 1 is present in the header area.
+  auto sec = XexBuilder::security_info(0x1000, 0, 0x82000000u, 0xFFFFFFFFu, 0, {{1, 0x10}});
+  store_be32(sec.data() + 0x180, 4);
+  b.set_security(sec);
+  const auto result = parse(b.build());
+  REQUIRE(result.has_value());
+  REQUIRE(result->security.has_value());
+  CHECK(result->security->page_descriptor_count == 4);
+  CHECK(result->security->page_descriptors.size() == 1);
+  CHECK_FALSE(result->warnings.empty());
+}
+
+TEST_CASE("region descriptions") {
+  CHECK(describe_region(0x000000FFu) == "NTSC-U");
+  CHECK(describe_region(0x0000FF00u) == "NTSC-J (Japan) | NTSC-J (China) | NTSC-J (other)");
+  CHECK(describe_region(0x00FF0000u) == "PAL (AU/NZ) | PAL");
+  CHECK(describe_region(0x00010000u) == "PAL (AU/NZ)");
+  CHECK(describe_region(0xFF000000u) == "OTHER");
+  CHECK(describe_region(0) == "(none)");
+}
+
 TEST_CASE("every truncation of a valid image is handled without crashing") {
   const auto image = make_title_image();
   for (std::size_t len = 0; len < image.size(); len += 7) {

@@ -1,10 +1,11 @@
 #include "ttt2/xex/xex2.hpp"
 
 #include <algorithm>
-#include <cstdio>
+#include <unordered_set>
 
 #include "ttt2/core/byte_reader.hpp"
 #include "ttt2/core/file_io.hpp"
+#include "ttt2/core/format.hpp"
 
 namespace ttt2::xex {
 
@@ -17,18 +18,18 @@ constexpr std::size_t kPageDescriptorSize = 0x18;
 constexpr std::size_t kImportLibraryHeaderSize = 0x28;
 constexpr std::size_t kStaticLibrarySize = 0x10;
 
-std::string hex32(std::uint32_t v) {
-  char buf[16];
-  std::snprintf(buf, sizeof(buf), "%08X", static_cast<unsigned>(v));
-  return buf;
-}
-
 template <std::size_t N>
 bool copy_bytes(const ByteReader& r, std::size_t offset, std::array<std::uint8_t, N>& out) {
   const auto s = r.bytes(offset, N);
   if (!s) return false;
   std::copy(s->begin(), s->end(), out.begin());
   return true;
+}
+
+/// Optional-header structures and the security info must lie in the header
+/// area: after the optional-header table and before the basefile begins.
+bool in_header_area(const Xex2Image& img, std::size_t table_end, std::size_t off, std::size_t size) {
+  return off >= table_end && off < img.header_size && size <= img.header_size - off;
 }
 
 /// Splits the import-library string table: NUL-terminated strings, each padded
@@ -46,15 +47,16 @@ std::vector<std::string> split_string_table(const ByteReader& r, std::size_t off
   return names;
 }
 
-void parse_security_info(const ByteReader& r, Xex2Image& img, const ParseOptions& options) {
+void parse_security_info(const ByteReader& r, Xex2Image& img, std::size_t table_end,
+                         const ParseOptions& options) {
   const std::size_t off = img.security_offset;
-  if (off < kHeaderSize || off >= img.header_size) {
-    img.warnings.push_back("security info offset 0x" + hex32(img.security_offset) +
+  if (!in_header_area(img, table_end, off, kSecurityInfoSize)) {
+    img.warnings.push_back("security info offset 0x" + hex_u32(img.security_offset) +
                            " is not inside the header area");
     return;
   }
   if (!r.in_bounds(off, kSecurityInfoSize)) {
-    img.warnings.push_back("security info at offset 0x" + hex32(img.security_offset) +
+    img.warnings.push_back("security info at offset 0x" + hex_u32(img.security_offset) +
                            " is outside the file");
     return;
   }
@@ -82,21 +84,22 @@ void parse_security_info(const ByteReader& r, Xex2Image& img, const ParseOptions
   }
   for (std::size_t i = 0; i < count; ++i) {
     const std::size_t pd = off + kSecurityInfoSize + i * kPageDescriptorSize;
-    const auto value = r.u32be(pd);
-    if (!value) {
-      img.warnings.push_back("page descriptors run past the end of the file");
+    if (!in_header_area(img, table_end, pd, kPageDescriptorSize) || !r.in_bounds(pd, kPageDescriptorSize)) {
+      img.warnings.push_back("page descriptors run past the end of the header area");
       break;
     }
     PageDescriptor d;
-    d.info = *value & 0xF;
-    d.page_count = *value >> 4;
+    const std::uint32_t value = *r.u32be(pd);
+    d.info = value & 0xF;
+    d.page_count = value >> 4;
     copy_bytes(r, pd + 4, d.digest);
     s.page_descriptors.push_back(d);
   }
   img.security = std::move(s);
 }
 
-void parse_file_format_info(const ByteReader& r, std::size_t off, std::size_t size, Xex2Image& img) {
+void parse_file_format_info(const ByteReader& r, std::size_t off, std::size_t size, Xex2Image& img,
+                            const ParseOptions& options) {
   if (size < 8 || !r.in_bounds(off, 8)) {
     img.warnings.push_back("file format info is too small");
     return;
@@ -105,7 +108,11 @@ void parse_file_format_info(const ByteReader& r, std::size_t off, std::size_t si
   f.encryption = static_cast<EncryptionType>(*r.u16be(off + 4));
   f.compression = static_cast<CompressionType>(*r.u16be(off + 6));
   if (f.compression == CompressionType::Basic) {
-    const std::size_t blocks = (size - 8) / 8;
+    const std::size_t declared_blocks = (size - 8) / 8;
+    const std::size_t blocks = std::min(declared_blocks, options.max_table_entries);
+    if (declared_blocks > options.max_table_entries) {
+      img.warnings.push_back("basic compression block table exceeds the parser limit; truncated");
+    }
     for (std::size_t i = 0; i < blocks; ++i) {
       const auto data_size = r.u32be(off + 8 + i * 8);
       const auto zero_size = r.u32be(off + 12 + i * 8);
@@ -182,12 +189,17 @@ void parse_import_libraries(const ByteReader& r, std::size_t off, std::size_t si
   }
 }
 
-void parse_static_libraries(const ByteReader& r, std::size_t off, std::size_t size, Xex2Image& img) {
+void parse_static_libraries(const ByteReader& r, std::size_t off, std::size_t size, Xex2Image& img,
+                            const ParseOptions& options) {
   if (size < 4 || !r.in_bounds(off, size)) {
     img.warnings.push_back("static library table is truncated");
     return;
   }
-  const std::size_t count = (size - 4) / kStaticLibrarySize;
+  const std::size_t declared = (size - 4) / kStaticLibrarySize;
+  const std::size_t count = std::min(declared, options.max_table_entries);
+  if (declared > options.max_table_entries) {
+    img.warnings.push_back("static library table exceeds the parser limit; truncated");
+  }
   for (std::size_t i = 0; i < count; ++i) {
     const std::size_t e = off + 4 + i * kStaticLibrarySize;
     StaticLibrary lib;
@@ -262,22 +274,35 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
   img.security_offset = *r.u32be(0x10);
   const std::uint32_t header_count = *r.u32be(0x14);
 
-  if (img.header_size < kHeaderSize) return make_error("header size is smaller than the fixed header");
+  if (img.header_size < kHeaderSize) {
+    return make_error("header size is smaller than the fixed header");
+  }
   if (header_count > options.max_optional_headers) {
     return make_error("optional header count " + std::to_string(header_count) + " is implausible");
   }
+  const std::size_t table_end = kHeaderSize + static_cast<std::size_t>(header_count) * kOptHeaderEntrySize;
   if (!r.in_bounds(kHeaderSize, static_cast<std::size_t>(header_count) * kOptHeaderEntrySize)) {
     return make_error("optional header table runs past the end of the file");
   }
+  if (table_end > img.header_size) {
+    return make_error("optional header table extends past the declared header size");
+  }
   if (img.header_size > r.size()) {
-    img.warnings.push_back("declared header size 0x" + hex32(img.header_size) +
+    img.warnings.push_back("declared header size 0x" + hex_u32(img.header_size) +
                            " exceeds the file size (truncated file?)");
   }
 
+  std::unordered_set<std::uint32_t> seen_keys;
   for (std::uint32_t i = 0; i < header_count; ++i) {
     const std::size_t e = kHeaderSize + i * kOptHeaderEntrySize;
     OptionalHeader h{*r.u32be(e), *r.u32be(e + 4)};
     img.optional_headers.push_back(h);
+
+    if (!seen_keys.insert(h.key).second) {
+      img.warnings.push_back("duplicate optional header " + std::string(optional_header_name(h.key)) +
+                             " (0x" + hex_u32(h.key) + ") ignored");
+      continue;
+    }
 
     if (h.is_inline()) {
       switch (h.key) {
@@ -314,34 +339,36 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
       continue;
     }
 
-    // Offset-based header: resolve its size, then decode the ones we know.
+    // Offset-based header: resolve its size, check that the structure lies in
+    // the header area (between the table and the basefile) and inside the
+    // file, then decode the ones we know.
     const std::size_t off = h.data;
     std::size_t size = 0;
     if (h.is_size_prefixed()) {
-      const auto declared = r.u32be(off);
+      const auto declared = in_header_area(img, table_end, off, 4) ? r.u32be(off) : std::nullopt;
       if (!declared) {
         img.warnings.push_back("optional header " + std::string(optional_header_name(h.key)) +
-                               " points outside the file");
+                               " points outside the header area");
         continue;
       }
       size = *declared;
-      if (size < 4 || !r.in_bounds(off, size)) {
+      if (size < 4 || !in_header_area(img, table_end, off, size) || !r.in_bounds(off, size)) {
         img.warnings.push_back("optional header " + std::string(optional_header_name(h.key)) +
                                " has an invalid size");
         continue;
       }
     } else {
       size = static_cast<std::size_t>(h.key & 0xFF) * 4;
-      if (!r.in_bounds(off, size)) {
+      if (!in_header_area(img, table_end, off, size) || !r.in_bounds(off, size)) {
         img.warnings.push_back("optional header " + std::string(optional_header_name(h.key)) +
-                               " points outside the file");
+                               " points outside the header area");
         continue;
       }
     }
 
     switch (h.key) {
       case header_key::kFileFormatInfo:
-        parse_file_format_info(r, off, size, img);
+        parse_file_format_info(r, off, size, img, options);
         break;
       case header_key::kExecutionInfo:
         parse_execution_info(r, off, img);
@@ -350,7 +377,7 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
         parse_import_libraries(r, off, size, img, options);
         break;
       case header_key::kStaticLibraries:
-        parse_static_libraries(r, off, size, img);
+        parse_static_libraries(r, off, size, img, options);
         break;
       case header_key::kDeltaPatchDescriptor:
         parse_delta_patch(r, off, size, img);
@@ -368,8 +395,14 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
         img.checksum_timestamp = std::make_pair(*r.u32be(off), *r.u32be(off + 4));
         break;
       case header_key::kAlternateTitleIds: {
-        const std::size_t n = (size - 4) / 4;
-        for (std::size_t k = 0; k < n; ++k) img.alternate_title_ids.push_back(*r.u32be(off + 4 + k * 4));
+        const std::size_t declared_ids = (size - 4) / 4;
+        const std::size_t n = std::min(declared_ids, options.max_table_entries);
+        if (declared_ids > options.max_table_entries) {
+          img.warnings.push_back("alternate title ID table exceeds the parser limit; truncated");
+        }
+        for (std::size_t k = 0; k < n; ++k) {
+          img.alternate_title_ids.push_back(*r.u32be(off + 4 + k * 4));
+        }
         break;
       }
       default:
@@ -377,7 +410,7 @@ Expected<Xex2Image> parse(std::span<const std::uint8_t> file, const ParseOptions
     }
   }
 
-  parse_security_info(r, img, options);
+  parse_security_info(r, img, table_end, options);
   return img;
 }
 
@@ -484,9 +517,9 @@ std::string describe_region(std::uint32_t region) {
   if ((region & 0x000000FFu) == 0x000000FFu) add("NTSC-U");
   if (region & 0x00000100u) add("NTSC-J (Japan)");
   if (region & 0x00000200u) add("NTSC-J (China)");
-  if ((region & 0x0000FF00u) && !(region & 0x00000300u)) add("NTSC-J (other)");
+  if (region & 0x0000FC00u) add("NTSC-J (other)");
   if (region & 0x00010000u) add("PAL (AU/NZ)");
-  if ((region & 0x00FF0000u) & ~0x00010000u) add("PAL");
+  if (region & 0x00FE0000u) add("PAL");
   if (region & 0xFF000000u) add("OTHER");
   if (out.empty()) out = "(none)";
   return out;

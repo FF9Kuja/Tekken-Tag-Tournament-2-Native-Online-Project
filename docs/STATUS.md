@@ -11,8 +11,8 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   hygiene check, CI workflow.
 
 **Verified (where)**
-* Linux container (Ubuntu 24.04): Clang 18 and GCC 13 builds with `-Werror`; `ctest`: 3/3 tests (17 doctest cases,
-  279 assertions) pass; `ttt2-xexinfo` parses a synthetic XEX2 image and a synthetic `.xexp`; the hygiene checker
+* Linux container (Ubuntu 24.04): Clang 18 and GCC 13 builds with `-Werror`; `ctest`: 3/3 tests (22 doctest cases,
+  311 assertions) pass; `ttt2-xexinfo` parses a synthetic XEX2 image and a synthetic `.xexp`; the hygiene checker
   flags a synthetic XEX and passes the tree.
 * XenonRecomp + XenonAnalyse (MIT, commit `ddd128b`) build on Linux with Clang 18.
 * Clang 18 emits 32-bit big-endian PowerPC ELF (`--target=powerpc-unknown-linux-gnu`, LLD `elf32ppc`).
@@ -48,11 +48,23 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   the SDK's own route below.
 * `rexglue recompile-tests` with the SDK's bundled `powerpc-none-elf` binutils (Linux binaries included) turns
   the SDK's PPC assembly tests into Catch2 cases: 3 files -> 63 test cases generated in 0.0 s. This is the
-  license-free way to validate instruction translation; `scripts/sdk-recompile-tests.sh` reproduces it. The
-  result of building and running the full 166-file suite is recorded below once finished.
+  license-free way to validate instruction translation; `scripts/sdk-recompile-tests.sh` reproduces it
+  (166 files -> 1458 Catch2 cases in 0.2 s).
+* **The SDK's full PowerPC instruction suite builds and passes on Linux**: `ppc_tests` (SDK configured with
+  `-DREXGLUE_BUILD_TESTS=ON`, Clang 20): "All tests passed (5725 assertions in 1458 test cases)". This is the
+  strongest evidence so far that ReXGlue's instruction translation is sound on this toolchain.
+
+**Code review (2026-10-19)**
+* A review pass over the branch (with ASan/UBSan builds) found and fixed: unbounded header tables and accepted
+  duplicate keys (memory exhaustion on hostile files), optional-header offsets not confined to the header area,
+  an unchecked page-descriptor copy, an NTSC-J region description bug, non-ASCII bytes breaking the JSON
+  output, smoke tests that failed with `TTT2_BUILD_TOOLS=OFF`, the hygiene hook scanning the working copy
+  instead of the index, and a hook installer that assumed `.git` is a directory. Regression tests added.
 
 **Known issues / technical debt**
 * `ttt2::Expected` is a stand-in for `std::expected` (C++23) - replace when the toolchain floor allows.
+* `Sha1`/`Sha256` duplicate their block-buffering and padding code; a shared Merkle-Damgard helper would
+  remove ~70 lines (noted by the review, deferred).
 * `ttt2-xexinfo` JSON output is hand-written; fine for now, but a JSON writer helper will be needed once the
   launcher consumes tool output.
 * `TTT2_WARNINGS_AS_ERRORS` is not yet enabled for the Windows CI jobs.

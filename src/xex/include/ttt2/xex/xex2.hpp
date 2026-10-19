@@ -244,6 +244,9 @@ struct ParseOptions {
   std::size_t max_optional_headers = 1024;
   std::size_t max_page_descriptors = 65536;
   std::size_t max_import_libraries = 256;
+  /// Cap for the other variable-length tables (basic compression blocks,
+  /// static libraries, alternate title IDs); a real XEX has a few dozen at most.
+  std::size_t max_table_entries = 4096;
 };
 
 /// Parses the XEX2 container headers of an in-memory file image.
