@@ -44,6 +44,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   runtime, implements 136 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
   stats calls). The runtime-export generator now counts `REX_HOOK_RAW` hooks (11, e.g. `DbgPrint`) as
   implemented, which it had classified as missing.
+* **First kernel overrides in the host** (`recomp/src/kernel_overrides.cpp`): the five XAM calls above
+  (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`, `XamShowMarketplaceUI`, `XamShowMarketplaceDownloadItemsUI`
+  -> `ERROR_SUCCESS`, `XamUserCreateStatsEnumerator` -> `ERROR_NO_SUCH_USER`, TTT2 Web's results) defined as
+  `__imp__` symbols in the host, which generated code binds to at link time ahead of the runtime library's stubs
+  (verified on Linux: the symbols are defined in `ttt2` and shadow `librexruntime.so`'s); each logs its first
+  call. This is the mechanism for every stub the owner's report shows the game reaching.
 * Two findings from the first CI runs of the host-build route, fixed and reproduced locally: on a fresh tree the
   SDK's generated CMake glue only picks the recompiled sources up when `generated/default` exists at configure
   time (the link failed with an undefined `PPCImageConfig`), so `build-host.ps1` and the SDK workflow run

@@ -97,7 +97,9 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   counts the runtime's `<name> STUB` warnings and logs the full list at exit, `recomp/src/stub_counter.*`),
   `OnPostSetup` (last-chance host crash reporter on `rex::arch::ExceptionHandler`: fault kind and addresses, guest
   thread, recent stub calls, then the normal crash path), watchdog stall detector (per-thread dump after three
-  unchanged ticks). Planned: data patches, hook registration, `OnCreateDialogs`
+  unchanged ticks). `recomp/src/kernel_overrides.cpp` **[implemented]**: host-side definitions of `__imp__` kernel
+  exports that the runtime only stubs; generated code binds to them at link time (five XAM UI/stats calls so far,
+  with TTT2 Web's results). Planned: data patches, hook registration, `OnCreateDialogs`
   (overlay). A headless harness (`recomp/tests/host`) runs recompiled programs through the same runtime without
   a window, which is how recompiled code was executed natively for the first time (session 3).
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing

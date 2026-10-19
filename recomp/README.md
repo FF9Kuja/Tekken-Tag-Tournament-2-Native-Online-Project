@@ -36,3 +36,4 @@ programs in `tests/ppc/`, see `docs/DEVELOPMENT.md`.
 | `ttt2_instructions.txt` | the 66 instructions TTT2 needs beyond XenonRecomp's original set (from TTT2 Web, CC0) |
 | `src/ttt2_app.cpp` | `Ttt2App` hooks: paths, executable identification, import summary, guest-thread watchdog with stall detector, kernel stub report, host crash report |
 | `src/stub_counter.{h,cpp}`, `src/stub_name.hpp` | counts the runtime's `<name> STUB` warnings per export (also used by the headless harness) |
+| `src/kernel_overrides.cpp` | host-side `__imp__` definitions replacing runtime stubs (five XAM UI/stats calls, TTT2 Web's results); add one line per stub the boot log shows the game reaching |
