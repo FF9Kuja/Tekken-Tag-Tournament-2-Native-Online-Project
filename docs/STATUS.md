@@ -52,12 +52,17 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   check exit codes, the printed reasons (digest note, import counts, helper addresses, "version mismatch", "no
   Title Update 3 package found") and the files written to `--work`. New `--no-patch` option keeps the runs
   identical with and without the Clang-only patcher.
+* **Runtime import coverage**: `scripts/gen_runtime_exports.py` reads the SDK's export declarations into
+  `src/xex/rexglue_runtime_exports.inc` (SDK 0.10.0: 460 implemented functions, 2406 logging stubs, 24 mapped
+  variables); `ttt2-xexinfo --imports` and `ttt2-validate` now mark every import of an image as implemented /
+  stub / missing in the pinned runtime and list the stubbed and missing names; `owner-pipeline.ps1` adds the scan
+  to the report (step 5b). The owner's report will therefore show TTT2's runtime gaps before anything is run.
 * **Windows files checked without Windows**: all five PowerShell scripts parse with PowerShell 7.4.6 (parser API
   only, not executed); `actionlint` 1.7.7 found that `sdk-validation.yml` was invalid YAML (an unquoted `:` in a
   step name) - fixed, all workflows lint clean.
 
 **Verified (where)**
-* Linux container, Clang 18 and GCC 13 `-Werror`: 49 doctest cases / 573 assertions, 13 ctest entries (4 of them
+* Linux container, Clang 18 and GCC 13 `-Werror`: 50 doctest cases / 594 assertions, 13 ctest entries (4 of them
   end-to-end runs of `ttt2-validate` on synthetic fixtures); Python unit tests 6/6; hygiene check clean;
   `actionlint` clean; PowerShell parse clean.
 * `scripts/codegen-smoke-test.sh --exec` with the SDK built here: smoke 6/0/0, jumptable 2/0/0, switch_ttt2

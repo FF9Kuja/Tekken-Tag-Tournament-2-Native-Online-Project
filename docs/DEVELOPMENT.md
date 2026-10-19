@@ -57,7 +57,9 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   `--no-patch` stops after the pre-check (the end-to-end tests use it).
 * `ttt2-xexinfo --imports` names every kernel/XAM import (ordinal, thunk and slot address) from the export
   tables in `src/xex/xbox_exports_table.inc` (regenerate with `scripts/gen_xbox_exports.py` after bumping the
-  XenonRecomp pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
+  XenonRecomp pin) and marks what the pinned ReXGlue runtime provides for each one (implemented, stub, missing)
+  from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
+  SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)

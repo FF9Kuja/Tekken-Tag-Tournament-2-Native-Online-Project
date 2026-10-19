@@ -13,7 +13,8 @@ only things to send back are the text the tools print (title IDs, versions, hash
 ## The short way: one command
 
 `scripts\owner-pipeline.ps1` runs steps 1-4 (and 5 with `-Codegen`) and writes a text report that holds only
-hashes, versions, counts and addresses:
+hashes, versions, counts, addresses and the names of the kernel/XAM functions the game imports (each marked with
+whether the ReXGlue runtime implements, stubs or lacks it):
 
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"

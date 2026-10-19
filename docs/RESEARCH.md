@@ -351,6 +351,19 @@ PowerPC 405 multiply-accumulate forms) have no builder, and the SDK's decoder in
 ReXGlue 0.10.0 `[[invalid_instructions]]` entries are addresses consulted only when following branches
 (`phase_discover.cpp`), so such words simply must not be reachable.
 
+**Kernel/XAM surface of the runtime.** The SDK declares its exports in `src/kernel/**` in three ways:
+`REX_EXPORT(__imp__Name, fn)` is a real implementation, `REX_EXPORT_STUB(__imp__Name)` a stub that logs
+`<name> STUB` at warn level and returns (`_RETURN` variants return a fixed value), and
+`SetVariableMapping(module, ordinal, ...)` maps a variable export into guest memory. Counted by
+`scripts/gen_runtime_exports.py` on 0.10.0: **460 implemented functions, 2406 stubs, 24 mapped variables** (the
+export tables know 922 kernel and 1735 XAM ordinals). Imports are resolved at compile time, so a function the
+runtime neither implements nor stubs does not link into the generated host; a variable the runtime does not map is
+filled with a marker (`0xD000BEEF | ordinal << 16`) and warned about at load (`xex_module.cpp`). The stubs are
+therefore a free import trace: every unimplemented system call the game reaches shows up in the log as
+`<name> STUB`. `ttt2-xexinfo --imports` and `ttt2-validate` classify each import of the owner's image against
+these tables (`src/xex/rexglue_runtime_exports.inc`), so the report says which of TTT2's imports hit real code,
+stubs or nothing before anything is run.
+
 **Other facts measured.** `rexglue codegen` skips a project whose stamp is current ("up to date"); re-runs need
 `--ignore-stamp`. `--log-level trace` prints the detector's reasoning (`detectJumpTable:` lines). The runtime
 runs recompiled code without a window in tool mode (`Runtime::Setup(PPCImageConfig, {kernel_init, tool_mode})`,
