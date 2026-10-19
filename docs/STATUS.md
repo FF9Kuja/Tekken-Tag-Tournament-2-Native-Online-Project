@@ -51,14 +51,22 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   the copy, `recomp/` configured with `CMAKE_PREFIX_PATH` on the copy, host built (runtime and GPU plugin staged
   from the copy) and booted on the kernel-import image: `host-boot-test: PASS`. The package's CMake files hold
   no absolute paths.
-* The CI, SDK validation and Windows runs of this change are recorded in PR #7 (pending when this was written).
+* PR #7 runs: CI 10/10 green on every head after the PowerShell 5.1 capture fix (`873294c`); SDK validation run
+  39231479253 (`a4d9cef`) green with the boot step under `pwsh` + Xvfb on both images ("clean exit"; "stall ...;
+  the window was closed afterwards" after the 8 s close request, exit 0 in 8.2 s); Windows run 39231482868
+  (`a4d9cef`) green: **first run of `run-host.ps1` on Windows**, both forms passed, the `taskkill` close through
+  `Start-Process` ended the host with exit 0 in 8.3 s; Windows run 39232181325 (`42bd2b3`) green: the package
+  relocated, the licence bundle added (23 components with licence files at that commit; 54 MB unpacked, 13.5 MB
+  as the `rexglue-sdk-install-win-amd64` artifact), `ttt2.exe` built from the moved copy, every boot form passing.
+  The Windows workflow on `main` after the PR #6 merge (run 39230244565, `5acfb19`) was green too.
 
 **Not verified / open**
 * `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
   `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
-* The Windows package artifact (size, the host build from the moved copy, the licence bundle) comes with the
-  Windows run of PR #7; a package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor
-  version is expected to link (same MSVC ABI) but is unverified until the owner's run.
+* A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
+  link (same MSVC ABI) but is unverified until the owner's run; the artifact's NOTICES.txt (components whose
+  licence text lives in their source headers) is produced by the step added after run 39232181325 and is
+  checked by the next Windows run.
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**

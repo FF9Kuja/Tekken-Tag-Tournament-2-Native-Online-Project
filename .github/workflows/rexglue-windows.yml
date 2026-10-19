@@ -94,15 +94,28 @@ jobs:
           cp "$sdk/LICENSE" "$lic/rexglue-sdk/LICENSE"
           git -C "$sdk" rev-parse HEAD > "$lic/rexglue-sdk/SOURCE_COMMIT.txt"
           echo "https://github.com/rexglue/rexglue-sdk" >> "$lic/rexglue-sdk/SOURCE_COMMIT.txt"
+          notices="$lic/NOTICES.txt"
+          {
+            echo "Third-party components vendored by the ReXGlue SDK at the commit in rexglue-sdk/SOURCE_COMMIT.txt."
+            echo "Each folder here holds the licence file(s) a component ships at its top level or one level down."
+            echo "Components without such a file carry their licence text in their source file headers in the SDK tree"
+            echo "(thirdparty/<name>/); they are listed below."
+            echo
+          } > "$notices"
           for d in "$sdk"/thirdparty/*/; do
             name=$(basename "$d")
-            for f in "$d"LICENSE* "$d"License* "$d"license* "$d"COPYING* "$d"COPYRIGHT*; do
+            found=0
+            for f in "$d"LICENSE* "$d"License* "$d"license* "$d"COPYING* "$d"COPYRIGHT* "$d"UNLICENSE* \
+                     "$d"*/LICENSE* "$d"*/License* "$d"*/license* "$d"*/COPYING* "$d"*/COPYRIGHT* "$d"*/UNLICENSE*; do
               [ -f "$f" ] || continue
               mkdir -p "$lic/$name"
               cp "$f" "$lic/$name/"
+              found=1
             done
+            [ "$found" = 1 ] || echo "no licence file: $name (licence text in its source headers)" >> "$notices"
           done
           ls "$lic"
+          cat "$notices"
           du -sh out/rexglue-sdk-install
       - name: Upload the installed SDK package (the owner downloads this instead of building the SDK)
         if: inputs.build_host
