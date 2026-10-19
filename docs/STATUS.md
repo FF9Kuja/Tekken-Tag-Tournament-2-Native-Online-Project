@@ -21,6 +21,12 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Triage outcome order: a stall dump followed by the window close is reported as the stall ("...; the window was
   closed afterwards") rather than as a plain close, since that is the owner's most likely first-boot shape; unit
   test added (18 Python tests).
+* Kernel-surface check repeated against a fresh TTT2 Web checkout (`4d6dd61`): its 135 `GUEST_IMPORT` functions
+  (a macro parameter had been counted as a 136th name; `recomp/tools/ttt2web_kernel_functions.txt` fixed) are all
+  implemented (130) or stubbed (5, overridden) by the pinned runtime, and the seven kernel variable imports its
+  loader fills (`KeTimeStampBundle`, `XboxHardwareInfo`, `XboxKrnlVersion`, `XexExecutableModuleHandle`,
+  `ExLoadedCommandLine`, `VdGpuClockInMHz`, `VdHSIOCalibrationLock`) are all among the runtime's 24 mapped
+  variable exports (`docs/RESEARCH.md` 8a). No kernel preparation is left that does not need the owner's log.
 * Both workflows run the boot step (`pwsh`) on the kernel-import image (host ends by itself, triage "clean exit")
   and on the stall image (1 s watchdog, 8 s timeout closes the window, triage "stall ...; closed afterwards");
   the CI dry run of the pipeline passes `-Boot` without a host and must report the skip.
