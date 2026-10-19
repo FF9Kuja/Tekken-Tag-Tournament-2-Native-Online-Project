@@ -88,7 +88,9 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   it as an XEX2 image (assembly through the SDK's bundled binutils, the Cygwin-built `.exe` variants on Windows);
   writes `<out.xex>.syms`. C sources need a Clang with the PowerPC backend (exit 3 without one): the official LLVM
   builds for Windows ship X86/ARM/AArch64 only, so the C programs are Linux-only and the assembly programs are the
-  ones that run everywhere.
+  ones that run everywhere. A `<source>.imports` file next to the source (`library: slot_symbol, thunk_symbol, ...`)
+  adds a real XEX2 import table (`IMPORT_LIBRARIES` header) so the program calls kernel exports like the game does:
+  `recomp/tests/ppc/imports_ttt2.s` is the example (slots in `.rodata`, 16-byte thunks at the end of `.text`).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
@@ -157,7 +159,10 @@ scripts/codegen-smoke-test.sh /path/to/rexglue-sdk/out/linux-amd64/rexglue /path
 
 `scripts/ppc_elf_to_xex.py` is the packer behind it (PE32 for PowerPC-BE with a `.pdata` exception directory
 synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers). Add `--exec` to
-also build `recomp/tests/host` and run the switch-table program natively (slow: it builds the runtime). On Windows
+also build `recomp/tests/host` and run the switch-table and kernel-import programs natively (slow: it builds the
+runtime). The harness compiles `recomp/src/kernel_overrides.cpp` in, so `imports_ttt2` proves that a call through
+the import table reaches the host's override of a runtime stub (`XamShowFriendsUI` -> 0,
+`XamUserCreateStatsEnumerator` -> 1317) and the runtime's own `RtlCompareMemory` (5), with no stub called. On Windows
 (Git Bash) add `--allow-no-ppc-clang`: the C cases are skipped there, the assembly cases and `--exec` run, and the
 syntax check of the generated code against the SDK headers is Linux-only (the host build compiles it instead). To
 compile-check the real host (`recomp/`, `Ttt2App`) on Linux, put any test image at `recomp/game/default.xex` and

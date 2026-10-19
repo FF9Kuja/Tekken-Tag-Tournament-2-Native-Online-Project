@@ -13,7 +13,8 @@
 # Cygwin-built .exe variants), because Clang's integrated assembler knows neither the VMX128 extension
 # nor the Xbox 360 mnemonics. Point TTT2_PPC_BINUTILS at another binutils directory to override.
 # PYTHON overrides the interpreter (Windows runners name it `python`). A symbol map is written next
-# to the image as <output.xex>.syms (address, size, kind, name per line).
+# to the image as <output.xex>.syms (address, size, kind, name per line); a <source>.imports file
+# next to the source adds an XEX import table (kernel imports called like the real game does).
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 src="${1:?C or assembly source}"
@@ -72,4 +73,10 @@ case "$src" in
         fi
         ;;
 esac
-"$python" -I "$root/scripts/ppc_elf_to_xex.py" "$tmp/prog.elf" "$out" --symbols "$out.syms"
+# <source>.imports next to the source declares XEX import libraries (see ppc_elf_to_xex.py).
+imports="${src%.*}.imports"
+if [ -f "$imports" ]; then
+    "$python" -I "$root/scripts/ppc_elf_to_xex.py" "$tmp/prog.elf" "$out" --symbols "$out.syms" --imports "$imports"
+else
+    "$python" -I "$root/scripts/ppc_elf_to_xex.py" "$tmp/prog.elf" "$out" --symbols "$out.syms"
+fi

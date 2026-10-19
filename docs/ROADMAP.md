@@ -79,7 +79,9 @@ byte/halfword-offset tables and switches on the wrong register for several absol
    `Ttt2App` and the headless harness (`recomp/src/stub_counter.*`: which stubbed system calls the game reaches,
    how often, logged on watchdog ticks and in full at exit). Prediction from TTT2 Web's 136-function runtime:
    130 implemented in ReXGlue, 5 XAM UI/stats stubs (`docs/RESEARCH.md` 8a); those five are overridden in the
-   host already (`recomp/src/kernel_overrides.cpp`, TTT2 Web's results), the mechanism for the rest. [x] stall detector (per-thread dump when the census
+   host already (`recomp/src/kernel_overrides.cpp`, TTT2 Web's results), the mechanism for the rest, and the
+   mechanism is executed natively by the kernel-import test program (`recomp/tests/ppc/imports_ttt2.s`, in the
+   smoke test's `--exec` run). [x] stall detector (per-thread dump when the census
    and the stub total stay unchanged for three watchdog ticks) and a host crash report (fault kind, host PC,
    fault address, guest thread, most recent stub calls) - compile-checked against the SDK, exercised only by a
    real boot.

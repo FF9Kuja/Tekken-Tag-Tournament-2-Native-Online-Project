@@ -47,9 +47,20 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * **First kernel overrides in the host** (`recomp/src/kernel_overrides.cpp`): the five XAM calls above
   (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`, `XamShowMarketplaceUI`, `XamShowMarketplaceDownloadItemsUI`
   -> `ERROR_SUCCESS`, `XamUserCreateStatsEnumerator` -> `ERROR_NO_SUCH_USER`, TTT2 Web's results) defined as
-  `__imp__` symbols in the host, which generated code binds to at link time ahead of the runtime library's stubs
-  (verified on Linux: the symbols are defined in `ttt2` and shadow `librexruntime.so`'s); each logs its first
-  call. This is the mechanism for every stub the owner's report shows the game reaching.
+  `__imp__` symbols in the host, which generated code binds to at link time ahead of the runtime library's stubs;
+  each logs its first call. This is the mechanism for every stub the owner's report shows the game reaching.
+* **The override mechanism executed natively** (`recomp/tests/ppc/imports_ttt2.s`): the packer
+  (`scripts/ppc_elf_to_xex.py --imports`) now writes a real XEX2 `IMPORT_LIBRARIES` header from a `<source>.imports`
+  declaration, so a license-free program calls kernel exports exactly like the game: 4-byte slots, 16-byte thunks at
+  the end of `.text`, `bl thunk`. `rexglue codegen` resolved all three ordinals (xam.xex 703 and 759, xboxkrnl.exe
+  282) to `__imp__` calls and treated the thunk range as non-code, as it does for the game. The headless harness
+  now compiles `kernel_overrides.cpp` in (as the game host does) and the native run returned `0`, `1317`, `5`
+  (two overrides, then the runtime's own `RtlCompareMemory`), with the overrides' first-call log lines and zero
+  stub calls. Negative control, run once here with the override source removed from the harness: the same program
+  logged `__imp__XamShowFriendsUI STUB` and `__imp__XamUserCreateStatsEnumerator STUB`, returned r3 untouched
+  (`0x5A5A5A5A`, then `0`), the stub counter reported 2 calls to 2 stubs and the harness failed - which is what the
+  game would see for any stub it reaches. The smoke test runs the program as its fifth case, natively under
+  `--exec`. Verified on Linux here; the SDK validation workflow repeats it on every run.
 * The first Windows run that reached the smoke test (ReXGlue codegen tool workflow, run 3) found two more
   Windows-only problems, fixed here and awaiting the next Windows run: the official LLVM Windows build has no
   PowerPC backend (`clang -print-targets` lists no `ppc32`; "No available targets are compatible with triple

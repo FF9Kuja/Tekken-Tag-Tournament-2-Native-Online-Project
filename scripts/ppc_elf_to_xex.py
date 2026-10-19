@@ -7,11 +7,21 @@ Purpose: license-free recompiler smoke tests. Real Xbox 360 executables carry a 
 tool lays the ELF's allocated sections out as PE sections at their RVAs (image base 0x82000000),
 synthesises `.pdata` from the ELF's FUNC symbols, and writes unencrypted, uncompressed XEX2 headers.
 
-    python3 scripts/ppc_elf_to_xex.py <input.elf> <output.xex> [--title-id 54455354]
+    python3 scripts/ppc_elf_to_xex.py <input.elf> <output.xex> [--title-id 54455354] [--imports FILE]
 
 Link the ELF with: ld.lld -m elf32ppc --image-base=0x82000000 -z separate-code -z max-page-size=0x10000
 so that no section lands in the first 64 KiB (reserved for the PE headers).
-No game content is involved; the output is entirely derived from the test program.
+
+--imports FILE adds an IMPORT_LIBRARIES header so the image calls kernel exports the way a real
+executable does. Each line of FILE names a library and the ELF symbols of its import records:
+
+    xam.xex: XamShowFriendsUI_slot, XamShowFriendsUI_thunk
+
+The program itself lays the records out: a 4-byte slot (type 0) in a data section and a 16-byte
+thunk (type 1) at the END of .text, both starting with the record word (type << 24 | ordinal); the
+codegen turns `bl thunk` into a call of the host's __imp__<Name> and treats the thunk range as
+non-code, as it does for the real game. No game content is involved; the output is entirely
+derived from the test program.
 """
 import argparse
 import struct
@@ -147,7 +157,61 @@ def copy_sections(image, pe_sections, elf):
             image[s["rva"]:s["rva"] + src["size"]] = elf[src["offset"]:src["offset"] + src["size"]]
 
 
-def build_xex(image, entry, title_id, pe_sections):
+def read_imports_file(path):
+    """Parses `library: symbol, symbol, ...` lines (# comments) into [(library, [symbols])]."""
+    libs = []
+    with open(path, encoding="utf-8") as f:
+        for lineno, raw in enumerate(f, 1):
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if ":" not in line:
+                raise SystemExit(f"{path}:{lineno}: expected 'library: symbol, symbol'")
+            lib, syms = line.split(":", 1)
+            names = [n.strip() for n in syms.split(",") if n.strip()]
+            if not lib.strip() or not names:
+                raise SystemExit(f"{path}:{lineno}: expected 'library: symbol, symbol'")
+            libs.append((lib.strip(), names))
+    return libs
+
+
+def build_import_libraries(libs, kernel_version=0x20449700):
+    """The IMPORT_LIBRARIES optional header (key 0x000103FF): size, string table (4-byte padded
+    names), then one entry per library (size, digest, id, version, version_min, name index, record
+    count, record addresses). `libs` is [(name, [record_address, ...])]. The version is the kernel
+    build the records were made for (2.0.17559.0, the last Xbox 360 dashboard kernel)."""
+    strings = bytearray()
+    for name, _ in libs:
+        strings += name.encode() + b"\0"
+        while len(strings) % 4:
+            strings += b"\0"
+    body = bytearray()
+    for index, (name, records) in enumerate(libs):
+        entry = struct.pack(">I", 0x28 + 4 * len(records)) + b"\0" * 0x14
+        entry += struct.pack(">IIIHH", 0, kernel_version, kernel_version, index, len(records))
+        entry += b"".join(struct.pack(">I", a) for a in records)
+        body += entry
+    total = 12 + len(strings) + len(body)
+    return struct.pack(">III", total, len(strings), len(libs)) + bytes(strings) + bytes(body)
+
+
+def resolve_imports(libs, symbols):
+    """Turns [(library, [symbol names])] into [(library, [addresses])] with the ELF's symbols."""
+    by_name = {}
+    for addr, _, _, name in symbols:
+        by_name.setdefault(name, addr)
+    out = []
+    for lib, names in libs:
+        addrs = []
+        for n in names:
+            if n not in by_name:
+                raise SystemExit(f"import record symbol {n} ({lib}) not found in the ELF")
+            addrs.append(by_name[n])
+        out.append((lib, addrs))
+    return out
+
+
+def build_xex(image, entry, title_id, pe_sections, import_libs=()):
     # Page descriptors (64 KiB pages): code pages for .text, data for the rest.
     pages = len(image) // PAGE
     text = next(s for s in pe_sections if s["name"] == b".text")
@@ -171,6 +235,8 @@ def build_xex(image, entry, title_id, pe_sections):
     opt.append((0x000003FF, struct.pack(">IHH", 8, 0, 0)))                      # FILE_FORMAT_INFO none/none
     opt.append((0x00040006, struct.pack(">IIIIBBBBI", 0, 0, 0, title_id, 0xFF, 2, 1, 1, 0)))  # EXECUTION_INFO
     opt.append((0x00020104, struct.pack(">IIII", 0, 0, 0, 0)))                  # TLS_INFO
+    if import_libs:
+        opt.append((0x000103FF, build_import_libraries(import_libs)))           # IMPORT_LIBRARIES
     header = bytearray(0x18 + len(opt) * 8)
     payloads = bytearray()
     entries = []
@@ -208,13 +274,15 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--title-id", default="54455354", help="hex title ID for the execution info (default 'TEST')")
     ap.add_argument("--symbols", help="also write every symbol as 'ADDRESS SIZE KIND NAME' lines to this file")
+    ap.add_argument("--imports", metavar="FILE", help="import libraries and their record symbols (see above)")
     args = ap.parse_args()
     with open(args.elf, "rb") as f:
         elf = f.read()
     entry, sections, funcs = read_elf(elf)
     image, pe_sections, pdata_rva, pdata_size = build_image(entry, sections, funcs)
     copy_sections(image, pe_sections, elf)
-    xex = build_xex(image, entry, int(args.title_id, 16), pe_sections)
+    import_libs = resolve_imports(read_imports_file(args.imports), read_elf.symbols) if args.imports else []
+    xex = build_xex(image, entry, int(args.title_id, 16), pe_sections, import_libs)
     with open(args.out, "wb") as f:
         f.write(xex)
     if args.symbols:
@@ -225,6 +293,8 @@ def main():
           f"(RVA 0x{pdata_rva:X}, {pdata_size} bytes), entry 0x{entry:08X}")
     for addr, size, name in funcs:
         print(f"  0x{addr:08X} {size:6d} {name}")
+    for lib, addrs in import_libs:
+        print(f"  imports {lib}: {len(addrs)} records at " + ", ".join(f"0x{a:08X}" for a in addrs))
 
 
 if __name__ == "__main__":

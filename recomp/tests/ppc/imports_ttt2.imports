@@ -1,0 +1,4 @@
+# Import libraries of imports_ttt2.s for scripts/ppc_elf_to_xex.py --imports: library, then the
+# ELF symbols of its import records (slot and thunk of each import).
+xam.xex: XamShowFriendsUI_slot, XamShowFriendsUI_thunk, XamUserCreateStatsEnumerator_slot, XamUserCreateStatsEnumerator_thunk
+xboxkrnl.exe: RtlCompareMemory_slot, RtlCompareMemory_thunk

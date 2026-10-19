@@ -20,9 +20,12 @@
 #
 # --exec additionally builds recomp/tests/host (the ReXGlue runtime in tool mode plus the generated
 # code; a long build, reused across runs when TTT2_HOST_BUILD_DIR points at an existing one) and
-# RUNS the switch-table program natively, checking the 12 values it stores: once with the SDK's own
-# jump-table detection (expected to fail: SDK 0.10.0 switches on the wrong register for several
-# shapes, measured in session 3) and once with the finder's [[switch_tables]] (must pass).
+# RUNS programs natively: the switch-table program, checking the 12 values it stores, once with the
+# SDK's own jump-table detection (expected to fail: SDK 0.10.0 switches on the wrong register for
+# several shapes, measured in session 3) and once with the finder's [[switch_tables]] (must pass);
+# and the kernel-import program (imports_ttt2.s), whose calls through a real XEX import table must
+# reach the host's kernel overrides (recomp/src/kernel_overrides.cpp, compiled into the harness as
+# into the game host) and an implemented runtime export, with no runtime stub called.
 #
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
@@ -61,7 +64,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 [ -z "$sdk" ] || sdk="$(cd "$sdk" && pwd)"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2
+rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2 "$work"/imports_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -196,38 +199,45 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     run_case insn_ttt2 "$root/recomp/tests/ppc/insn_ttt2.s" 8 0 0 \
         "--expect-mnemonics $root/recomp/ttt2_instructions.txt --absent-ok macchwu,maclhwu"
 
+    # Kernel imports through a real XEX import table (imports_ttt2.imports): the codegen must resolve
+    # all three ordinals to __imp__ calls; one function (the entry point), no jump tables.
+    run_case imports_ttt2 "$root/recomp/tests/ppc/imports_ttt2.s" 4 0 0 "--expect-imports 3"
+
     if [ "$exec_mode" = 1 ] && [ -n "$sdk" ]; then
-        # Native execution through the ReXGlue runtime (recomp/tests/host). The program stores 12
-        # words at `results` (address from the packer's symbol map) and returns their sum.
-        dir="$work/switch_ttt2"
-        results="$(tr -d '\r' < "$dir/switch_ttt2.xex.syms" | awk '$4 == "results" {print $1}')"
-        expected="20,102,201,301,401,500,600,701,900,800,0,9"
+        # Native execution through the ReXGlue runtime (recomp/tests/host). Each program stores words
+        # at `results` (address from the packer's symbol map) and returns their sum.
+        results_of() { tr -d '\r' < "$1" | awk '$4 == "results" {print $1}'; }
         hostbuild="${TTT2_HOST_BUILD_DIR:-$work/host-build}"
-        run_host() {  # <generated dir>: builds the harness for it and runs the program
+        # run_host <project> <generated dir> <results 0xADDR:COUNT> <expected v,v,...> [log level]:
+        # builds the harness for the project's generated code and runs $work/<project>/<project>.xex.
+        # --max-stub-calls 0: the program must not reach any kernel export the runtime only stubs.
+        run_host() {
             cmake -S "$root/recomp/tests/host" -B "$hostbuild" -G Ninja \
                 -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_C_FLAGS=-mssse3 -DCMAKE_CXX_FLAGS=-mssse3 -DSDL_X11_XSCRNSAVER=OFF \
-                -DREXSDK_DIR="$sdk" -DTTT2_GUEST_PROJECT=switch_ttt2 -DTTT2_GUEST_GENERATED="$1" > "$hostbuild.configure.log" 2>&1 \
+                -DREXSDK_DIR="$sdk" -DTTT2_GUEST_PROJECT="$1" -DTTT2_GUEST_GENERATED="$2" > "$hostbuild.configure.log" 2>&1 \
                 && cmake --build "$hostbuild" --target headless_host --parallel > "$hostbuild.build.log" 2>&1 || {
                 echo "FAIL exec: building the headless host failed (see $hostbuild.build.log)"; tail -20 "$hostbuild.build.log"; return 2; }
             host="$(find "$sdk/out" \( -name headless_host -o -name headless_host.exe \) -type f 2>/dev/null | head -1)"
             [ -n "$host" ] || { echo "FAIL exec: headless_host not found under $sdk/out"; return 2; }
-            # --max-stub-calls 0: the program must not reach any kernel export the runtime only stubs.
-            (cd "$dir" && timeout 120 "$host" --game-root "$dir" --xex switch_ttt2.xex --results "$results:12" \
-                --expect "$expected" --max-stub-calls 0 --log-level warn)
+            (cd "$work/$1" && timeout 120 "$host" --game-root "$work/$1" --xex "$1.xex" --results "$3" \
+                --expect "$4" --max-stub-calls 0 --log-level "${5:-warn}")
         }
+        dir="$work/switch_ttt2"
+        results="$(results_of "$dir/switch_ttt2.xex.syms")"
+        expected="20,102,201,301,401,500,600,701,900,800,0,9"
         # Harness exit codes: 0 all values as expected and no stub calls, 1 mismatch or stub calls,
         # 2 build/setup failure, 3 the guest never finished; a trap in the guest ends the process with
         # a signal (>= 128).
         rc=0
-        run_host "$dir/generated-sdk-only/default" > "$dir/exec-sdk-only.log" 2>&1 || rc=$?
+        run_host switch_ttt2 "$dir/generated-sdk-only/default" "$results:12" "$expected" > "$dir/exec-sdk-only.log" 2>&1 || rc=$?
         case "$rc" in
             0) echo "FAIL exec: the SDK-only switch tables ran correctly, which contradicts the measured SDK 0.10.0 behaviour (see $dir/exec-sdk-only.log)"; status=1 ;;
             2) echo "FAIL exec: could not build or start the headless host for the SDK-only code (see $dir/exec-sdk-only.log)"; tail -20 "$dir/exec-sdk-only.log"; status=1 ;;
             *) echo "ok   exec: SDK-only jump tables do not run correctly (exit $rc, as measured; see $dir/exec-sdk-only.log)" ;;
         esac
         rc=0
-        run_host "$dir/generated/default" > "$dir/exec-finder.log" 2>&1 || rc=$?
+        run_host switch_ttt2 "$dir/generated/default" "$results:12" "$expected" > "$dir/exec-finder.log" 2>&1 || rc=$?
         if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-finder.log" \
             && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec-finder.log"; then
             echo "ok   exec: native run with the finder's switch tables produced all 12 expected values, no kernel stubs reached"
@@ -236,9 +246,28 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             tail -20 "$dir/exec-finder.log"
             status=1
         fi
+
+        # Kernel imports: XamShowFriendsUI and XamUserCreateStatsEnumerator are stubs in the runtime
+        # and must get the host overrides' results (ERROR_SUCCESS, ERROR_NO_SUCH_USER = 1317), with the
+        # override's first-call log line as the witness; RtlCompareMemory is the SDK's own (5 matching
+        # bytes). Without the overrides the harness would count 2 stub calls and r3 would be garbage.
+        dir="$work/imports_ttt2"
+        rc=0
+        run_host imports_ttt2 "$dir/generated/default" "$(results_of "$dir/imports_ttt2.xex.syms"):3" "0,1317,5" info \
+            > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
+            && grep -q "kernel override XamShowFriendsUI -> ERROR_SUCCESS" "$dir/exec.log" \
+            && grep -q "kernel override XamUserCreateStatsEnumerator -> ERROR_NO_SUCH_USER" "$dir/exec.log"; then
+            echo "ok   exec: kernel imports reached the host overrides (0, 1317) and the runtime's RtlCompareMemory (5), no stubs"
+        else
+            echo "FAIL exec: native run of the kernel-import program (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
     fi
 else
-    echo "skip switch_ttt2 / insn_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / insn_ttt2 / imports_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

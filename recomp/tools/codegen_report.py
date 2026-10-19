@@ -9,7 +9,7 @@ executable (docs/LEGAL.md); the generated code itself never leaves the player's 
 
     python3 -I recomp/tools/codegen_report.py <generated dir> [--log codegen.log]
                                               [--project ttt2] [--md REPORT.md] [--json report.json]
-                                              [--expect-functions N] [--expect-switches N]
+                                              [--expect-functions N] [--expect-switches N] [--expect-imports N]
                                               [--fail-on-unimplemented] [--fail-on-errors]
 
 Exit code 0 when every --expect/--fail-on condition holds (or none was given), 1 otherwise,
@@ -310,6 +310,7 @@ def main(argv):
     ap.add_argument("--expect-functions", type=int)
     ap.add_argument("--expect-switches", type=int)
     ap.add_argument("--expect-unimplemented", type=int, help="exact number of unimplemented sites expected")
+    ap.add_argument("--expect-imports", type=int, help="exact number of resolved kernel/XAM imports (__imp__) expected")
     ap.add_argument("--expect-mnemonics", metavar="FILE",
                     help="file with one mnemonic per line (# comments allowed); each must occur in the generated code")
     ap.add_argument("--absent-ok", default="",
@@ -340,6 +341,9 @@ def main(argv):
     if args.expect_unimplemented is not None:
         checks.append((len(rep["unimplemented"]) == args.expect_unimplemented,
                        f"{len(rep['unimplemented'])} unimplemented sites (expected {args.expect_unimplemented})"))
+    if args.expect_imports is not None:
+        checks.append((rep["imports"] == args.expect_imports,
+                       f"{rep['imports']} kernel/XAM imports resolved (expected {args.expect_imports})"))
     if args.expect_mnemonics:
         with open(args.expect_mnemonics, encoding="utf-8") as f:
             wanted = [ln.split("#", 1)[0].strip().lower() for ln in f if ln.split("#", 1)[0].strip()]
