@@ -8,6 +8,11 @@ name: ReXGlue codegen tool (Windows)
 
 on:
   workflow_dispatch:
+    inputs:
+      native_run:
+        description: "Also build the headless host against the SDK runtime and run the switch-table program natively (adds an hour or more)"
+        type: boolean
+        default: false
   schedule:
     - cron: "41 5 * * 2"
 
@@ -36,12 +41,19 @@ jobs:
       - name: Codegen smoke test (license-free PowerPC programs)
         shell: bash
         env:
+          CC: clang
           CXX: clang++
+          NATIVE_RUN: ${{ inputs.native_run && 'true' || 'false' }}
         run: |
           # make-ppc-test-xex.sh uses clang/ld.lld (LLVM is multi-target) for C sources and the SDK's
-          # Windows binutils (.exe) for assembly sources.
+          # Windows binutils (.exe) for assembly sources. With native_run the SDK source tree is passed
+          # too and --exec builds recomp/tests/host (the runtime) and runs the program on Windows.
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
-          scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
+          if [ "$NATIVE_RUN" = true ]; then
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec
+          else
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
+          fi
       - name: Upload rexglue.exe
         uses: actions/upload-artifact@v4
         with:
