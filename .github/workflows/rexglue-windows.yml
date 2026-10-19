@@ -55,6 +55,8 @@ jobs:
             scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
           fi
       - name: Upload rexglue.exe
+        # Even when the smoke test fails: the tool itself is the deliverable the owner downloads.
+        if: always() && steps.tool.outputs.exe != ''
         uses: actions/upload-artifact@v4
         with:
           name: rexglue-win-amd64
