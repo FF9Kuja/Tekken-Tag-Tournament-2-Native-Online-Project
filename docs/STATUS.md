@@ -137,8 +137,10 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   purpose as described above; finder -> codegen -> host -> boot verified after the manifest change.
 
 **Not verified / open**
-* The stall detector has not fired yet (no program here stalls); the crash reporter has (illegal-instruction
-  case). The GPU plugin loads only when a GPU is present: never exercised in CI (no GPU; the boot test runs with
+* The stall detector fired natively on a license-free program that spins forever (`recomp/tests/ppc/stall_ttt2.s`,
+  `host-boot-test.sh --expect-stall`: "possible stall ... unchanged for 3000 ms" with four per-thread lines,
+  1 s watchdog period); the crash reporter fired on the illegal-instruction case. The GPU plugin loads only when
+  a GPU is present: never exercised in CI (no GPU; the boot test runs with
   `--gpu_plugin=none`), so the first real boot on the owner's machine is also the first run with graphics.
 * `find_switch_tables.py` is verified on the synthetic switch program only; its result on the real image (the
   count and the codegen report) comes with the owner's first run.
@@ -156,8 +158,8 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Merge PR #4 once its runs are green, restart the branch from `main`, then iterate on the owner's first-boot
   report: implement each stub the triage report lists as a host override (TTT2 Web's reference is given per
   stub), fix what the HOST CRASH block or the stall dump points at, repeat. Until the report arrives, the
-  remaining preparatory work is small: the Windows workflow could run `--expect-crash` too, and the stall
-  detector could be exercised by a license-free program that waits on an event forever.
+  remaining preparatory work is small (the Windows workflow could run the crash and stall forms of the boot
+  test too).
 
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 

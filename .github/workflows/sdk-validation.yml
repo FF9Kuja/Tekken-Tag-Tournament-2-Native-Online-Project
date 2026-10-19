@@ -62,6 +62,12 @@ jobs:
           cmake --build out/host-linux --parallel
           ls -la out/host-linux/
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 120
+          # The same host rebuilt on a program that spins forever: the watchdog's stall dump must fire.
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/stall_ttt2.s recomp/game/default.xex
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-stall.json
+          (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-stall
       - name: Upload the host boot log
         if: always()
         uses: actions/upload-artifact@v4

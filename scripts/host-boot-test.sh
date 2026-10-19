@@ -12,13 +12,22 @@
 # newest log file next to the executable: the executable identification, both override first-call
 # lines, the main guest thread's exit and the host's own exit line; a HOST CRASH block fails the test.
 # With --expect-crash the expectations invert: exit code 3 (Ttt2App::kExitCodeHostCrash) and a
-# HOST CRASH block, which is how the crash path itself is tested. No game content is involved.
+# HOST CRASH block, which is how the crash path itself is tested. With --expect-stall (image:
+# recomp/tests/ppc/stall_ttt2.s, a program that spins forever) the host runs with a 1 s watchdog period
+# until the timeout (default 12 s) and the log must hold the "possible stall" dump with per-thread
+# lines, which is how the stall detector is tested. No game content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
 game="${2:?game data root}"
-limit="${3:-60}"
+limit="${3:-}"
 expect_crash=0
-for a in "$@"; do [ "$a" = "--expect-crash" ] && expect_crash=1; done
+expect_stall=0
+for a in "$@"; do
+    [ "$a" = "--expect-crash" ] && expect_crash=1
+    [ "$a" = "--expect-stall" ] && expect_stall=1
+done
+case "$limit" in ""|--*) limit=60; [ "$expect_stall" = 0 ] || limit=12 ;; esac
+[ "$expect_stall" = 0 ] || export TTT2_WATCHDOG_MS=1000
 [ -f "$exe" ] || { echo "host-boot-test: $exe not found"; exit 2; }
 exe="$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")"
 game="$(cd "$game" && pwd)"
@@ -48,7 +57,18 @@ check() {  # <pattern> <description>
 absent() {
     if grep -q "$1" "$log"; then echo "FAIL boot: $2 ('$1' found in the log)"; status=1; else echo "ok   boot: $2"; fi
 }
-if [ "$expect_crash" = 1 ]; then
+if [ "$expect_stall" = 1 ]; then
+    # timeout ends the run: 124 when it had to kill the host, 0 when the host saw the signal as a window
+    # close and ended itself (ReXApp hard-exits on close).
+    case "$rc" in 124|0) echo "ok   boot: the host was still running at the timeout (exit $rc)" ;;
+        *) echo "FAIL boot: exit code $rc, expected the host to run until the timeout"; status=1 ;; esac
+    check "ttt2: main guest thread created" "the module was launched"
+    check "ttt2: watchdog: .* main thread running" "the watchdog saw the main thread running"
+    check "ttt2: possible stall: thread census and stub calls unchanged" "the stall detector fired"
+    check "ttt2:   .* id [0-9]* .* priority .* wait_result" "the per-thread dump was logged"
+    absent "ttt2: HOST CRASH" "no host crash"
+    absent "ttt2: guest program ended" "the program did not end on its own"
+elif [ "$expect_crash" = 1 ]; then
     [ "$rc" = 3 ] && echo "ok   boot: exit code 3 after the crash" || { echo "FAIL boot: exit code $rc, expected 3 (crash)"; status=1; }
     check "ttt2: HOST CRASH" "the crash report was logged"
     check "exiting with code 3" "the host ended itself after the report"

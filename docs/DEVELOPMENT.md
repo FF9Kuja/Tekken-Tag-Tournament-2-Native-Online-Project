@@ -106,7 +106,10 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   without GPU emulation (`--gpu_plugin=none`; under `xvfb-run` on a display-less Linux) and checks its log: image
   identified, module launched, both kernel overrides reached, program returned, host exited with code 0. With
   `--expect-crash` it expects exit code 3 and a HOST CRASH block instead (the crash path, tested here with the
-  switch-table program recompiled on the SDK's own tables, which traps). Both workflows run the normal form.
+  switch-table program recompiled on the SDK's own tables, which traps); with `--expect-stall` (image:
+  `recomp/tests/ppc/stall_ttt2.s`, a program that spins forever) it runs with a 1 s watchdog period until the
+  timeout and expects the "possible stall" dump with per-thread lines. Both workflows run the normal form; the
+  SDK validation workflow also rebuilds the host on the stalling program and runs the stall form.
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
