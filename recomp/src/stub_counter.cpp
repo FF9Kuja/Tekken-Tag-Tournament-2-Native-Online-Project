@@ -10,10 +10,19 @@ void KernelStubCounter::sink_it_(const spdlog::details::log_msg& msg) {
   const std::string name = stub_name(std::string_view(msg.payload.data(), msg.payload.size()));
   if (name.empty()) return;
   std::lock_guard lock(hits_mutex_);
+  recent_[total_ % kRecent] = name;
   ++total_;
   auto it = hits_.find(name);
   if (it == hits_.end()) it = hits_.emplace(name, Hit{name, 0, total_}).first;
   ++it->second.calls;
+}
+
+std::vector<std::string> KernelStubCounter::Recent() const {
+  std::lock_guard lock(hits_mutex_);
+  std::vector<std::string> out;
+  const std::uint64_t count = total_ < kRecent ? total_ : kRecent;
+  for (std::uint64_t i = 0; i < count; ++i) out.push_back(recent_[(total_ - count + i) % kRecent]);
+  return out;
 }
 
 std::vector<KernelStubCounter::Hit> KernelStubCounter::Snapshot() const {

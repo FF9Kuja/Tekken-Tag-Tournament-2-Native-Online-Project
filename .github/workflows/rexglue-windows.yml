@@ -13,6 +13,10 @@ on:
         description: "Also build the headless host against the SDK runtime and run the switch-table program natively (adds an hour or more)"
         type: boolean
         default: false
+      build_host:
+        description: "Also install the SDK as a CMake package and build the game host ttt2.exe from the license-free test program with scripts/build-host.ps1 (adds an hour or more)"
+        type: boolean
+        default: false
   schedule:
     - cron: "41 5 * * 2"
 
@@ -26,7 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install LLVM 20, CMake and Ninja
-        run: choco install llvm --version=20.1.8 -y --no-progress; choco install cmake ninja -y --no-progress
+        run: |
+          choco install llvm --version=20.1.8 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { Write-Host "pinned LLVM unavailable, installing the latest"; choco install llvm -y --no-progress }
+          choco install cmake ninja -y --no-progress
+          clang --version
+          # the SDK's submodules hold paths longer than 260 characters
+          git config --global core.longpaths true
       - name: Fetch the pinned SDK
         run: scripts\fetch-rexglue-sdk.ps1
       - name: Build rexglue.exe
@@ -45,14 +55,16 @@ jobs:
           CXX: clang++
           NATIVE_RUN: ${{ inputs.native_run && 'true' || 'false' }}
         run: |
-          # make-ppc-test-xex.sh uses clang/ld.lld (LLVM is multi-target) for C sources and the SDK's
-          # Windows binutils (.exe) for assembly sources. With native_run the SDK source tree is passed
-          # too and --exec builds recomp/tests/host (the runtime) and runs the program on Windows.
+          # The official LLVM builds for Windows have no PowerPC backend (X86/ARM/AArch64 only), so the
+          # two C test programs cannot be built here and --allow-no-ppc-clang skips them (Linux CI covers
+          # them); the TTT2-shaped assembly programs are assembled with the SDK's Cygwin-built PowerPC
+          # binutils (.exe). With native_run the SDK source tree is passed too and --exec builds
+          # recomp/tests/host (the runtime) and runs the switch-table program natively on Windows.
           export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
           if [ "$NATIVE_RUN" = true ]; then
-            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" third_party/rexglue-sdk/src out/codegen-smoke --exec --allow-no-ppc-clang
           else
-            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke
+            scripts/codegen-smoke-test.sh "${{ steps.tool.outputs.exe }}" "" out/codegen-smoke --allow-no-ppc-clang
           fi
       - name: Upload rexglue.exe
         # Even when the smoke test fails: the tool itself is the deliverable the owner downloads.
@@ -62,6 +74,29 @@ jobs:
           name: rexglue-win-amd64
           path: ${{ steps.tool.outputs.exe }}
           retention-days: 90
+      # --- optional: the game host built the way a player builds it ---------------------------------
+      - name: Install the SDK as a CMake package (runtime, GPU plugin, SDL3; long)
+        if: inputs.build_host
+        run: scripts\build-rexglue-windows.ps1 -Install
+      - name: Pack the license-free switch-table program as the host's game image
+        if: inputs.build_host
+        shell: bash
+        env:
+          CC: clang
+        run: |
+          export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
+          mkdir -p recomp/game
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/switch_ttt2.s recomp/game/default.xex
+      - name: Build ttt2.exe against the installed SDK (codegen runs inside the build)
+        if: inputs.build_host
+        run: scripts\build-host.ps1
+      - name: Upload the host build listing
+        if: always() && inputs.build_host
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-win-amd64-listing
+          path: recomp/out/build/win-amd64-release/host-listing.txt
+          if-no-files-found: ignore
       - name: Upload smoke-test reports
         if: always()
         uses: actions/upload-artifact@v4

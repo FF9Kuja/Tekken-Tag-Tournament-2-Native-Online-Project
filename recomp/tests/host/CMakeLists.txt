@@ -35,10 +35,12 @@ add_subdirectory("${REXSDK_DIR}" rexglue-sdk EXCLUDE_FROM_ALL)
 
 include("${TTT2_GUEST_GENERATED}/sources.cmake")
 
-# The host's kernel stub counter (recomp/src) is compiled in so the harness reports the stubs a
-# program reaches, with the same code the game host uses.
+# The host's kernel stub counter and kernel overrides (recomp/src) are compiled in, so the harness
+# reports the stubs a program reaches and binds import calls exactly as the game host does: a
+# program that calls an overridden export (recomp/tests/ppc/imports_ttt2.s) gets the override's result.
 set(TTT2_HOST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
-add_executable(headless_host headless_main.cpp "${TTT2_HOST_SRC}/stub_counter.cpp" ${GENERATED_SOURCES})
+add_executable(headless_host headless_main.cpp "${TTT2_HOST_SRC}/stub_counter.cpp"
+    "${TTT2_HOST_SRC}/kernel_overrides.cpp" ${GENERATED_SOURCES})
 target_compile_definitions(headless_host PRIVATE
     TTT2_GUEST_INIT_HEADER="${TTT2_GUEST_PROJECT}_init.h"
     TTT2_GUEST_PROJECT_NAME="${TTT2_GUEST_PROJECT}")

@@ -1,0 +1,19 @@
+# Variant of ttt2_manifest.toml that also feeds ReXGlue the explicit function boundaries converted
+# from TTT2 Web (CC0): recomp/ttt2_functions.ttt2web.toml. Use it ONLY when `ttt2-xexinfo --helpers`
+# reports "Layout vs TTT2 Web: 8 of 8 helper addresses match" for your patched executable; with a
+# different layout those boundaries would be wrong. Output goes to generated/ttt2web (git-ignored) so
+# the two runs can be compared with recomp/tools/codegen_report.py. scripts/owner-pipeline.ps1 picks
+# this manifest automatically when the fingerprint matches.
+
+[project]
+name = "ttt2"
+sdk_version = "0.10.0"
+game_root = "game"
+
+[entrypoint]
+file_path = "game/default.xex"
+out_directory_path = "generated/ttt2web"
+includes = [
+  "ttt2_config.toml",
+  "ttt2_functions.ttt2web.toml",
+]

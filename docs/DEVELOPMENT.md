@@ -42,9 +42,10 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   ttt2-xexinfo "D:\TTT2\TU_174Q22P_0000008000000.00000000000O2" --headers   # (after STFS extraction: Milestone 3)
   ```
 
-* `ttt2-iso info|list|identify|extract <image.iso> ...` - reads an Xbox 360 disc image in place (XGD3/XGD2/XGD1
-  or an extracted partition); `identify` finds `default.xex`, parses and hashes it (`--image-hash` also hashes
-  the decrypted image); `extract` copies one file out.
+* `ttt2-iso info|list|identify|extract|extract-all <image.iso> ...` - reads an Xbox 360 disc image in place
+  (XGD3/XGD2/XGD1 or an extracted partition); `identify` finds `default.xex`, parses and hashes it
+  (`--image-hash` also hashes the decrypted image); `extract` copies one file out; `extract-all` writes the whole
+  tree into a directory (the game data root the native host runs from; entry names are sanitised).
 * `ttt2-stfs info|identify|extract <package> ...` - reads a title-update package (LIVE/PIRS/CON); `identify`
   reports the contained `.xexp`'s source -> target version.
 * `ttt2-xexpatch <base.xex> <patch.xexp> <out.xex> [--force]` - applies a title update (Clang builds only; needs
@@ -61,6 +62,12 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   from `src/xex/rexglue_runtime_exports.inc` (regenerate with `scripts/gen_runtime_exports.py` after bumping the
   SDK pin); `--helpers` locates the eight register save/restore helpers by byte pattern.
 * The owner's end-to-end instructions are in `docs/OWNER_CHECKLIST.md`; `scripts/owner-pipeline.ps1` runs them.
+* `scripts/build-host.ps1 [-Game default_tu3.xex] [-SdkInstall DIR] [-InstallSdk]` builds the native host
+  `ttt2.exe` from `recomp/` against the ReXGlue SDK installed as a CMake package (the SDK's own consumption
+  model: `cmake --build ... --target install`, then `find_package(rexglue)` through `CMAKE_PREFIX_PATH`);
+  codegen runs inside the build. The same route is exercised on Linux by `sdk-validation.yml` and on Windows by
+  `rexglue-windows.yml` (`build_host` input), with the license-free switch-table program standing in for the
+  game image, so the player's build path has CI evidence without any game data.
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)
 
@@ -73,8 +80,17 @@ the tool and checks exit code, printed reasons and the files written to `--work`
   because SDK 0.10.0's own detector misses offset tables and picks wrong registers (`docs/RESEARCH.md` 8a).
 * `scripts/check_instruction_coverage.py [--expect-missing 2]` - compares `recomp/ttt2_instructions.txt` with
   the SDK's instruction builders.
+* `recomp/tools/import_ttt2web_functions.py <TTT2.toml> --out recomp/ttt2_functions.ttt2web.toml` - converts
+  TTT2 Web's (CC0) explicit function boundaries into ReXGlue's `[functions]` table; `recomp/ttt2_manifest.ttt2web.toml`
+  includes the result and is only for images whose helper addresses match TTT2 Web's published set
+  (`ttt2-xexinfo --helpers`). Unit-tested in `tests/python`.
 * `scripts/make-ppc-test-xex.sh <source.c|.s> <out.xex>` - builds a license-free PowerPC test program and packs
-  it as an XEX2 image (assembly through the SDK's bundled binutils); writes `<out.xex>.syms`.
+  it as an XEX2 image (assembly through the SDK's bundled binutils, the Cygwin-built `.exe` variants on Windows);
+  writes `<out.xex>.syms`. C sources need a Clang with the PowerPC backend (exit 3 without one): the official LLVM
+  builds for Windows ship X86/ARM/AArch64 only, so the C programs are Linux-only and the assembly programs are the
+  ones that run everywhere. A `<source>.imports` file next to the source (`library: slot_symbol, thunk_symbol, ...`)
+  adds a real XEX2 import table (`IMPORT_LIBRARIES` header) so the program calls kernel exports like the game does:
+  `recomp/tests/ppc/imports_ttt2.s` is the example (slots in `.rodata`, 16-byte thunks at the end of `.text`).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).
@@ -96,10 +112,11 @@ it on every push. Install it as a pre-commit hook with `scripts/install-git-hook
 
 `.github/workflows/ci.yml`: hygiene check and Python unit tests; Linux clang and gcc (`-Werror`); Windows MSVC (VS
 2022 generator) and clang-cl (Ninja). All jobs build the tools and run the tests; Linux jobs also smoke-test the
-tools. `sdk-validation.yml` (weekly/manual) builds the SDK, runs the codegen checks and the native run of the
-switch-table program through the headless host (`--exec`); `rexglue-windows.yml` (weekly/manual) builds
-`rexglue.exe` on Windows and, with the `native_run` input, also builds the headless host on Windows and runs the
-program there (the first native-execution evidence on the target platform; slow).
+tools. `sdk-validation.yml` (weekly/manual) builds the SDK, runs the codegen checks, the native run of the
+switch-table program through the headless host (`--exec`), and builds the game host against the installed SDK
+package; `rexglue-windows.yml` (weekly/manual) builds `rexglue.exe` on Windows and, with the `native_run` and
+`build_host` inputs, also builds the headless host and runs the program there, and builds `ttt2.exe` the way a
+player does (slow: both build the whole runtime).
 
 ## Working with the ReXGlue SDK on Linux (Milestone 3 preview)
 
@@ -142,7 +159,12 @@ scripts/codegen-smoke-test.sh /path/to/rexglue-sdk/out/linux-amd64/rexglue /path
 
 `scripts/ppc_elf_to_xex.py` is the packer behind it (PE32 for PowerPC-BE with a `.pdata` exception directory
 synthesised from the ELF's function symbols, wrapped in unencrypted, uncompressed XEX2 headers). Add `--exec` to
-also build `recomp/tests/host` and run the switch-table program natively (slow: it builds the runtime). To
+also build `recomp/tests/host` and run the switch-table and kernel-import programs natively (slow: it builds the
+runtime). The harness compiles `recomp/src/kernel_overrides.cpp` in, so `imports_ttt2` proves that a call through
+the import table reaches the host's override of a runtime stub (`XamShowFriendsUI` -> 0,
+`XamUserCreateStatsEnumerator` -> 1317) and the runtime's own `RtlCompareMemory` (5), with no stub called. On Windows
+(Git Bash) add `--allow-no-ppc-clang`: the C cases are skipped there, the assembly cases and `--exec` run, and the
+syntax check of the generated code against the SDK headers is Linux-only (the host build compiles it instead). To
 compile-check the real host (`recomp/`, `Ttt2App`) on Linux, put any test image at `recomp/game/default.xex` and
 configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `-mssse3`).
 

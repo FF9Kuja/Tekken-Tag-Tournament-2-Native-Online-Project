@@ -139,6 +139,7 @@ TEST_CASE("PE sections are read and the helper scan covers only executable ones"
 TEST_CASE("the runtime support tables classify exports as implemented, stub or missing") {
   CHECK(runtime_function_support("NtClose") == RuntimeSupport::kImplemented);
   CHECK(runtime_function_support("XamShowSigninUI") == RuntimeSupport::kImplemented);
+  CHECK(runtime_function_support("DbgPrint") == RuntimeSupport::kImplemented);  // a REX_HOOK_RAW, not a REX_EXPORT
   CHECK(runtime_function_support("AniStartBootAnimation") == RuntimeSupport::kStub);
   // Both hooked and stubbed in the SDK sources: the hook is what links, so it counts as implemented.
   CHECK(runtime_function_support("KeInitializeTimerEx") == RuntimeSupport::kImplemented);
@@ -153,4 +154,27 @@ TEST_CASE("the runtime support tables classify exports as implemented, stub or m
   CHECK_FALSE(runtime_exports_sdk_commit().empty());
   CHECK(std::string(runtime_support_name(RuntimeSupport::kStub)) == "stub");
   CHECK(std::string(runtime_support_name(RuntimeSupport::kUnknown)) == "unknown");
+}
+
+TEST_CASE("published helper addresses fingerprint an executable layout") {
+  REQUIRE(std::size(kPublishedHelpers) >= 1);
+  const auto& web = kPublishedHelpers[0];
+  CHECK(web.project == "TTT2 Web");
+  CHECK(published_helper(web, "__restgprlr_14") == 0x82BAF6A0u);
+  CHECK(published_helper(web, "__savevmx_64") == 0x82BB1354u);
+  CHECK(published_helper(web, "__nonsense") == 0);
+
+  // The synthetic image has its helpers elsewhere (or ambiguous / missing): nothing matches.
+  const auto image = make_image();
+  CHECK(count_published_helper_matches(scan_save_restore_helpers(image, kBase), web) == 0);
+
+  // Exactly the published addresses, each found once: a full match.
+  std::vector<HelperHit> hits;
+  for (const char* name : {"__restgprlr_14", "__savegprlr_14", "__restfpr_14", "__savefpr_14", "__restvmx_14",
+                           "__savevmx_14", "__restvmx_64", "__savevmx_64"}) {
+    hits.push_back({name, {published_helper(web, name)}});
+  }
+  CHECK(count_published_helper_matches(hits, web) == 8);
+  hits[0].addresses.push_back(0x82000000u);  // ambiguous: no longer counts
+  CHECK(count_published_helper_matches(hits, web) == 7);
 }

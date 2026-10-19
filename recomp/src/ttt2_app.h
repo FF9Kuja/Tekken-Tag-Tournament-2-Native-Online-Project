@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <rex/exception_handler.h>
 #include <rex/image_info.h>
 #include <rex/rex_app.h>
 
@@ -38,6 +39,7 @@ class Ttt2App : public rex::ReXApp {
   void OnConfigurePaths(rex::PathConfig& paths) override;
   void OnPreSetup(rex::RuntimeConfig& config) override;
   void OnPostInitLogging() override;
+  void OnPostSetup() override;
   void OnPostLoadXexImage() override;
   void OnPostLaunchModule(rex::system::XThread* thread) override;
   void OnGuestThreadExit(rex::system::XThread* thread) override;
@@ -48,10 +50,23 @@ class Ttt2App : public rex::ReXApp {
   void StopWatchdog();
   void WatchdogTick();
   void LogStubReport(const char* when);
+  /// Last-chance host exception handler (rex::arch::ExceptionHandler): logs what is known about the
+  /// crash (kind, host PC, fault address, guest thread, recent stub calls), flushes the log, and
+  /// declines to handle it so the process still ends the normal way.
+  static bool OnHostException(rex::arch::Exception* ex, void* data);
+  void ReportCrash(rex::arch::Exception* ex);
 
   std::shared_ptr<ttt2::KernelStubCounter> stubs_;
+  bool crash_handler_installed_ = false;
+  std::atomic<bool> crash_reported_{false};
   rex::system::XThread* main_thread_ = nullptr;
   std::thread watchdog_;
   std::atomic<bool> watchdog_stop_{false};
   std::uint32_t watchdog_period_ms_ = 5000;
+  // Stall detection: the census (threads, running threads) and the stub-call total seen last tick,
+  // and how many consecutive ticks they stayed identical while the main thread was running.
+  std::size_t last_thread_count_ = 0;
+  std::size_t last_running_count_ = 0;
+  std::uint64_t last_stub_total_ = 0;
+  unsigned unchanged_ticks_ = 0;
 };

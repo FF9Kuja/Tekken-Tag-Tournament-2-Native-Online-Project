@@ -10,7 +10,7 @@ Microsoft is a dependency: game content is supplied by the player at install tim
 | doctest | 2.4.11 | MIT | downloaded at configure time with a pinned SHA-256 (`third_party/doctest/CMakeLists.txt`; license kept in-tree) | unit tests only |
 | CMake | >= 3.25 (3.28 tested) | BSD-3 | developer tool | build system |
 | Ninja | 1.11 tested | Apache-2.0 | developer tool | build backend (Linux, clang-cl presets) |
-| Clang / LLD | 18.1 tested | Apache-2.0 with LLVM exception | developer tool | compiler (also emits PowerPC test inputs) |
+| Clang / LLD | 18.1 tested | Apache-2.0 with LLVM exception | developer tool | compiler (also emits PowerPC test inputs on Linux; the official Windows builds have no PowerPC backend, so the assembly test programs cover Windows) |
 | GCC | 13.3 tested | GPL-3.0 with runtime exception | developer tool | second compiler for portability checks |
 | MSVC / Windows SDK | VS 2022 | proprietary (free Community / Build Tools) | developer tool | Windows builds, CI |
 | Python | 3.10+ | PSF | developer tool | scripts (hygiene check, later patch tools) |
@@ -26,6 +26,7 @@ Microsoft is a dependency: game content is supplied by the player at install tim
 | TinySHA1 | in XenonRecomp tree | MIT | header | digests in the patcher |
 | ReXGlue SDK | `c94f5eb` = v0.10.0 (`third_party/rexglue-sdk/PIN`) | BSD-3 | `scripts/fetch-rexglue-sdk.{sh,ps1}` + `scripts/build-rexglue-linux.sh` / `build-rexglue-windows.ps1` | codegen tool (`rexglue`), the runtime (`recomp/`, `recomp/tests/host`), bundled `powerpc-none-elf` binutils (GPL, developer tool only: assembles test programs) |
 | Xbox 360 export tables (`src/xex/xbox_exports_table.inc`) | generated from the XenonRecomp pin above by `scripts/gen_xbox_exports.py` | MIT (XenonRecomp), originally Xenia BSD-3 | committed, regenerated on pin bumps | ordinal -> name of kernel/XAM exports for `ttt2-xexinfo --imports` / `ttt2-validate` |
+| TTT2 Web function boundaries (`recomp/ttt2_functions.ttt2web.toml`) | converted from `recomp/config/TTT2.toml` of monty488/tekkenwebtournament2 (checkout of 2026-10-18) by `recomp/tools/import_ttt2web_functions.py` | CC0 1.0 (public domain; attributed as a courtesy) | committed; addresses and sizes only | explicit `[functions]` for ReXGlue when the image's helper addresses match TTT2 Web's |
 | ReXGlue runtime export list (`src/xex/rexglue_runtime_exports.inc`) | generated from the SDK pin above by `scripts/gen_runtime_exports.py` | BSD-3 (facts about the SDK's exported names, no code) | committed, regenerated on pin bumps | marks each import implemented / stub / missing for `ttt2-xexinfo --imports` / `ttt2-validate` |
 | LLVM 20.1.8 release tarball | `llvmorg-20.1.8` (GitHub release) | Apache-2.0 with LLVM exception | developer tool, only where apt.llvm.org is unreachable | Clang 20 for the SDK build on Linux |
 

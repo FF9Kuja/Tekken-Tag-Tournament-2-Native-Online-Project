@@ -49,7 +49,9 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
 4. [ ] Run ReXGlue codegen on the real TU3 image (**owner's PC or WSL; outputs stay local**): the report tool
    gives unresolved calls, missing instructions, jump tables found; run the finder on the same image and compare
    with the 526-535 tables the other ports report; add its `[[switch_tables]]` and the data-as-code
-   `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse.
+   `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse. [x] TTT2 Web's 18k
+   explicit function boundaries are converted and ready (`recomp/ttt2_functions.ttt2web.toml`), applied only if
+   the owner's image matches TTT2 Web's helper-address fingerprint (the pipeline checks and runs both variants).
 5. [ ] Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others
    (the tools already refuse other titles/versions; the owner's hashes complete the table).
 6. [x] Diagnostic pipeline: codegen logs, validation reports (`codegen_report.py`, `ttt2-validate --json`,
@@ -66,14 +68,23 @@ byte/halfword-offset tables and switches on the wrong register for several absol
 ## Milestone 4 - Native runtime  (started)
 
 1. [x] `recomp/src/ttt2_app.{h,cpp}` (`Ttt2App` on the SDK; compile-checked on Linux against the SDK with a
-   license-free program as the game). [ ] Windows build via CMake preset + CI (host only, no game code).
+   license-free program as the game). [x] Player-side build path: `scripts/build-host.ps1` builds `ttt2.exe`
+   against the SDK installed as a CMake package (verified on Linux here; `sdk-validation.yml` repeats it in CI,
+   `rexglue-windows.yml build_host` on Windows). [ ] First Windows CI run of that job green.
 2. [x] First boot diagnostics: executable identification, import summary, guest-thread watchdog; the headless
    harness `recomp/tests/host` runs recompiled programs through the runtime without a window.
    [x] import coverage: every import of the owner's image is classified against the pinned runtime
    (implemented / stub / missing; `ttt2-xexinfo --imports`, `ttt2-validate`, `scripts/gen_runtime_exports.py`);
    the SDK's stubs log `<name> STUB` at warn level, which is the import trace. [x] stub-call counter in
    `Ttt2App` and the headless harness (`recomp/src/stub_counter.*`: which stubbed system calls the game reaches,
-   how often, logged on watchdog ticks and in full at exit). [ ] stall dumps (as both references built).
+   how often, logged on watchdog ticks and in full at exit). Prediction from TTT2 Web's 136-function runtime:
+   130 implemented in ReXGlue, 5 XAM UI/stats stubs (`docs/RESEARCH.md` 8a); those five are overridden in the
+   host already (`recomp/src/kernel_overrides.cpp`, TTT2 Web's results), the mechanism for the rest, and the
+   mechanism is executed natively by the kernel-import test program (`recomp/tests/ppc/imports_ttt2.s`, in the
+   smoke test's `--exec` run). [x] stall detector (per-thread dump when the census
+   and the stub total stay unchanged for three watchdog ticks) and a host crash report (fault kind, host PC,
+   fault address, guest thread, most recent stub calls) - compile-checked against the SDK, exercised only by a
+   real boot.
 3. Iterate on boot failures with the owner's test reports (**needs Windows + GPU + game files**): threads, waits,
    vblank/DPC timing, XAM UI/content calls, TLS, file I/O through the SDK VFS (`game:`, `update:`).
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.

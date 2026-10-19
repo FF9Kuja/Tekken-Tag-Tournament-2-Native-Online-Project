@@ -32,6 +32,10 @@ class KernelStubCounter : public spdlog::sinks::base_sink<std::mutex> {
   /// One line for the log: "N calls to M stubs; top: A x3, B x1" (at most `top` names).
   std::string Summary(std::size_t top = 8) const;
 
+  /// The most recent stub calls, oldest first (at most kRecent): what the game did right before a crash.
+  static constexpr std::size_t kRecent = 16;
+  std::vector<std::string> Recent() const;
+
  protected:
   void sink_it_(const spdlog::details::log_msg& msg) override;
   void flush_() override {}
@@ -40,6 +44,7 @@ class KernelStubCounter : public spdlog::sinks::base_sink<std::mutex> {
   mutable std::mutex hits_mutex_;
   std::unordered_map<std::string, Hit> hits_;
   std::uint64_t total_ = 0;
+  std::string recent_[kRecent];  ///< ring of the last stub names, written at total_ % kRecent
 };
 
 }  // namespace ttt2

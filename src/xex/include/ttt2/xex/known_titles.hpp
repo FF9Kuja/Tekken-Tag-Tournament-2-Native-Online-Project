@@ -58,6 +58,38 @@ inline constexpr KnownExecutable kKnownExecutables[] = {
 inline constexpr Version kTtt2TitleUpdate3Version{0, 0, 3, 2};
 inline constexpr Version kTtt2RetailBaseVersion{0, 0, 0, 2};
 
+/// A published set of the eight register save/restore helper addresses: the fingerprint of an
+/// executable layout. When an image's scanned helpers equal a published set, that project's other
+/// addresses (function boundaries, switch tables) apply to the image as well.
+struct PublishedHelpers {
+  std::string_view project;     ///< who published them
+  std::string_view provenance;  ///< file / licence
+  std::uint32_t restgprlr_14, savegprlr_14, restfpr_14, savefpr_14, restvmx_14, savevmx_14, restvmx_64,
+      savevmx_64;
+};
+
+inline constexpr PublishedHelpers kPublishedHelpers[] = {
+    // TTT2 Web (monty488/tekkenwebtournament2, CC0 1.0), recomp/config/TTT2.toml: the addresses its
+    // 18k explicit function boundaries (recomp/ttt2_functions.ttt2web.toml) were generated for.
+    // Which executable version its author used is not stated; the match tells.
+    {"TTT2 Web", "recomp/config/TTT2.toml (CC0 1.0)", 0x82BAF6A0u, 0x82BAF650u, 0x82BB033Cu, 0x82BB02F0u,
+     0x82BB1558u, 0x82BB12C0u, 0x82BB15ECu, 0x82BB1354u},
+};
+
+/// The published address of `name` ("__restgprlr_14", ...) in `set`, or 0 when the name is unknown.
+[[nodiscard]] inline std::uint32_t published_helper(const PublishedHelpers& set,
+                                                    std::string_view name) noexcept {
+  if (name == "__restgprlr_14") return set.restgprlr_14;
+  if (name == "__savegprlr_14") return set.savegprlr_14;
+  if (name == "__restfpr_14") return set.restfpr_14;
+  if (name == "__savefpr_14") return set.savefpr_14;
+  if (name == "__restvmx_14") return set.restvmx_14;
+  if (name == "__savevmx_14") return set.savevmx_14;
+  if (name == "__restvmx_64") return set.restvmx_64;
+  if (name == "__savevmx_64") return set.savevmx_64;
+  return 0;
+}
+
 [[nodiscard]] inline std::optional<std::string_view> known_title_name(std::uint32_t title_id) noexcept {
   for (const auto& t : kKnownTitles) {
     if (t.title_id == title_id) return t.name;

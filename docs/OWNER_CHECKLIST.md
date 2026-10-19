@@ -109,6 +109,10 @@ Then let the pipeline script do the rest (it copies `work\default_tu3.xex` to `r
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe"
 ```
 
+The pipeline also compares your executable's save/restore helper addresses with the ones TTT2 Web published
+("Layout vs TTT2 Web: N of 8 helper addresses match" in the report). On a full match it recompiles a second time
+with TTT2 Web's 18k explicit function boundaries and writes `work\codegen-ttt2web-REPORT.md` too; send both.
+
 Also run the switch-table finder on the patched executable; it writes the `[[switch_tables]]` entries the
 recompiler needs (SDK 0.10.0 misses or miscompiles several table shapes on its own, see `docs/RESEARCH.md` 8a):
 
@@ -120,6 +124,30 @@ python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\
 contain function counts, addresses, names and error messages: no game bytes. `recomp\ttt2_switch_tables.toml`
 is addresses only too and will be committed once reviewed. The generated C++ in `recomp\generated\default\`
 stays on your PC (it is git-ignored and refused by the hygiene check).
+
+## Step 6 - build the native host and attempt the first boot
+
+The host is `ttt2.exe`: your recompiled code plus the ReXGlue runtime, built the way every player will build it.
+It needs the SDK installed as a CMake package once (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`
+does it, or let the pipeline do it with `-InstallSdk`) and the whole disc extracted into a folder, which is the
+`game_data_root` the host runs from:
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame
+# by hand instead:
+scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
+.\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
+recomp\out\build\win-amd64-release\ttt2.exe --game_data_root work\game
+```
+
+Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
+`ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`) and prints it to the console: `ttt2: executable title
+4E4D0859 version 0.0.3.2 ...`, an import summary, a guest-thread census every few seconds, a **possible stall**
+dump when nothing changes for 15 seconds (every guest thread with its state), a **kernel stub report** when the
+main thread exits or you close the window (every system call the game reached that the runtime only stubs, with
+counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the guest thread, the most recent stub
+calls). **Send the newest file from that `logs\` folder.** It contains names, addresses and counts only. Also say
+what you saw on screen, if anything. Never send `work\game`, `recomp\game`, `recomp\generated` or `recomp\out`.
 
 ## If something fails
 

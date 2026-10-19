@@ -8,6 +8,7 @@
 // Exit code 0 on success, 1 on error.
 
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +30,7 @@ void usage() {
                "       ttt2-iso list <image.iso> [directory]\n"
                "       ttt2-iso identify <image.iso> [--image-hash]\n"
                "       ttt2-iso extract <image.iso> <path-in-image> <out-file>\n"
+               "       ttt2-iso extract-all <image.iso> <out-directory>\n"
                "       ttt2-iso --version\n");
 }
 
@@ -140,6 +142,79 @@ int cmd_extract(ttt2::xdvdfs::Image& disc, std::string_view path, const std::str
   return 0;
 }
 
+/// A directory entry name that is safe to join to the output directory: no separators, no "." / "..".
+bool safe_name(const std::string& name) {
+  if (name.empty() || name == "." || name == "..") return false;
+  for (const char c : name) {
+    if (c == '/' || c == '\\' || c == ':' || c == '\0') return false;
+  }
+  return true;
+}
+
+struct ExtractStats {
+  std::size_t files = 0;
+  std::size_t directories = 0;
+  std::uint64_t bytes = 0;
+  std::size_t skipped = 0;
+};
+
+bool extract_tree(ttt2::xdvdfs::Image& disc, const std::string& image_dir,
+                  const std::filesystem::path& out_dir, ExtractStats& stats, std::string& error) {
+  const auto entries = disc.list(image_dir.empty() ? "/" : image_dir);
+  if (!entries) {
+    error = (image_dir.empty() ? std::string("/") : image_dir) + ": " + entries.error().message;
+    return false;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(out_dir, ec);
+  if (ec) {
+    error = "cannot create " + out_dir.string();
+    return false;
+  }
+  for (const auto& e : *entries) {
+    if (!safe_name(e.name)) {
+      std::fprintf(stderr, "skipping entry with an unsafe name in %s\n",
+                   image_dir.empty() ? "/" : image_dir.c_str());
+      ++stats.skipped;
+      continue;
+    }
+    const std::string image_path = image_dir.empty() ? e.name : image_dir + "/" + e.name;
+    const std::filesystem::path out_path = out_dir / e.name;
+    if (e.is_directory()) {
+      ++stats.directories;
+      if (!extract_tree(disc, image_path, out_path, stats, error)) return false;
+      continue;
+    }
+    std::FILE* out = std::fopen(out_path.string().c_str(), "wb");
+    if (!out) {
+      error = "cannot create " + out_path.string();
+      return false;
+    }
+    const auto n = disc.stream_file(e, [&](std::span<const std::uint8_t> chunk) {
+      return std::fwrite(chunk.data(), 1, chunk.size(), out) == chunk.size();
+    });
+    std::fclose(out);
+    if (!n) {
+      error = image_path + ": " + n.error().message;
+      return false;
+    }
+    ++stats.files;
+    stats.bytes += *n;
+  }
+  return true;
+}
+
+/// Extracts the whole image into a directory tree: the game data root the native host runs from.
+int cmd_extract_all(ttt2::xdvdfs::Image& disc, const std::string& out_dir) {
+  ExtractStats stats;
+  std::string error;
+  if (!extract_tree(disc, "", std::filesystem::path(out_dir), stats, error)) return fail(error);
+  std::printf("extracted %zu files (%llu bytes) in %zu directories -> %s\n", stats.files,
+              static_cast<unsigned long long>(stats.bytes), stats.directories, out_dir.c_str());
+  if (stats.skipped) std::printf("skipped %zu entries with unsafe names\n", stats.skipped);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -175,6 +250,13 @@ int main(int argc, char** argv) {
       return 1;
     }
     return cmd_extract(*disc, args[2], std::string(args[3]));
+  }
+  if (command == "extract-all") {
+    if (args.size() != 3) {
+      usage();
+      return 1;
+    }
+    return cmd_extract_all(*disc, std::string(args[2]));
   }
   usage();
   return 1;

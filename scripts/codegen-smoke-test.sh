@@ -10,37 +10,64 @@
 # headers. Each case leaves REPORT.md / report.json / codegen.log in the work directory.
 #
 #   scripts/codegen-smoke-test.sh <rexglue executable> [rexglue-sdk source dir] [work dir] [--exec]
+#                                 [--allow-no-ppc-clang]
+#
+# --allow-no-ppc-clang skips (instead of failing) the two C cases when the compiler has no PowerPC
+# backend, which is the case for the official LLVM builds on Windows (X86/ARM/AArch64 only); the
+# assembly cases run everywhere the SDK's binutils are present (Cygwin-built .exe on Windows). The
+# per-TU syntax check against the SDK headers is Linux-only; on Windows the --exec host build
+# compiles the generated code instead. PYTHON overrides the interpreter (Windows runners: `python`).
 #
 # --exec additionally builds recomp/tests/host (the ReXGlue runtime in tool mode plus the generated
 # code; a long build, reused across runs when TTT2_HOST_BUILD_DIR points at an existing one) and
-# RUNS the switch-table program natively, checking the 12 values it stores: once with the SDK's own
-# jump-table detection (expected to fail: SDK 0.10.0 switches on the wrong register for several
-# shapes, measured in session 3) and once with the finder's [[switch_tables]] (must pass).
+# RUNS programs natively: the switch-table program, checking the 12 values it stores, once with the
+# SDK's own jump-table detection (expected to fail: SDK 0.10.0 switches on the wrong register for
+# several shapes, measured in session 3) and once with the finder's [[switch_tables]] (must pass);
+# and the kernel-import program (imports_ttt2.s), whose calls through a real XEX import table must
+# reach the host's kernel overrides (recomp/src/kernel_overrides.cpp, compiled into the harness as
+# into the game host) and an implemented runtime export, with no runtime stub called.
 #
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
+# Positional arguments are kept by position (an empty SDK argument, as the Windows workflow passes
+# when it skips the native run, must not shift the work directory into the SDK slot).
 exec_mode=0
-positional=""
+allow_no_ppc_cc=0
+n=0
+p1=""; p2=""; p3=""
 for a in "$@"; do
-    if [ "$a" = "--exec" ]; then exec_mode=1; else positional="$positional $a"; fi
+    if [ "$a" = "--exec" ]; then exec_mode=1; continue; fi
+    if [ "$a" = "--allow-no-ppc-clang" ]; then allow_no_ppc_cc=1; continue; fi
+    n=$((n + 1))
+    case $n in 1) p1="$a" ;; 2) p2="$a" ;; 3) p3="$a" ;; esac
 done
-# shellcheck disable=SC2086
-set -- $positional
-rexglue="${1:?rexglue executable}"
-sdk="${2:-}"
-work="${3:-$root/out/codegen-smoke}"
+rexglue="${p1:?rexglue executable}"
+sdk="$p2"
+work="${p3:-$root/out/codegen-smoke}"
 cxx="${CXX:-clang++-20}"
 cc="${CC:-clang-20}"
 report="$root/recomp/tools/codegen_report.py"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) windows=1 ;; *) windows=0 ;; esac
+# One Python for this script and the packer it calls.
+if [ -z "${PYTHON:-}" ]; then
+    if [ "$windows" = 1 ]; then candidates="python python3"; else candidates="python3 python"; fi
+    for p in $candidates; do
+        if "$p" -c "import sys" > /dev/null 2>&1; then PYTHON="$p"; break; fi
+    done
+fi
+python="${PYTHON:?python3 not found (set PYTHON)}"
+export PYTHON="$python"
 # Cases run inside their own directories, so every path must be absolute.
 [ -x "$rexglue" ] || { echo "rexglue not found or not executable: $rexglue"; exit 2; }
 rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 [ -z "$sdk" ] || sdk="$(cd "$sdk" && pwd)"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2
+rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/insn_ttt2 "$work"/imports_ttt2
 status=0
+skipped=0
+syntax_note=0
 
 # run_case <name> <source> <expected functions> <expected jump tables> <expected unimplemented sites> [extra report options]
 run_case() {
@@ -49,9 +76,17 @@ run_case() {
     mkdir -p "$dir/generated"
     # The packer gets this script's compiler, so a versioned toolchain (clang-20 + ld.lld-20, as the
     # SDK workflow installs) is used consistently instead of whatever unversioned clang is on the PATH.
-    if ! CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+    rc=0
+    CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$src" "$dir/$name.xex" > "$dir/pack.log" 2>&1 || rc=$?
+    if [ "$rc" = 3 ] && [ "$allow_no_ppc_cc" = 1 ]; then
+        # exit 3: this Clang has no PowerPC backend (official LLVM Windows builds); C cases are Linux-covered.
+        echo "skip $name: $(tail -1 "$dir/pack.log")"
+        skipped=$((skipped + 1))
+        return
+    elif [ "$rc" != 0 ]; then
         echo "FAIL $name: could not build the test image (see $dir/pack.log)"
         tail -5 "$dir/pack.log"
+        [ "$rc" != 3 ] || echo "     C test programs need a Clang with the PowerPC backend; --allow-no-ppc-clang skips them where none exists (as the Windows workflow does)"
         status=1
         return
     fi
@@ -82,7 +117,7 @@ CONFIG
         return
     fi
     # shellcheck disable=SC2086
-    if python3 -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
+    if "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen.log" --project "$name" \
             --md "$dir/REPORT.md" --json "$dir/report.json" --quiet \
             --expect-functions "$funcs" --expect-switches "$switches" --expect-unimplemented "$unimpl" \
             --fail-on-errors $extra; then
@@ -92,7 +127,12 @@ CONFIG
         grep "FAIL" "$dir/REPORT.md" || true
         status=1
     fi
-    if [ -n "$sdk" ] && [ -d "$sdk/include/rex" ]; then
+    if [ -n "$sdk" ] && [ -d "$sdk/include/rex" ] && [ "$windows" = 1 ]; then
+        if [ "$syntax_note" = 0 ]; then
+            echo "note: the syntax check of the generated code against the SDK headers is Linux-only (Linux defines); on Windows --exec compiles it for real"
+            syntax_note=1
+        fi
+    elif [ -n "$sdk" ] && [ -d "$sdk/include/rex" ]; then
         for tu in "$dir"/generated/default/*.cpp; do
             if "$cxx" -std=c++23 -fsyntax-only -mssse3 -fno-char8_t -DREX_PLATFORM_LINUX=1 -DSPDLOG_COMPILED_LIB \
                 -DSPDLOG_FMT_EXTERNAL -DREX_HAS_VULKAN=1 -I"$sdk/include" -I"$sdk/build/linux/include" \
@@ -115,9 +155,12 @@ CONFIG
 run_case smoke     "$root/recomp/tests/ppc/smoke.c"     6 0 0
 run_case jumptable "$root/recomp/tests/ppc/jumptable.c" 2 0 0
 
-# Assembly programs need the SDK's PowerPC binutils (VMX128); skipped without an SDK checkout.
+# Assembly programs need the SDK's PowerPC binutils (VMX128); skipped without an SDK checkout. The
+# SDK ships Linux ELF builds and Cygwin-built .exe variants side by side; Windows runs the latter.
 bu="${TTT2_PPC_BINUTILS:-${sdk:-$root/third_party/rexglue-sdk/src}/tools/binutils}"
-if [ -x "$bu/powerpc-none-elf-as" ]; then
+exe=""
+[ "$windows" = 0 ] || exe=.exe
+if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     export TTT2_PPC_BINUTILS="$bu"
     # Pass 1, SDK detection alone: 11 .pdata functions + one leaf discovered through its call; the SDK
     # recognises 7 of the 9 dispatches (it misses the byte- and halfword-offset tables; measured with
@@ -130,9 +173,9 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
     # Pass 2: our finder (recomp/tools/find_switch_tables.py) must see all 9 and, included as manual
     # [[switch_tables]] entries, make the codegen emit 9 switches. Manual entries take precedence
     # over the SDK's detection, so this is also the path the real game's config uses.
-    if python3 -I "$root/recomp/tools/find_switch_tables.py" "$dir/switch_ttt2.xex" \
+    if "$python" -I "$root/recomp/tools/find_switch_tables.py" "$dir/switch_ttt2.xex" \
             --toml "$dir/switch_ttt2_tables.toml" --json "$dir/switch_tables.json" > "$dir/finder.log" 2>&1 \
-        && [ "$(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['found'])" "$dir/switch_tables.json")" = "9" ]; then
+        && [ "$("$python" -I -c "import json,sys; print(json.load(open(sys.argv[1]))['found'])" "$dir/switch_tables.json")" = "9" ]; then
         echo "ok   switch_ttt2: finder found 9 switch tables"
     else
         echo "FAIL switch_ttt2: finder did not find 9 switch tables (see $dir/finder.log)"
@@ -141,7 +184,7 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
     fi
     printf 'includes = ["switch_ttt2_tables.toml"]\n' >> "$dir/switch_ttt2_config.toml"
     if (cd "$dir" && "$rexglue" --log-level debug codegen --ignore-stamp switch_ttt2_manifest.toml > codegen2.log 2>&1) \
-        && python3 -I "$report" "$dir/generated/default" --log "$dir/codegen2.log" --project switch_ttt2 \
+        && "$python" -I "$report" "$dir/generated/default" --log "$dir/codegen2.log" --project switch_ttt2 \
             --md "$dir/REPORT2.md" --json "$dir/report2.json" --quiet \
             --expect-functions 12 --expect-switches 9 --expect-unimplemented 0 --fail-on-errors; then
         echo "ok   switch_ttt2: with the finder's tables, 9 jump tables, no errors"
@@ -156,38 +199,45 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
     run_case insn_ttt2 "$root/recomp/tests/ppc/insn_ttt2.s" 8 0 0 \
         "--expect-mnemonics $root/recomp/ttt2_instructions.txt --absent-ok macchwu,maclhwu"
 
+    # Kernel imports through a real XEX import table (imports_ttt2.imports): the codegen must resolve
+    # all three ordinals to __imp__ calls; one function (the entry point), no jump tables.
+    run_case imports_ttt2 "$root/recomp/tests/ppc/imports_ttt2.s" 4 0 0 "--expect-imports 3"
+
     if [ "$exec_mode" = 1 ] && [ -n "$sdk" ]; then
-        # Native execution through the ReXGlue runtime (recomp/tests/host). The program stores 12
-        # words at `results` (address from the packer's symbol map) and returns their sum.
-        dir="$work/switch_ttt2"
-        results="$(awk '$4 == "results" {print $1}' "$dir/switch_ttt2.xex.syms")"
-        expected="20,102,201,301,401,500,600,701,900,800,0,9"
+        # Native execution through the ReXGlue runtime (recomp/tests/host). Each program stores words
+        # at `results` (address from the packer's symbol map) and returns their sum.
+        results_of() { tr -d '\r' < "$1" | awk '$4 == "results" {print $1}'; }
         hostbuild="${TTT2_HOST_BUILD_DIR:-$work/host-build}"
-        run_host() {  # <generated dir>: builds the harness for it and runs the program
+        # run_host <project> <generated dir> <results 0xADDR:COUNT> <expected v,v,...> [log level]:
+        # builds the harness for the project's generated code and runs $work/<project>/<project>.xex.
+        # --max-stub-calls 0: the program must not reach any kernel export the runtime only stubs.
+        run_host() {
             cmake -S "$root/recomp/tests/host" -B "$hostbuild" -G Ninja \
                 -DCMAKE_C_COMPILER="$cc" -DCMAKE_CXX_COMPILER="$cxx" -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_C_FLAGS=-mssse3 -DCMAKE_CXX_FLAGS=-mssse3 -DSDL_X11_XSCRNSAVER=OFF \
-                -DREXSDK_DIR="$sdk" -DTTT2_GUEST_PROJECT=switch_ttt2 -DTTT2_GUEST_GENERATED="$1" > "$hostbuild.configure.log" 2>&1 \
+                -DREXSDK_DIR="$sdk" -DTTT2_GUEST_PROJECT="$1" -DTTT2_GUEST_GENERATED="$2" > "$hostbuild.configure.log" 2>&1 \
                 && cmake --build "$hostbuild" --target headless_host --parallel > "$hostbuild.build.log" 2>&1 || {
                 echo "FAIL exec: building the headless host failed (see $hostbuild.build.log)"; tail -20 "$hostbuild.build.log"; return 2; }
             host="$(find "$sdk/out" \( -name headless_host -o -name headless_host.exe \) -type f 2>/dev/null | head -1)"
             [ -n "$host" ] || { echo "FAIL exec: headless_host not found under $sdk/out"; return 2; }
-            # --max-stub-calls 0: the program must not reach any kernel export the runtime only stubs.
-            (cd "$dir" && timeout 120 "$host" --game-root "$dir" --xex switch_ttt2.xex --results "$results:12" \
-                --expect "$expected" --max-stub-calls 0 --log-level warn)
+            (cd "$work/$1" && timeout 120 "$host" --game-root "$work/$1" --xex "$1.xex" --results "$3" \
+                --expect "$4" --max-stub-calls 0 --log-level "${5:-warn}")
         }
+        dir="$work/switch_ttt2"
+        results="$(results_of "$dir/switch_ttt2.xex.syms")"
+        expected="20,102,201,301,401,500,600,701,900,800,0,9"
         # Harness exit codes: 0 all values as expected and no stub calls, 1 mismatch or stub calls,
         # 2 build/setup failure, 3 the guest never finished; a trap in the guest ends the process with
         # a signal (>= 128).
         rc=0
-        run_host "$dir/generated-sdk-only/default" > "$dir/exec-sdk-only.log" 2>&1 || rc=$?
+        run_host switch_ttt2 "$dir/generated-sdk-only/default" "$results:12" "$expected" > "$dir/exec-sdk-only.log" 2>&1 || rc=$?
         case "$rc" in
             0) echo "FAIL exec: the SDK-only switch tables ran correctly, which contradicts the measured SDK 0.10.0 behaviour (see $dir/exec-sdk-only.log)"; status=1 ;;
             2) echo "FAIL exec: could not build or start the headless host for the SDK-only code (see $dir/exec-sdk-only.log)"; tail -20 "$dir/exec-sdk-only.log"; status=1 ;;
             *) echo "ok   exec: SDK-only jump tables do not run correctly (exit $rc, as measured; see $dir/exec-sdk-only.log)" ;;
         esac
         rc=0
-        run_host "$dir/generated/default" > "$dir/exec-finder.log" 2>&1 || rc=$?
+        run_host switch_ttt2 "$dir/generated/default" "$results:12" "$expected" > "$dir/exec-finder.log" 2>&1 || rc=$?
         if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-finder.log" \
             && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec-finder.log"; then
             echo "ok   exec: native run with the finder's switch tables produced all 12 expected values, no kernel stubs reached"
@@ -196,8 +246,29 @@ if [ -x "$bu/powerpc-none-elf-as" ]; then
             tail -20 "$dir/exec-finder.log"
             status=1
         fi
+
+        # Kernel imports: XamShowFriendsUI and XamUserCreateStatsEnumerator are stubs in the runtime
+        # and must get the host overrides' results (ERROR_SUCCESS, ERROR_NO_SUCH_USER = 1317), with the
+        # override's first-call log line as the witness; RtlCompareMemory is the SDK's own (5 matching
+        # bytes). Without the overrides the harness would count 2 stub calls and r3 would be garbage.
+        dir="$work/imports_ttt2"
+        rc=0
+        run_host imports_ttt2 "$dir/generated/default" "$(results_of "$dir/imports_ttt2.xex.syms"):3" "0,1317,5" info \
+            > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
+            && grep -q "kernel override XamShowFriendsUI -> ERROR_SUCCESS" "$dir/exec.log" \
+            && grep -q "kernel override XamUserCreateStatsEnumerator -> ERROR_NO_SUCH_USER" "$dir/exec.log"; then
+            echo "ok   exec: kernel imports reached the host overrides (0, 1317) and the runtime's RtlCompareMemory (5), no stubs"
+        else
+            echo "FAIL exec: native run of the kernel-import program (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
     fi
 else
-    echo "skip switch_ttt2 / insn_ttt2: PowerPC binutils not found at $bu"
+    echo "skip switch_ttt2 / insn_ttt2 / imports_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    skipped=$((skipped + 1))
 fi
+[ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"
 exit $status

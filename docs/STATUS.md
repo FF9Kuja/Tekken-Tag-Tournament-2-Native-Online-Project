@@ -2,6 +2,108 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-19 - Session 4: PR #2 merged with CI evidence, player-side host build path
+
+**Completed**
+* **PR #2 merged into `main`** (merge commit `8dff15e`, 16 commits) after every check passed on its head: Linux
+  clang and gcc, Windows MSVC and clang-cl, hygiene + Python tools (CI), and the SDK validation workflow on a
+  GitHub runner: SDK built with Clang 20, 1458 PPC instruction test cases / 5725 assertions, all codegen smoke
+  cases, and the **native run of the switch-table program through the headless host** (fails with the SDK's own
+  tables, passes with the finder's, no kernel stubs reached). Two CI fixes were needed: `lld` was not installed
+  in the Linux CI jobs (`ld.lld: not found`), and the smoke test let the packer fall back to the runner's
+  unversioned clang 18; the packer now accepts `$LD`, `ld.lld`, `ld.lld-<major>` or the clang driver's own lld,
+  and the smoke test hands it its compiler.
+* **Player-side host build path** (`scripts/build-host.ps1`): the SDK installed as a CMake package
+  (`cmake --build ... --target install`, the SDK's own distribution model) and `recomp/` configured with
+  `CMAKE_PREFIX_PATH`; `rexglue codegen` runs inside the build, so no generated file is touched by hand.
+  Verified on Linux here with the license-free switch-table program as the game image: `find_package(rexglue)`
+  finds the package, codegen runs, `ttt2` links (11 build steps). `sdk-validation.yml` repeats exactly that
+  sequence in CI; `rexglue-windows.yml` gains a `build_host` input that runs it on Windows.
+* **`ttt2-iso extract-all <image> <dir>`**: whole-disc extraction (sanitised names, streamed files), the game
+  data root the host runs from (`ttt2.exe --game_data_root <dir>`); end-to-end ctest on the synthetic image
+  (3 files in 1 directory, byte-identical `default.xex`).
+* **Owner pipeline**: `-BuildHost` (+ `-InstallSdk`) builds `ttt2.exe` from the patched executable, `-ExtractGame`
+  extracts the disc into `work\game`; `docs/OWNER_CHECKLIST.md` step 6 describes the first boot attempt and
+  what to send (the console log with the kernel stub report; never the game folder).
+* **First-boot diagnostics in the host**: a last-chance crash reporter (`rex::arch::ExceptionHandler`, installed
+  after the runtime's MMIO handler) logs the fault kind, host PC, fault address, the guest thread and the most
+  recent kernel stub calls, flushes the log and lets the normal crash path continue; the watchdog logs a
+  per-thread dump (state, priority, suspend count, wait result) when the thread census and the stub total stay
+  unchanged for three ticks while the main thread runs. The stub counter keeps a ring of the last 16 calls. The
+  owner checklist now points at the host's `logs\` folder (the SDK writes `logs/` next to the executable).
+* **TTT2 Web's public-domain addresses, gated by a layout fingerprint**: TTT2 Web (CC0) publishes the eight
+  save/restore helper addresses of its author's executable and 18,351 explicit function boundaries generated
+  on it (leaf functions without `.pdata`, functions outgrowing their recorded size). The boundaries are
+  converted to ReXGlue's `[functions]` form (`recomp/tools/import_ttt2web_functions.py` ->
+  `recomp/ttt2_functions.ttt2web.toml`, addresses and sizes only). Because the executable version TTT2 Web used
+  is not stated, the helper addresses serve as fingerprint: `ttt2-xexinfo --helpers` and `ttt2-validate` print
+  "Layout vs TTT2 Web: N of 8 helper addresses match", and only a full match makes the boundaries applicable;
+  `recomp/ttt2_manifest.ttt2web.toml` includes them, the default manifest does not, and the owner pipeline runs
+  the variant codegen as a second pass only on a match (both reports are written for comparison).
+* **Predicted kernel coverage for TTT2** (`docs/RESEARCH.md` 8a): TTT2 Web, playable natively on its own CC0
+  runtime, implements 136 kernel/XAM functions; ReXGlue 0.10.0 implements 130 of them and stubs 5 (XAM UI /
+  stats calls). The runtime-export generator now counts `REX_HOOK_RAW` hooks (11, e.g. `DbgPrint`) as
+  implemented, which it had classified as missing.
+* **First kernel overrides in the host** (`recomp/src/kernel_overrides.cpp`): the five XAM calls above
+  (`XamShowFriendsUI`, `XamShowGamerCardUIForXUID`, `XamShowMarketplaceUI`, `XamShowMarketplaceDownloadItemsUI`
+  -> `ERROR_SUCCESS`, `XamUserCreateStatsEnumerator` -> `ERROR_NO_SUCH_USER`, TTT2 Web's results) defined as
+  `__imp__` symbols in the host, which generated code binds to at link time ahead of the runtime library's stubs;
+  each logs its first call. This is the mechanism for every stub the owner's report shows the game reaching.
+* **The override mechanism executed natively** (`recomp/tests/ppc/imports_ttt2.s`): the packer
+  (`scripts/ppc_elf_to_xex.py --imports`) now writes a real XEX2 `IMPORT_LIBRARIES` header from a `<source>.imports`
+  declaration, so a license-free program calls kernel exports exactly like the game: 4-byte slots, 16-byte thunks at
+  the end of `.text`, `bl thunk`. `rexglue codegen` resolved all three ordinals (xam.xex 703 and 759, xboxkrnl.exe
+  282) to `__imp__` calls and treated the thunk range as non-code, as it does for the game. The headless harness
+  now compiles `kernel_overrides.cpp` in (as the game host does) and the native run returned `0`, `1317`, `5`
+  (two overrides, then the runtime's own `RtlCompareMemory`), with the overrides' first-call log lines and zero
+  stub calls. Negative control, run once here with the override source removed from the harness: the same program
+  logged `__imp__XamShowFriendsUI STUB` and `__imp__XamUserCreateStatsEnumerator STUB`, returned r3 untouched
+  (`0x5A5A5A5A`, then `0`), the stub counter reported 2 calls to 2 stubs and the harness failed - which is what the
+  game would see for any stub it reaches. The smoke test runs the program as its fifth case, natively under
+  `--exec`. Verified on Linux here; the SDK validation workflow repeats it on every run.
+* The first Windows run that reached the smoke test (ReXGlue codegen tool workflow, run 3) found two more
+  Windows-only problems, fixed here and awaiting the next Windows run: the official LLVM Windows build has no
+  PowerPC backend (`clang -print-targets` lists no `ppc32`; "No available targets are compatible with triple
+  powerpc-unknown-linux-gnu"), so the two C test programs cannot be built there - the packer now exits 3 for
+  that case and the smoke test skips the C cases on request (`--allow-no-ppc-clang`, which the Windows workflow
+  passes; Linux CI keeps covering them); and the scripts tested for the SDK's Linux ELF binutils, which Git Bash
+  does not consider executable, so the TTT2-shaped assembly cases were skipped - they now pick the SDK's
+  Cygwin-built `powerpc-none-elf-*.exe` on Windows. Also: `python` instead of `python3` on the Windows runners,
+  LF-only symbol maps so `awk` finds the result address, and the Linux-only syntax check is skipped on Windows
+  (the `--exec` host build compiles the generated code for real there).
+* Two findings from the first CI runs of the host-build route, fixed and reproduced locally: on a fresh tree the
+  SDK's generated CMake glue only picks the recompiled sources up when `generated/default` exists at configure
+  time (the link failed with an undefined `PPCImageConfig`), so `build-host.ps1` and the SDK workflow run
+  `rexglue codegen` before the first configure; and the smoke test's positional-argument re-split dropped the
+  empty SDK argument the Windows workflow passes, shifting the work directory into the SDK slot.
+* Windows workflow fixes from its first run on `main`: the SDK checkout failed with "Filename too long"
+  (vulkan-loader fuzzer test data beyond 260 characters) - `fetch-rexglue-sdk.ps1` now clones with
+  `core.longpaths=true`; the LLVM install falls back to the latest package when the pinned version is missing;
+  `rexglue.exe` is uploaded even when the smoke test fails.
+
+**Verified (where)**
+* GitHub Actions on PR #2's head `8881b74`: 10/10 CI check runs green; SDK validation run 39209513350 green
+  (details above).
+* Linux container: 52 doctest cases / 612 assertions, 14 ctest entries (new: `iso_extract_all_synthetic`),
+  Clang 18 and GCC 13 `-Werror`; SDK configured without tests, built and installed as a package; host built
+  against the package.
+* Windows: CI jobs (tools) green. The ReXGlue Windows workflow: the first run on `main` failed at the SDK
+  checkout (long paths); after the fix, on the PR branch, **`rexglue.exe` built on the Windows runner in 4.5
+  minutes and was uploaded as an artifact** (LLVM 20.1.8 from Chocolatey); its smoke test then failed on the
+  empty-argument bug above, fixed here.
+
+**Not verified / open**
+* `build-host.ps1`, the Windows host build and the Windows native run have not run on Windows yet (next run of
+  `rexglue-windows.yml` with `native_run` and `build_host`).
+* The crash reporter and the stall detector are compile-checked against the SDK (Linux host build) but have not
+  fired: only a real boot exercises them.
+* On Linux the host binary needs `librexruntime.so` next to it or on the library path (RPATH is `$ORIGIN`); on
+  Windows `rexglue_configure_target` copies the runtime DLLs next to the executable.
+* Everything on license-free programs; the real image still waits for the owner's run.
+
+**Blocked / pending**
+* Owner's files for Milestone 3 steps 3-5 and the first boot attempt (Milestone 4).
+
 ## 2026-10-19 - Session 3: recompiler measured on TTT2-shaped code, first native execution, validation tools
 
 **Completed**
@@ -59,7 +161,7 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   Title Update 3 package found") and the files written to `--work`. New `--no-patch` option keeps the runs
   identical with and without the Clang-only patcher.
 * **Runtime import coverage**: `scripts/gen_runtime_exports.py` reads the SDK's export declarations into
-  `src/xex/rexglue_runtime_exports.inc` (SDK 0.10.0: 460 implemented functions, 2406 logging stubs, 24 mapped
+  `src/xex/rexglue_runtime_exports.inc` (SDK 0.10.0: 471 implemented functions, 2406 logging stubs, 24 mapped
   variables); `ttt2-xexinfo --imports` and `ttt2-validate` now mark every import of an image as implemented /
   stub / missing in the pinned runtime and list the stubbed and missing names; `owner-pipeline.ps1` adds the scan
   to the report (step 5b). The owner's report will therefore show TTT2's runtime gaps before anything is run.
