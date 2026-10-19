@@ -13,12 +13,14 @@ if (Test-Path (Join-Path $Destination ".git")) {
     if ($current -ne $commit) { throw "$Destination is at $current, expected $commit (remove it to refetch)" }
     Write-Host "rexglue-sdk already at $commit"
 } else {
-    git clone --no-checkout $url $Destination
+    # core.longpaths: the SDK's vulkan-loader submodule carries fuzzer test files whose paths exceed
+    # Windows' 260-character limit (seen on the GitHub runner: "Filename too long").
+    git -c core.longpaths=true clone --no-checkout $url $Destination
     if ($LASTEXITCODE -ne 0) { throw "clone failed" }
-    git -C $Destination checkout --quiet $commit
+    git -c core.longpaths=true -C $Destination checkout --quiet $commit
     if ($LASTEXITCODE -ne 0) { throw "checkout failed" }
 }
-git -C $Destination submodule update --init --recursive --depth 1 --jobs 4
+git -c core.longpaths=true -C $Destination submodule update --init --recursive --depth 1 --jobs 4
 if ($LASTEXITCODE -ne 0) { throw "submodules failed" }
 $patches = Join-Path $root "third_party\rexglue-patches"
 if (Test-Path $patches) {
