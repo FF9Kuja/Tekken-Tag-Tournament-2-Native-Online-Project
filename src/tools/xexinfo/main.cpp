@@ -2,18 +2,28 @@
 // patch (.xexp) is, without decrypting it.
 //
 //   ttt2-xexinfo <file> [--json] [--no-hash] [--headers] [--image-hash] [--imports] [--helpers]
+//                [--write-plain <out.xex>]
 //
 // --imports and --helpers decrypt and decompress the executable image in memory (like
 // --image-hash) and report, respectively, the kernel/XAM imports by name (with what the pinned
 // ReXGlue runtime provides for each: implemented, stub or missing) and the addresses of
 // the compiler's register save/restore helpers: names, ordinals and addresses only.
-// Exit code 0 on success, 1 on a parse error or bad arguments.
+// --write-plain writes the plain form of the executable (headers kept, FILE_FORMAT_INFO set to
+// encryption none / compression none, the decrypted and decompressed PE image after them): the
+// input the switch-table finder and `rexglue codegen` need. The written file is read back and
+// verified against the input (headers byte for byte, image byte for byte); a file that fails the
+// check is deleted. The input is never modified.
+// Exit code 0 on success, 1 on a parse error, bad arguments or a failed --write-plain.
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "ttt2/core/file_io.hpp"
@@ -35,6 +45,16 @@ struct Options {
   bool image_hash = false;  // decrypt + decompress the basefile in memory and hash it
   bool imports = false;     // resolve the import table against the image
   bool helpers = false;     // scan the image for the register save/restore helpers
+  std::string write_plain;  // write the plain (decrypted, decompressed) form of the file here
+};
+
+/// Outcome of --write-plain, for the report.
+struct PlainResult {
+  std::string path;
+  bool ok = false;
+  std::string note;  // "verified: ..." or the failure
+  std::size_t size = 0;
+  std::string image_sha1;
 };
 
 struct ImageScan {
@@ -46,13 +66,17 @@ void print_usage() {
   std::fprintf(
       stderr,
       "usage: ttt2-xexinfo <file.xex|file.xexp> [--json] [--no-hash] [--headers] [--image-hash]\n"
-      "                    [--imports] [--helpers]\n"
+      "                    [--imports] [--helpers] [--write-plain <out.xex>]\n"
       "       ttt2-xexinfo --version\n\n"
       "Reads the plaintext XEX2 container headers of an Xbox 360 executable and\n"
       "reports title ID, version, media ID, imports and encryption/compression.\n"
       "--image-hash decrypts and decompresses the executable image in memory (retail key) and\n"
       "prints its hashes; --imports names every kernel/XAM import (ordinal, thunk and slot\n"
-      "addresses); --helpers locates the register save/restore helpers. Nothing is written to disk.\n");
+      "addresses); --helpers locates the register save/restore helpers. These write nothing to disk.\n"
+      "--write-plain <out.xex> writes the plain form of the executable (its headers unchanged except\n"
+      "for encryption none / compression none, the decrypted, decompressed PE image after them): the\n"
+      "input the switch-table finder and rexglue codegen read. The output is read back and verified;\n"
+      "the input file is never modified.\n");
 }
 
 std::string json_escape(std::string_view s) {
@@ -92,7 +116,7 @@ struct Hashes {
 };
 
 void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t file_size,
-                const Hashes* hashes, const ImageScan* scan) {
+                const Hashes* hashes, const ImageScan* scan, const PlainResult* plain) {
   using namespace ttt2::xex;
   std::printf("File:               %s (%zu bytes)\n", opt.path.c_str(), file_size);
   std::printf("Module flags:       0x%08X  %s\n", img.module_flags,
@@ -234,10 +258,21 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     }
   }
   for (const auto& w : img.warnings) std::printf("Warning:            %s\n", w.c_str());
+  if (plain) {
+    if (plain->ok) {
+      std::printf("Plain image:        verified, written to %s (%zu bytes: %s)\n", plain->path.c_str(), plain->size,
+                  plain->note.c_str());
+      std::printf("Plain image SHA-1:  %s  (of the PE image inside; the input file was not modified)\n",
+                  plain->image_sha1.c_str());
+    } else {
+      std::printf("Plain image:        FAILED, nothing usable written to %s: %s\n", plain->path.c_str(),
+                  plain->note.c_str());
+    }
+  }
 }
 
 void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t file_size,
-                const Hashes* hashes, const ImageScan* scan) {
+                const Hashes* hashes, const ImageScan* scan, const PlainResult* plain) {
   using namespace ttt2::xex;
   std::printf("{\n");
   std::printf("  \"file\": \"%s\",\n  \"size\": %zu,\n", json_escape(opt.path).c_str(), file_size);
@@ -330,11 +365,71 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     }
     std::printf("},\n");
   }
+  if (plain) {
+    std::printf("  \"plain_output\": \"%s\",\n  \"plain_ok\": %s,\n  \"plain_note\": \"%s\",\n",
+                json_escape(plain->path).c_str(), plain->ok ? "true" : "false", json_escape(plain->note).c_str());
+    if (plain->ok) {
+      std::printf("  \"plain_size\": %zu,\n  \"plain_image_sha1\": \"%s\",\n", plain->size,
+                  plain->image_sha1.c_str());
+    }
+  }
   std::printf("  \"warnings\": [");
   for (std::size_t i = 0; i < img.warnings.size(); ++i) {
     std::printf("%s\"%s\"", i ? ", " : "", json_escape(img.warnings[i]).c_str());
   }
   std::printf("]\n}\n");
+}
+
+/// Writes the plain form of the parsed file to `plain.path`, reads it back and verifies it against the
+/// input. On any failure the output is removed (a half-written or unverified file must not be picked up
+/// by a later pipeline step) and plain.ok stays false with the reason in plain.note.
+void write_plain(const ttt2::xex::Xex2Image& parsed, std::span<const std::uint8_t> data, const std::string& input,
+                 PlainResult& plain) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  const fs::path out_path(plain.path);
+  const fs::path in_path(input);
+  if (fs::exists(out_path, ec) && fs::equivalent(out_path, in_path, ec)) {
+    plain.note = "refusing to overwrite the input file with its plain form; name a different output file";
+    return;
+  }
+  if (fs::weakly_canonical(out_path, ec) == fs::weakly_canonical(in_path, ec)) {
+    plain.note = "refusing to overwrite the input file with its plain form; name a different output file";
+    return;
+  }
+  auto bytes = ttt2::xex::make_plain_xex(parsed, data);
+  if (!bytes) {
+    plain.note = bytes.error().message;
+    return;
+  }
+  if (out_path.has_parent_path()) fs::create_directories(out_path.parent_path(), ec);
+  {
+    std::ofstream stream(out_path, std::ios::binary | std::ios::trunc);
+    if (!stream ||
+        !stream.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()))) {
+      plain.note = "cannot write " + plain.path;
+      fs::remove(out_path, ec);
+      return;
+    }
+  }
+  // Read what is on disk, not what is in memory: the file a later step opens is what gets verified.
+  auto reread = ttt2::read_file(out_path);
+  if (!reread) {
+    plain.note = "cannot read the written file back: " + reread.error().message;
+    fs::remove(out_path, ec);
+    return;
+  }
+  const auto check = ttt2::xex::verify_plain_xex(reread.value(), parsed, data);
+  if (!check) {
+    plain.note = "the written file did not verify: " + check.error().message;
+    fs::remove(out_path, ec);
+    return;
+  }
+  plain.ok = true;
+  plain.size = reread->size();
+  plain.image_sha1 = ttt2::hash::to_hex(check->image_sha1);
+  plain.note = "0x" + ttt2::hex_u32(check->header_size) + " of headers kept, encryption none, compression none, PE image of " +
+               std::to_string(check->image_size) + " bytes";
 }
 
 }  // namespace
@@ -355,6 +450,13 @@ int main(int argc, char** argv) {
       opt.imports = true;
     } else if (a == "--helpers") {
       opt.helpers = true;
+    } else if (a == "--write-plain") {
+      if (i + 1 >= argc || argv[i + 1][0] == '\0') {
+        std::fprintf(stderr, "--write-plain needs an output path\n");
+        print_usage();
+        return 1;
+      }
+      opt.write_plain = argv[++i];
     } else if (a == "--version") {
       std::printf("ttt2-xexinfo %s (%s)\n", ttt2::kProjectVersion, ttt2::kProjectGitDescribe);
       return 0;
@@ -421,10 +523,20 @@ int main(int argc, char** argv) {
       }
     }
   }
+  PlainResult plain;
+  if (!opt.write_plain.empty()) {
+    plain.path = opt.write_plain;
+    write_plain(parsed.value(), data.value(), opt.path, plain);
+  }
+  const PlainResult* plain_ptr = opt.write_plain.empty() ? nullptr : &plain;
   if (opt.json) {
-    print_json(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan);
+    print_json(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan, plain_ptr);
   } else {
-    print_text(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan);
+    print_text(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan, plain_ptr);
+  }
+  if (plain_ptr && !plain_ptr->ok) {
+    std::fprintf(stderr, "error: --write-plain failed: %s\n", plain.note.c_str());
+    return 1;
   }
   return 0;
 }

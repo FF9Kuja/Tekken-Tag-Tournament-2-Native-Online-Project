@@ -40,7 +40,8 @@ scripts\build.ps1 -Preset windows-msvc
 ```
 
 `ttt2-xexinfo` reads the plaintext headers of an Xbox 360 executable or title-update patch and reports title ID,
-version, media ID, imports, encryption and hashes, so a player's copy can be identified without decrypting it.
+version, media ID, imports, encryption and hashes, so a player's copy can be identified without decrypting it;
+`--write-plain` prepares the decrypted, decompressed form the recompiler reads (headers kept, output verified).
 `ttt2-iso`, `ttt2-stfs`, `ttt2-xexpatch` and `ttt2-validate` cover the disc image, the title update, patching and
 the whole check in one command; `docs/OWNER_CHECKLIST.md` has the copy-paste instructions for a player's own files.
 

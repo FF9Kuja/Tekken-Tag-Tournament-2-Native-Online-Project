@@ -46,9 +46,13 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
    [x] (session 3) `ttt2-validate` one-command check, TU-vs-base pre-check, `--imports` / `--helpers` scans,
    `scripts/owner-pipeline.ps1`. [x] (2026-10-19) The owner ran `ttt2-iso identify` on their disc: title
    `4E4D0859`, media ID `5D762D06`, version 0.0.0.2, retail AES-128-CBC, basic compression, SHA-1 match with the
-   published retail hash (recorded in `known_titles.hpp`). [ ] The Title Update 3 steps wait for the update (the
-   owner does not have it; `docs/OWNER_CHECKLIST.md` gives the legitimate route); the pipeline's base-image mode
-   runs every later step on the retail executable meanwhile.
+   published retail hash (recorded in `known_titles.hpp`). [x] (2026-10-19) The owner's first full run reached
+   the import analysis (8 of 8 helper addresses match TTT2 Web) and failed at the recompilation because the
+   pipeline handed the encrypted, compressed executable to the finder; fixed with the preparation step
+   (`ttt2-xexinfo --write-plain`, pipeline step 5c, stop-on-critical, retail-form fixtures and regressions,
+   the SDK workflows running the whole chain on a retail-form wrap of the license-free program). [ ] The Title
+   Update 3 steps wait for the update (the owner does not have it; `docs/OWNER_CHECKLIST.md` gives the
+   legitimate route); the pipeline's base-image mode runs every later step on the retail executable meanwhile.
 4. [ ] Run ReXGlue codegen on the real image (**owner's PC or WSL; outputs stay local**; the base executable
    0.0.0.2 now, the TU3 image when the update is available): the report tool
    gives unresolved calls, missing instructions, jump tables found; run the finder on the same image and compare

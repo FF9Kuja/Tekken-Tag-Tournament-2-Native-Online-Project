@@ -15,9 +15,17 @@ only things to send back are the text the tools print (title IDs, versions, hash
 `ttt2-iso identify` on your disc image, built with Visual Studio 2022: title ID `4E4D0859`, media ID `5D762D06`,
 version `0.0.0.2`, normal retail AES-128-CBC encryption, basic compression, and the "Matches" line for the
 USA/Europe retail disc (its `default.xex` has the SHA-1 the TTT2Recomp project published, now confirmed by your
-copy). That is exactly the image TTT2 Web recompiled and the base every port starts from. **Not yet done with your
-files:** the Title Update 3 steps (you do not have the update yet), the recompilation, the host build and the
-first boot; nothing beyond identification is validated on the real game so far.
+copy). That is exactly the image TTT2 Web recompiled and the base every port starts from.
+
+Your first full pipeline run (base-image mode, 2026-10-19) got further: identification and the import analysis
+succeeded, and all eight save/restore helper addresses match TTT2 Web's, so its function boundaries apply to your
+image. It then stopped at the recompilation: the pipeline handed the executable to the switch-table finder as
+extracted from the disc, AES-encrypted and basic-compressed, which the finder and `rexglue codegen` do not read.
+That is fixed: step 5c of the pipeline now prepares the plain form of the executable (`ttt2-xexinfo --write-plain`,
+verified after writing) and every later step reads that file; a stage that fails now stops the pipeline with a
+`CRITICAL:` line instead of running on with missing files. **Rerun the same command** (below). **Not yet done with
+your files:** the Title Update 3 steps (you do not have the update yet), the recompilation, the host build and the
+first boot; nothing beyond identification and the import/helper analysis is validated on the real game so far.
 
 ## No Title Update 3 yet? Use the base-image path
 
@@ -73,6 +81,8 @@ scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInsta
 
 **Send `work\report.txt`** (the path is printed at the end). Never send the `work\` folder. The steps below are
 the same thing by hand; `ttt2-validate.exe "D:\path\TTT2.iso" "D:\path\TU_..." --work work` does steps 2-4 alone.
+When a stage the later ones depend on fails, the report ends with a `CRITICAL:` line naming the cause and the
+script stops there (the report is still written); fix the cause and rerun the same command.
 
 ## Step 1 - build the tools (once)
 
@@ -153,8 +163,22 @@ scripts\fetch-rexglue-sdk.ps1
 scripts\build-rexglue-windows.ps1          # prints the path of rexglue.exe
 ```
 
-Then let the pipeline script do the rest (it copies `work\default_tu3.xex` to `recomp\game\default.xex`, runs
-`rexglue codegen` on `recomp\ttt2_manifest.toml`, and summarises the generated code):
+**The recompilation image (pipeline step 5c).** The executable as extracted from the disc is AES-encrypted and
+basic-compressed (`Encryption: normal`, `Compression: basic` in the report); the switch-table finder and `rexglue
+codegen` read only its plain form. The pipeline prepares it with `ttt2-xexinfo --write-plain`: every header is kept
+(title ID, versions, imports, page descriptors, the stored keys), only the file-format fields change to encryption
+none / compression none, and the decrypted, decompressed PE image follows the headers. The written file is read
+back and verified against the input byte for byte (headers and image), the original is never modified, and a
+file that fails the check is deleted. The result is `work\default_base_plain.xex` (base-image mode) or
+`work\default_tu3_plain.xex` (the patched image, whose patcher output is plain already, so the step only verifies
+it). Steps 6 and 7 read that file; the report shows `Plain image: verified` and `Prepared: ...`. By hand:
+
+```powershell
+.\out\build\windows-clang-cl\bin\ttt2-xexinfo.exe work\base.xex --write-plain work\default_base_plain.xex
+```
+
+Then let the pipeline script do the rest (it copies the prepared image to `recomp\game\default.xex`, runs the
+finder on it, runs `rexglue codegen` on `recomp\ttt2_manifest.toml`, and summarises the generated code):
 
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe"
@@ -164,13 +188,14 @@ The pipeline also compares your executable's save/restore helper addresses with 
 ("Layout vs TTT2 Web: N of 8 helper addresses match" in the report). On a full match it recompiles a second time
 with TTT2 Web's 18k explicit function boundaries and writes `work\codegen-ttt2web-REPORT.md` too; send both.
 
-Before recompiling, the pipeline runs the switch-table finder on the patched executable (step 6a in the report)
+Before recompiling, the pipeline runs the switch-table finder on the prepared executable (step 6a in the report)
 and writes `recomp\game\ttt2_switch_tables.toml`, which the codegen manifests include: the recompiler needs these
 `[[switch_tables]]` entries because SDK 0.10.0 misses or miscompiles several table shapes on its own
-(`docs/RESEARCH.md` 8a). By hand, the same step is:
+(`docs/RESEARCH.md` 8a). By hand, the same step is (the finder refuses the encrypted file with a message that
+names the preparation step):
 
 ```powershell
-python -I recomp\tools\find_switch_tables.py work\default_tu3.xex --toml recomp\game\ttt2_switch_tables.toml --json work\switch_tables.json
+python -I recomp\tools\find_switch_tables.py work\default_base_plain.xex --toml recomp\game\ttt2_switch_tables.toml --json work\switch_tables.json
 ```
 
 **Send `work\report.txt`, `work\codegen-REPORT.md`, `work\codegen.log` and `work\switch_tables.json`.** They
@@ -192,15 +217,17 @@ your PC (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`, or `-Insta
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
 # (with -InstallSdk -Rexglue "path\to\rexglue.exe" instead of -SdkInstall to build the SDK yourself)
 # by hand instead:
-scripts\build-host.ps1 -Game work\default_tu3.xex -SdkInstall D:\rexglue-sdk   # -> recomp\out\build\win-amd64-release\ttt2.exe
+scripts\build-host.ps1 -Game work\default_base_plain.xex -SdkInstall D:\rexglue-sdk   # -> recomp\out\build\win-amd64-release\ttt2.exe (the prepared image of step 5c)
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
 .\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
 scripts\run-host.ps1                                          # ttt2.exe --game_data_root work\game, then the triage below
 ```
 
-`build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` also extracts the
-title update's own files into `work\update`, which the host mounts as `update:` because it sits next to
-`work\game`. `-Boot` (or `scripts\run-host.ps1` by hand) then starts the host on `work\game`, waits until it
+`build-host.ps1` runs the switch-table finder of step 5 itself before the build. `-ExtractGame` extracts the disc
+as it is: `work\game\default.xex` stays in its encrypted, compressed form, which the host decrypts itself when it
+loads it (verified in the SDK workflows: the same host boots on the plain and on the retail form of the test
+program). `-ExtractGame` also extracts the title update's own files into `work\update`, which the host mounts as
+`update:` because it sits next to `work\game`. `-Boot` (or `scripts\run-host.ps1` by hand) then starts the host on `work\game`, waits until it
 ends and runs the triage described below. When the window stays black or freezes, close it with the X button
 (the host writes its kernel stub report on the way out) and the script carries on; `-BootTimeout 60` (or
 `run-host.ps1 -TimeoutSeconds 60`) closes it for you after 60 seconds.
@@ -231,5 +258,7 @@ All of them contain names, addresses and counts only. Also say what you saw on s
 
 ## If something fails
 
-Copy the exact error text. The tools never write game data anywhere except where you point `extract` and
-`xexpatch`, so a failure leaves nothing to clean up besides the `work\` folder.
+Copy the exact error text. A `CRITICAL:` line in the report says which stage stopped the pipeline and why; the
+steps above it are complete and their output is in the report. The tools never write game data anywhere except
+where you point `extract`, `xexpatch` and `--write-plain`, so a failure leaves nothing to clean up besides the
+`work\` folder.

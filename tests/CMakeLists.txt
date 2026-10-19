@@ -87,6 +87,86 @@ if(TARGET ttt2-validate)
     set_tests_properties(validate_synthetic_pair validate_synthetic_folder validate_synthetic_mismatch
                          validate_synthetic_no_update PROPERTIES FIXTURES_REQUIRED validate_inputs)
 
+    # The pipeline's preparation step (5c, ttt2-xexinfo --write-plain) on the retail-form synthetic executable:
+    # the output must verify, be plain, carry the same image and be what the switch-table finder accepts;
+    # the finder must still refuse the retail form with the message that names the step. A delta patch has
+    # no plain form, and the tool must never write over its input.
+    if(TARGET ttt2-xexinfo)
+        set(_xexinfo "$<TARGET_FILE:ttt2-xexinfo>")
+        # SHA-1 of tests/pe_image_builder.hpp's make_import_test_image(): the image inside every form of the synthetic
+        # executable; the preparation step must reproduce it exactly.
+        set(_image_sha1 "f1a748904bbec183df365320ebb0f2b905f896b1")
+        add_test(NAME xexinfo_write_plain_synthetic COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=${_xexinfo}|${_fx}/retail.xex|--write-plain|${_fx}/plain/default.xex"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=Encryption: +normal@@Compression: +basic .zero-run blocks., 3 blocks@@Plain image: +verified, written to .*default\\.xex \\([0-9]+ bytes: 0x[0-9A-F]+ of headers kept, encryption none, compression none, PE image of 8192 bytes\\)@@Plain image SHA-1: +${_image_sha1}"
+            "-DEXPECT_FILES=${_fx}/plain/default.xex"
+            -P "${_run_expect}")
+        add_test(NAME xexinfo_plain_output_is_plain COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=${_xexinfo}|${_fx}/plain/default.xex|--image-hash|--imports|--helpers"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=Encryption: +none@@Compression: +none@@Title ID: +4E4D0859@@Version: +0\\.0\\.0\\.2@@Image: +PE image, 8192 bytes@@Image SHA-1: +${_image_sha1}@@Imports: +2 functions, 2 variables, 1 unnamed ordinals@@__restvmx_64 +0x82001300"
+            -P "${_run_expect}")
+        add_test(NAME xexinfo_write_plain_refuses_input_path COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=${_xexinfo}|${_fx}/retail.xex|--write-plain|${_fx}/retail.xex"
+            -DEXPECT_RC=1
+            "-DEXPECT_RE=Plain image: +FAILED@@refusing to overwrite the input file"
+            -P "${_run_expect}")
+        add_test(NAME xexinfo_write_plain_rejects_delta_patch COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=${_xexinfo}|${_fx}/patch.xexp|--write-plain|${_fx}/plain/patch-plain.xex"
+            -DEXPECT_RC=1
+            "-DEXPECT_RE=Plain image: +FAILED@@delta patch"
+            "-DEXPECT_MISSING=${_fx}/plain/patch-plain.xex"
+            -P "${_run_expect}")
+        set_tests_properties(xexinfo_write_plain_synthetic xexinfo_write_plain_refuses_input_path
+                             xexinfo_write_plain_rejects_delta_patch PROPERTIES FIXTURES_REQUIRED validate_inputs)
+        set_tests_properties(xexinfo_plain_output_is_plain PROPERTIES DEPENDS xexinfo_write_plain_synthetic)
+        if(Python3_Interpreter_FOUND)
+            set(_finder "${Python3_EXECUTABLE}|-I|${PROJECT_SOURCE_DIR}/recomp/tools/find_switch_tables.py")
+            add_test(NAME finder_rejects_retail_form COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=${_finder}|${_fx}/retail.xex"
+                -DEXPECT_RC=2
+                "-DEXPECT_RE=encrypted or compressed \\(encryption 1, compression 1\\)@@ttt2-xexinfo <file\\.xex> --write-plain@@step 5c"
+                -P "${_run_expect}")
+            add_test(NAME finder_accepts_plain_output COMMAND "${CMAKE_COMMAND}"
+                "-DCMD=${_finder}|${_fx}/plain/default.xex|--toml|${_fx}/plain/ttt2_switch_tables.toml|--json|${_fx}/plain/switch_tables.json"
+                -DEXPECT_RC=0
+                "-DEXPECT_RE=0 switch tables"
+                "-DEXPECT_FILES=${_fx}/plain/ttt2_switch_tables.toml|${_fx}/plain/switch_tables.json"
+                -P "${_run_expect}")
+            set_tests_properties(finder_rejects_retail_form PROPERTIES FIXTURES_REQUIRED validate_inputs)
+            set_tests_properties(finder_accepts_plain_output PROPERTIES DEPENDS xexinfo_write_plain_synthetic)
+        endif()
+
+        # The retail wrapper the SDK workflows put in front of the pipeline (plain test program -> retail form ->
+        # --write-plain -> finder -> codegen -> host), round-tripped here on the plain synthetic executable.
+        add_executable(ttt2_make_retail_xex tools/make_retail_xex.cpp)
+        target_link_libraries(ttt2_make_retail_xex PRIVATE ttt2::xex ttt2::core)
+        target_include_directories(ttt2_make_retail_xex PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        ttt2_apply_warnings(ttt2_make_retail_xex)
+        add_test(NAME retail_xex_wrap_roundtrip COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:ttt2_make_retail_xex>|${_fx}/plain/default.xex|${_fx}/plain/rewrapped.xex|--granule|256"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=encryption normal, compression basic \\(3 blocks\\), image 8192 bytes, image SHA-1 ${_image_sha1}; round trip verified"
+            "-DEXPECT_FILES=${_fx}/plain/rewrapped.xex"
+            -P "${_run_expect}")
+        add_test(NAME retail_xex_wrap_rejects_retail_input COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:ttt2_make_retail_xex>|${_fx}/retail.xex|${_fx}/plain/never.xex"
+            -DEXPECT_RC=1
+            "-DEXPECT_RE=input is not plain"
+            "-DEXPECT_MISSING=${_fx}/plain/never.xex"
+            -P "${_run_expect}")
+        add_test(NAME retail_xex_rewrapped_unwraps COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=${_xexinfo}|${_fx}/plain/rewrapped.xex|--write-plain|${_fx}/plain/unwrapped.xex"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=Encryption: +normal@@Compression: +basic .zero-run blocks., 3 blocks@@Plain image: +verified@@Plain image SHA-1: +${_image_sha1}"
+            "-DEXPECT_FILES=${_fx}/plain/unwrapped.xex"
+            -P "${_run_expect}")
+        set_tests_properties(retail_xex_wrap_roundtrip PROPERTIES DEPENDS xexinfo_write_plain_synthetic)
+        set_tests_properties(retail_xex_wrap_rejects_retail_input PROPERTIES FIXTURES_REQUIRED validate_inputs)
+        set_tests_properties(retail_xex_rewrapped_unwraps PROPERTIES DEPENDS retail_xex_wrap_roundtrip)
+    endif()
+
     # The whole-disc extraction the native host's game data root comes from, on the synthetic image.
     if(TARGET ttt2-iso)
         add_test(NAME iso_extract_all_synthetic COMMAND "${CMAKE_COMMAND}"

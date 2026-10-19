@@ -19,6 +19,23 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   exercises the base mode on the synthetic fixtures (PowerShell 5.1). Title Update 3 remains the target for
   online play (both players need the same version); the checklist documents the legitimate way to obtain it
   (the owner's console with the disc, Xbox Live's update service, the file copied off the console's storage).
+* **The owner's first full run (base-image mode, 2026-10-19)**: identification and the import analysis succeeded
+  and all eight helper addresses match TTT2 Web (so its function boundaries apply to the owner's image); then the
+  run failed at the recompilation: the pipeline copied the executable as extracted (encryption 1, compression 1)
+  to `recomp/game/default.xex`, the finder refused it, no `ttt2_switch_tables.toml` was written, codegen failed on
+  the missing include and the host build stopped. Root cause: the pipeline had no step that produces the plain
+  form the finder and codegen read (the tools decrypted in memory for hashing and imports only), and the
+  synthetic fixture's `default.xex` was plain, so no test covered the retail form. **Validated on the real files
+  so far: disc identification, import analysis, helper fingerprint.** Not yet: recompilation, host build, boot.
+* Fix (this PR): `make_plain_xex` / `verify_plain_xex` in `src/xex/basefile`, `ttt2-xexinfo --write-plain
+  <out>` (headers kept byte for byte, FILE_FORMAT_INFO set to none / none, the decrypted and decompressed image
+  appended, the written file read back and verified, a failed output deleted, the input never written), pipeline
+  step 5c that prepares `work\default_base_plain.xex` (or `default_tu3_plain.xex`) and hands it to the finder,
+  codegen and the host build, `Fail-Pipeline` (a `CRITICAL:` line, the report written, the script stops) for every
+  stage the later ones depend on, the finder's refusal naming the step, the synthetic disc executable now in the
+  retail form (encrypted + basic-compressed) with ctest regressions, and the SDK workflows running the whole
+  chain on a retail-form wrap of the license-free program (`tests/tools/make_retail_xex.cpp`): wrap -> 5c ->
+  finder -> codegen -> host -> boot on the plain file and on the retail-form file.
 
 **Completed**
 * **PR #6 merged into `main`** (merge commit `5acfb19`): `host-boot-test.sh --gpu` and the Windows workflow's
@@ -123,7 +140,22 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   tool built, smoke test, snapshot package 54 MB with the licence bundle, `ttt2.exe` built and booted from it,
   every boot form) and with the pin (run 39240064074). CI 10/10 on the head.
 
+* Base-image preparation, Linux container: 69 doctest cases / 834 assertions (5 cases new: plain form of the
+  encrypted fixture, idempotence and the unencrypted variant, refusals, tamper detection, the compression helper);
+  24 ctests (10 new) on the retail-form synthetic executable: `--write-plain` verified with the image SHA-1
+  `f1a74890...` of `make_import_test_image()`, the plain output parsed as none / none with the same imports and
+  helpers, the same-path refusal, the delta-patch refusal leaving no file, the finder refusing the retail form
+  (exit 2, message naming the step) and accepting the plain output, the wrapper round trip; GCC 13 and clang 18
+  `-Werror`. End to end with the installed pinned SDK: `imports_ttt2` packed -> wrapped into the retail form (4
+  blocks, 262144-byte image) -> finder refuses it -> `--write-plain` verified -> finder accepts (results identical
+  to the packed original) -> `rexglue codegen` exit 0 -> host built -> `host-boot-test: PASS` on the plain root
+  **and on the retail-form root** (the runtime decrypts and decompresses the executable itself). Pipeline script:
+  PowerShell 7.4 parse clean; the stop-on-critical path exercised (missing tools -> `CRITICAL:` line, report
+  written, throw).
+
 **Not verified / open**
+* The pipeline's step 5c, the finder and codegen on the owner's real executable: the fix is tested on synthetic
+  retail-form inputs and on a license-free program in the retail form, not yet on the game (the owner reruns).
 * The owner's first boot is the only test of the snapshot's kernel and GPU changes with the real image; a bump
   stays a one-PR step (`docs/decisions/0002`).
 * A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
@@ -133,8 +165,10 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 **Blocked / pending**
 * Owner's files for Milestone 3 steps 3-5 and the first boot (Milestone 4): the owner path is now the
   `rexglue-sdk-install-win-amd64` download plus
-  `scripts\owner-pipeline.ps1 -Iso ... -TitleUpdate ... -Codegen -BuildHost -SdkInstall <dir> -ExtractGame -Boot`
-  and the three files it names (`work\boot-triage.md`, the log copy, `work\boot-report.txt`) plus `work\report.txt`.
+  `scripts\owner-pipeline.ps1 -Iso ... -Codegen -BuildHost -SdkInstall <dir> -ExtractGame -Boot` (base-image
+  mode; `-TitleUpdate ...` once the update is available) and the three files it names (`work\boot-triage.md`,
+  the log copy, `work\boot-report.txt`) plus `work\report.txt`. The owner's rerun after the step 5c fix is the
+  next real-data checkpoint.
 
 **Next task (resumable state)**
 * PR #8 (SDK snapshot evaluation mechanism, harness shim, ADR 0002): CI plus the dispatched pin and snapshot runs

@@ -47,6 +47,10 @@ jobs:
         # --exec also builds recomp/tests/host against the SDK runtime and runs the switch-table program
         # natively (fails with the SDK's own tables, passes with the finder's, reaches no kernel stubs).
         run: scripts/codegen-smoke-test.sh third_party/rexglue-sdk/src/out/linux-amd64/rexglue third_party/rexglue-sdk/src out/codegen-smoke --exec
+      - name: Build the first-party tools (ttt2-xexinfo and the retail-form wrapper for the pipeline's preparation step)
+        run: |
+          cmake --preset linux-clang -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20
+          cmake --build --preset linux-clang --target ttt2-xexinfo ttt2_make_retail_xex
       - name: Install the SDK as a CMake package, build the game host against it and boot it
         # The player's build path (scripts/build-host.ps1 on Windows): the SDK installed with
         # `--target install`, recomp/ configured with CMAKE_PREFIX_PATH, codegen running inside the
@@ -57,8 +61,12 @@ jobs:
           cmake -S third_party/rexglue-sdk/src -B third_party/rexglue-sdk/src/build/linux -DREXGLUE_BUILD_TESTS=OFF
           cmake --build third_party/rexglue-sdk/src/build/linux --parallel
           cmake --install third_party/rexglue-sdk/src/build/linux --prefix "$PWD/out/sdk-install"
-          mkdir -p recomp/game
-          cp out/codegen-smoke/imports_ttt2/imports_ttt2.xex recomp/game/default.xex
+          mkdir -p recomp/game out/host-retail
+          # The owner's path: the executable arrives in the disc's retail form (AES-encrypted, basic-compressed), which
+          # neither the finder nor codegen read; the pipeline's step 5c (ttt2-xexinfo --write-plain) prepares the plain
+          # image they do. The wrapper puts the license-free program into that form first.
+          out/build/linux-clang/bin/ttt2_make_retail_xex out/codegen-smoke/imports_ttt2/imports_ttt2.xex out/host-retail/default.xex
+          out/build/linux-clang/bin/ttt2-xexinfo out/host-retail/default.xex --write-plain recomp/game/default.xex --no-hash | tail -3
           # the manifests include the switch-table finder's output for the image (build-host.ps1 does this on Windows)
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables.json
           # codegen before the first configure: the generated glue only picks the recompiled sources up
@@ -69,6 +77,9 @@ jobs:
           cmake --build out/host-linux --parallel
           ls -la out/host-linux/
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 120
+          # The owner's extracted game folder holds the disc's default.xex in its retail form: the runtime must load that
+          # itself (decrypt, decompress) and run the same recompiled code. Same host, the retail-form file as the root's executable.
+          scripts/host-boot-test.sh out/host-linux/ttt2 out/host-retail 120
           # The owner's one-command boot step (scripts/run-host.ps1 under the runner's pwsh) on the same image,
           # with an Xvfb of this step's own: the host must end by itself and the triage report a clean exit.
           Xvfb :97 -screen 0 1280x720x24 -nolisten tcp > /dev/null 2>&1 &

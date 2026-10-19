@@ -65,10 +65,17 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   retail key) and basic decompression, the title-update pre-check (`patch_check.hpp`), import resolution against
   the kernel/XAM export tables and the save/restore helper scan (`imports.hpp`), `ttt2-validate` (the whole
   check in one command), `ttt2-xexpatch` on XenonUtils' MIT `XexPatcher` (Clang-only). TTT2's retail executable
-  is basic-compressed (confirmed by TTT2Recomp's unpack tool), so LZX decompression is needed only for the data
-  containers, later.
-* Output: a verified set of local files (`game/`, `update/`) and a patched `Default.xex` whose hash identifies the
-  exact build the generated code corresponds to.
+  is basic-compressed (confirmed by TTT2Recomp's unpack tool and by the owner's disc), so LZX decompression is
+  needed only for the data containers, later.
+* **[implemented]** The recompilation image: the finder and `rexglue codegen` read a plain XEX (encryption none,
+  compression none, the PE image after the headers), not the disc's encrypted, compressed file. `make_plain_xex`
+  (`basefile.hpp`) produces it with every header kept and only the two file-format fields changed, `verify_plain_xex`
+  checks a written file against its original, `ttt2-xexinfo --write-plain` is the command, and the owner pipeline's
+  step 5c runs it before the finder, codegen and the host build. The runtime itself loads the disc's file in
+  either form (verified with the same host on both forms of the test program), so the extracted game folder keeps
+  the original.
+* Output: a verified set of local files (`game/`, `update/`), the plain recompilation image, and (with the update)
+  a patched `Default.xex` whose hash identifies the exact build the generated code corresponds to.
 
 ### (B) Recompilation - `recomp/`
 
