@@ -24,6 +24,14 @@ Newest first. Each entry says what was done, what was verified and where, and wh
 * Both workflows run the boot step (`pwsh`) on the kernel-import image (host ends by itself, triage "clean exit")
   and on the stall image (1 s watchdog, 8 s timeout closes the window, triage "stall ...; closed afterwards");
   the CI dry run of the pipeline passes `-Boot` without a host and must report the skip.
+* **Prebuilt SDK package for the owner.** The Windows workflow's `build_host` stage now moves the installed SDK
+  package away from where CMake installed it, adds the SDK's BSD-3 licence, every vendored component's licence
+  file and the source commit under `share/licenses/`, uploads it as the `rexglue-sdk-install-win-amd64` artifact
+  (90 days) and builds `ttt2.exe` from the moved copy (`build-host.ps1 -SdkInstall`), which is the proof that
+  the owner can unzip it anywhere. `owner-pipeline.ps1 -SdkInstall <dir>` passes it through and takes
+  `rexglue.exe` from its `bin\`; `build-host.ps1` resolves the package path before configuring inside `recomp\`
+  (a relative `-SdkInstall` broke there). The checklist's step 6 now starts with the download instead of the
+  30-60 minute SDK build (`docs/DEPENDENCIES.md` records the artifact's contents and licences).
 
 **Verified (where)**
 * Linux container, PowerShell 7.4.6 under Xvfb, the real host built against the installed SDK package:
@@ -33,16 +41,24 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   stub report at window close and "Window closing", triage "stall: ...; the window was closed afterwards";
   without a display the script reported "none written to .../logs" with the SDL error from stdout. 18 Python
   unit tests OK; hygiene check clean.
+* Relocation of the installed package, Linux: `out/sdk-install` copied to another folder, `rexglue codegen` from
+  the copy, `recomp/` configured with `CMAKE_PREFIX_PATH` on the copy, host built (runtime and GPU plugin staged
+  from the copy) and booted on the kernel-import image: `host-boot-test: PASS`. The package's CMake files hold
+  no absolute paths.
 * The CI, SDK validation and Windows runs of this change are recorded in PR #7 (pending when this was written).
 
 **Not verified / open**
 * `run-host.ps1` on Windows PowerShell 5.1 and the `taskkill` close through `Start-Process`: the Windows workflow's
   `build_host` stage is the first run of the script on Windows (the boot test's `taskkill` close is verified there).
+* The Windows package artifact (size, the host build from the moved copy, the licence bundle) comes with the
+  Windows run of PR #7; a package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor
+  version is expected to link (same MSVC ABI) but is unverified until the owner's run.
 * Everything on license-free programs; the real image still waits for the owner's run.
 
 **Blocked / pending**
-* Owner's files for Milestone 3 steps 3-5 and the first boot (Milestone 4): the owner path is now
-  `scripts\owner-pipeline.ps1 -Iso ... -TitleUpdate ... -Codegen -Rexglue ... -BuildHost -InstallSdk -ExtractGame -Boot`
+* Owner's files for Milestone 3 steps 3-5 and the first boot (Milestone 4): the owner path is now the
+  `rexglue-sdk-install-win-amd64` download plus
+  `scripts\owner-pipeline.ps1 -Iso ... -TitleUpdate ... -Codegen -BuildHost -SdkInstall <dir> -ExtractGame -Boot`
   and the three files it names (`work\boot-triage.md`, the log copy, `work\boot-report.txt`) plus `work\report.txt`.
 
 **Next task (resumable state)**

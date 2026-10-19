@@ -205,7 +205,12 @@ configure `recomp/` with `-DREXSDK_DIR=third_party/rexglue-sdk/src` (Clang 20, `
 `scripts\build-rexglue-windows.ps1` follows the SDK's own CI (LLVM clang + Ninja, `win-amd64` preset; needs
 Visual Studio 2022's C++ workload for the Windows SDK headers). `.github/workflows/rexglue-windows.yml` runs the
 same steps on a Windows runner on demand and uploads `rexglue.exe` as an artifact, so the owner can also download
-the tool instead of building it.
+the tool instead of building it. With the `build_host` input the run also installs the SDK as a CMake package,
+moves the package away from its install location, adds the SDK's licence, every vendored component's licence file
+and the source commit under `share/licenses/`, uploads it as `rexglue-sdk-install-win-amd64` (90 days) and builds
+`ttt2.exe` from the moved copy (`build-host.ps1 -SdkInstall`), which proves the package works from any folder: the
+owner unzips it and passes `-SdkInstall <dir>` to the pipeline instead of building the SDK (30-60 minutes). On
+Linux the same relocation was verified by hand (package copied, host built and booted from the copy).
 
 Without a Windows machine the PowerShell scripts are checked with the PowerShell 7 parser
 (`pwsh -Command '[System.Management.Automation.Language.Parser]::ParseFile(...)'`) and the workflow files with

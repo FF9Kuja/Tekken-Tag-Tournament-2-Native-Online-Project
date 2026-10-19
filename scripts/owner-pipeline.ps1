@@ -3,7 +3,7 @@
 #   scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_174Q22P_0000008000000.00000000000O2"
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
-#                              [-BuildHost] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
+#                              [-BuildHost] [-SdkInstall <dir>] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -18,8 +18,9 @@
 #      finder on it (recomp\game\ttt2_switch_tables.toml, which the manifests include), runs
 #      `rexglue codegen` on recomp\ttt2_manifest.toml and summarises it with recomp\tools\codegen_report.py;
 #   7. with -BuildHost, builds the native host ttt2.exe from that code against the installed ReXGlue
-#      SDK package (scripts\build-host.ps1; -InstallSdk builds and installs the SDK first, which takes
-#      a long time); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
+#      SDK package (scripts\build-host.ps1): -SdkInstall <dir> names the package (the unzipped
+#      rexglue-sdk-install-win-amd64 artifact of the Windows workflow, whose bin\rexglue.exe is then used
+#      for step 6 unless -Rexglue says otherwise), -InstallSdk builds and installs it first (long); with -ExtractGame, extracts the whole disc into the work folder's game\ directory,
 #      the folder ttt2.exe runs from (`ttt2.exe --game_data_root <work>\game`), and the title update's
 #      files into update\ next to it (the host mounts that as update:);
 #   8. with -Boot, runs the host on that game data through scripts\run-host.ps1: waits for it to end (or
@@ -38,6 +39,7 @@ param(
     [switch]$Codegen,
     [string]$Rexglue = "",
     [switch]$BuildHost,
+    [string]$SdkInstall = "",
     [switch]$InstallSdk,
     [switch]$ExtractGame,
     [switch]$Boot,
@@ -173,6 +175,9 @@ if ($Codegen) {
     if (-not $patchedOk) {
         Log "skipped: no patched executable"
     } else {
+        if ($Rexglue -eq "" -and $SdkInstall -ne "" -and (Test-Path (Join-Path $SdkInstall "bin\rexglue.exe"))) {
+            $Rexglue = (Resolve-Path (Join-Path $SdkInstall "bin\rexglue.exe")).Path
+        }
         if ($Rexglue -eq "") {
             $found = Get-ChildItem -Path "third_party\rexglue-sdk\src\out" -Recurse -Filter rexglue.exe -ErrorAction SilentlyContinue |
                 Where-Object { $_.FullName -notmatch "CMakeFiles" } | Select-Object -First 1
@@ -233,6 +238,7 @@ if ($BuildHost) {
         Log "skipped: no patched executable"
     } else {
         $hostArgs = @("-Game", $patched)
+        if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
         if ($InstallSdk) { $hostArgs += "-InstallSdk" }
         $hostOut = Invoke-Tool { & (Join-Path $PSScriptRoot "build-host.ps1") @hostArgs 2>&1 | ForEach-Object { $_.ToString() } }
         $hostCode = $LASTEXITCODE

@@ -95,7 +95,8 @@ Expected: `output: ... version 0.0.3.2`, `image: PE image, N bytes, SHA-1 ...`. 
 ## Step 5 - run the recompiler and report what it found
 
 You need `rexglue.exe` (the ReXGlue codegen tool). Either download it from the latest run of the
-"ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`), or build it:
+"ReXGlue codegen tool (Windows)" workflow on GitHub (Actions tab, artifact `rexglue-win-amd64`; the
+`rexglue-sdk-install-win-amd64` artifact of step 6 holds it too, as `bin\rexglue.exe`), or build it:
 
 ```powershell
 # needs LLVM 20+ (winget install LLVM.LLVM), CMake, Ninja, Python 3 (winget install Python.Python.3.12) and
@@ -132,14 +133,18 @@ is addresses only too and stays on your PC with the image (git-ignored). The gen
 ## Step 6 - build the native host and attempt the first boot
 
 The host is `ttt2.exe`: your recompiled code plus the ReXGlue runtime, built the way every player will build it.
-It needs the SDK installed as a CMake package once (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`
-does it, or let the pipeline do it with `-InstallSdk`) and the whole disc extracted into a folder, which is the
-`game_data_root` the host runs from:
+It needs the SDK as an installed CMake package and the whole disc extracted into a folder, which is the
+`game_data_root` the host runs from. The quick way to the package: download the `rexglue-sdk-install-win-amd64`
+artifact from a run of the "ReXGlue codegen tool (Windows)" workflow that had `build_host` on (Actions tab; the
+runs on `main` after each merge have it), unzip it anywhere, say `D:\rexglue-sdk`, and pass `-SdkInstall
+D:\rexglue-sdk` (the pipeline then also takes `rexglue.exe` from its `bin\` folder). The slow way builds it on
+your PC (30-60 minutes; `scripts\build-rexglue-windows.ps1 -Install`, or `-InstallSdk` on the pipeline):
 
 ```powershell
-scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe" -BuildHost -InstallSdk -ExtractGame -Boot
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot
+# (with -InstallSdk -Rexglue "path\to\rexglue.exe" instead of -SdkInstall to build the SDK yourself)
 # by hand instead:
-scripts\build-host.ps1 -Game work\default_tu3.xex            # -> recomp\out\build\win-amd64-release\ttt2.exe
+scripts\build-host.ps1 -Game work\default_tu3.xex -SdkInstall D:\rexglue-sdk   # -> recomp\out\build\win-amd64-release\ttt2.exe
 .\out\build\windows-clang-cl\bin\ttt2-iso.exe extract-all "D:\path\TTT2.iso" work\game
 .\out\build\windows-clang-cl\bin\ttt2-stfs.exe extract-all "D:\path\TU_..." work\update
 scripts\run-host.ps1                                          # ttt2.exe --game_data_root work\game, then the triage below
