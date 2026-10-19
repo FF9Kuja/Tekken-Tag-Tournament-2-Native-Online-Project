@@ -63,6 +63,12 @@ STALL = head(backend="xenos", title="4E4D0859", version="0.0.3.2") + [
     P.format(ms=960, level="warning", tid=7001).replace("[core]", "[sys]") + "Variable import xboxkrnl:0xad (KeTimeStampBundle) not implemented",
 ]
 
+STALL_THEN_CLOSED = STALL + [
+    P.format(ms=970, level="info", tid=6976).replace("[core]", "[app]") + "Window closing, shutting down...",
+    P.format(ms=970, level="info", tid=6976) + "ttt2: kernel stub report at window close: 12 calls to 1 distinct stubs",
+    P.format(ms=970, level="info", tid=6976) + "ttt2:   XamUserGetSigninState 12 calls (first seen as stub call #1)",
+]
+
 TTT2WEB = {"XamShowKeyboardUI": ("runtime/kernel/xam_ui.cpp:200", "implemented")}
 
 
@@ -117,6 +123,17 @@ class Triage(unittest.TestCase):
         self.assertIn("KeTimeStampBundle", recs)
         self.assertIn("Stall after 15000 ms", recs)
         self.assertEqual(t["errors"][0]["count"], 2)
+
+    def test_stall_then_window_closed(self):
+        t = MOD.triage(STALL_THEN_CLOSED, {})
+        self.assertTrue(t["outcome"].startswith("stall"))
+        self.assertIn("closed afterwards", t["outcome"])
+        self.assertIsNotNone(t["timeline"]["closed"])
+        self.assertEqual(len(t["stalls"]), 1)
+        self.assertEqual(t["stubs"]["source"], "kernel stub report at window close")
+        self.assertEqual([(s["name"], s["calls"]) for s in t["stubs"]["list"]], [("XamUserGetSigninState", 12)])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("closed afterwards", md)
 
     def test_address_helpers(self):
         arena = (0x100000000, 0x200000000)
