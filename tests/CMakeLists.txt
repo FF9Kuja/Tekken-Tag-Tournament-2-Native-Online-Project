@@ -5,6 +5,8 @@ add_executable(ttt2_tests
     test_aes.cpp
     test_xex2.cpp
     test_basefile.cpp
+    test_patch_check.cpp
+    test_imports.cpp
     test_xdvdfs.cpp
     test_stfs.cpp
 )
@@ -13,6 +15,13 @@ target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 ttt2_apply_warnings(ttt2_tests)
 
 add_test(NAME ttt2_unit_tests COMMAND ttt2_tests --reporters=console --no-intro)
+
+# Python tools: the codegen report parser on synthetic output (needs python3 on the path).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME python_tools COMMAND "${Python3_EXECUTABLE}" -I -m unittest discover -s "${CMAKE_CURRENT_SOURCE_DIR}/python"
+             WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+endif()
 
 # Smoke test of the tool (only when the tools are built): it must refuse a
 # non-XEX file with exit code 1 and print its version with exit code 0.

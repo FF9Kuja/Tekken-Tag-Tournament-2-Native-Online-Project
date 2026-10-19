@@ -41,6 +41,12 @@ inline constexpr KnownExecutable kKnownExecutables[] = {
     {0x4E4D0859u, "Tekken Tag Tournament 2 (USA, Europe) retail disc Default.xex, v0.0.0.2",
      "a942090b7c293d0ce63346ed8a2974448135d0dd", "",
      "reported by TTT2Recomp (game_data.cpp); not yet verified here"},
+    // The decrypted image of the retail executable patched with Title Update 3 (version 0.0.3.2), as
+    // produced by XenonUtils' XexPatcher: the image both existing ports recompile. Reported by
+    // TTT2Recomp (port/src/setup/game_data.cpp, kImageSha1). Unverified by this project.
+    {0x4E4D0859u, "Tekken Tag Tournament 2 TU3-patched executable image (0.0.3.2), decrypted PE image",
+     "66adbc1a7744ec840a3ae8e51f8aeb677140d789", "",
+     "reported by TTT2Recomp (game_data.cpp kImageSha1); not yet verified here"},
     // Reported by Tekken 6 Native Online (Ekspym, builder/build_native.py). Unverified here.
     {0x4E4D07FCu, "Tekken 6 (USA, Europe) Rev 1 Default.xex", "",
      "ee138a4fe8d32a0edc131451377f4377041a49626153fa992db24f5420a7f15c",

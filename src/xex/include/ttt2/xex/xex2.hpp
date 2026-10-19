@@ -145,6 +145,9 @@ struct ImportLibrary {
   Version version;
   Version version_min;
   std::uint16_t import_count = 0;
+  /// Guest addresses of the import records (one per import; a function import has two: the
+  /// address slot and the code thunk). The record word in the image encodes the ordinal.
+  std::vector<std::uint32_t> record_addresses;
 };
 
 struct StaticLibrary {
@@ -170,9 +173,20 @@ struct TlsInfo {
 struct DeltaPatchInfo {
   Version target_version;
   Version source_version;
-  std::array<std::uint8_t, 20> source_digest{};     ///< SHA-1 the base image's security header must match
-  std::array<std::uint8_t, 16> source_image_key{};  ///< base image's file key
-  std::uint32_t size_of_target_headers = 0;
+  std::array<std::uint8_t, 20> source_digest{};     ///< digest of the base the patch was built against
+  std::array<std::uint8_t, 16> source_image_key{};  ///< base image's file key (encrypted with the new key)
+  std::uint32_t size_of_target_headers = 0;         ///< header size of the patched executable
+  /// Delta windows (descriptors of at least 0x4C bytes): the patcher first copies
+  /// [source_offset, source_offset + source_size) of the base to target_offset, for the headers
+  /// and for the image, then applies the LZX delta blocks on top.
+  std::uint32_t delta_headers_source_offset = 0;
+  std::uint32_t delta_headers_source_size = 0;
+  std::uint32_t delta_headers_target_offset = 0;
+  std::uint32_t delta_image_source_offset = 0;
+  std::uint32_t delta_image_source_size = 0;
+  std::uint32_t delta_image_target_offset = 0;
+  bool has_delta_windows = false;
+  std::uint32_t descriptor_size = 0;  ///< declared size of the descriptor structure
 };
 
 struct PageDescriptor {

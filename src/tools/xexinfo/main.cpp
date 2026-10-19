@@ -1,20 +1,26 @@
 // ttt2-xexinfo: prints what an Xbox 360 executable (.xex) or title update
 // patch (.xexp) is, without decrypting it.
 //
-//   ttt2-xexinfo <file> [--json] [--no-hash] [--headers]
+//   ttt2-xexinfo <file> [--json] [--no-hash] [--headers] [--image-hash] [--imports] [--helpers]
 //
+// --imports and --helpers decrypt and decompress the executable image in memory (like
+// --image-hash) and report, respectively, the kernel/XAM imports by name and the addresses of
+// the compiler's register save/restore helpers: names, ordinals and addresses only.
 // Exit code 0 on success, 1 on a parse error or bad arguments.
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ttt2/core/file_io.hpp"
 #include "ttt2/core/format.hpp"
 #include "ttt2/core/hash.hpp"
 #include "ttt2/core/project_version.hpp"
 #include "ttt2/xex/basefile.hpp"
+#include "ttt2/xex/imports.hpp"
 #include "ttt2/xex/known_titles.hpp"
 #include "ttt2/xex/xex2.hpp"
 
@@ -26,16 +32,26 @@ struct Options {
   bool hash = true;
   bool headers = false;
   bool image_hash = false;  // decrypt + decompress the basefile in memory and hash it
+  bool imports = false;     // resolve the import table against the image
+  bool helpers = false;     // scan the image for the register save/restore helpers
+};
+
+struct ImageScan {
+  std::optional<ttt2::xex::ImportSummary> imports;
+  std::vector<ttt2::xex::HelperHit> helpers;
 };
 
 void print_usage() {
-  std::fprintf(stderr,
-               "usage: ttt2-xexinfo <file.xex|file.xexp> [--json] [--no-hash] [--headers] [--image-hash]\n"
-               "       ttt2-xexinfo --version\n\n"
-               "Reads the plaintext XEX2 container headers of an Xbox 360 executable and\n"
-               "reports title ID, version, media ID, imports and encryption/compression.\n"
-               "--image-hash decrypts and decompresses the executable image in memory (retail key) and\n"
-               "prints its hashes; nothing is written to disk.\n");
+  std::fprintf(
+      stderr,
+      "usage: ttt2-xexinfo <file.xex|file.xexp> [--json] [--no-hash] [--headers] [--image-hash]\n"
+      "                    [--imports] [--helpers]\n"
+      "       ttt2-xexinfo --version\n\n"
+      "Reads the plaintext XEX2 container headers of an Xbox 360 executable and\n"
+      "reports title ID, version, media ID, imports and encryption/compression.\n"
+      "--image-hash decrypts and decompresses the executable image in memory (retail key) and\n"
+      "prints its hashes; --imports names every kernel/XAM import (ordinal, thunk and slot\n"
+      "addresses); --helpers locates the register save/restore helpers. Nothing is written to disk.\n");
 }
 
 std::string json_escape(std::string_view s) {
@@ -75,7 +91,7 @@ struct Hashes {
 };
 
 void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t file_size,
-                const Hashes* hashes) {
+                const Hashes* hashes, const ImageScan* scan) {
   using namespace ttt2::xex;
   std::printf("File:               %s (%zu bytes)\n", opt.path.c_str(), file_size);
   std::printf("Module flags:       0x%08X  %s\n", img.module_flags,
@@ -172,11 +188,41 @@ void print_text(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
       }
     }
   }
+  if (scan && scan->imports) {
+    const auto& im = *scan->imports;
+    std::printf("Imports:            %zu functions, %zu variables, %zu unnamed ordinals\n", im.functions,
+                im.variables, im.unnamed);
+    std::string current;
+    for (const auto& e : im.entries) {
+      if (e.library != current) {
+        current = e.library;
+        std::printf("  %s\n", current.c_str());
+      }
+      std::printf("    %5u  %-40s %s", e.ordinal, e.name.empty() ? "(unknown ordinal)" : e.name.c_str(),
+                  e.is_function ? "function" : "variable");
+      if (e.thunk_address) std::printf("  thunk 0x%08X", e.thunk_address);
+      if (e.slot_address) std::printf("  slot 0x%08X", e.slot_address);
+      std::printf("\n");
+    }
+    for (const auto& w : im.warnings) std::printf("Warning:            %s\n", w.c_str());
+  }
+  if (scan && !scan->helpers.empty()) {
+    std::printf("Helpers:\n");
+    for (const auto& h : scan->helpers) {
+      std::printf("  %-16s", std::string(h.name).c_str());
+      if (h.addresses.empty()) {
+        std::printf(" not found\n");
+      } else {
+        for (const auto a : h.addresses) std::printf(" 0x%08X", a);
+        std::printf("%s\n", h.addresses.size() > 1 ? "  (ambiguous)" : "");
+      }
+    }
+  }
   for (const auto& w : img.warnings) std::printf("Warning:            %s\n", w.c_str());
 }
 
 void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t file_size,
-                const Hashes* hashes) {
+                const Hashes* hashes, const ImageScan* scan) {
   using namespace ttt2::xex;
   std::printf("{\n");
   std::printf("  \"file\": \"%s\",\n  \"size\": %zu,\n", json_escape(opt.path).c_str(), file_size);
@@ -231,6 +277,35 @@ void print_json(const ttt2::xex::Xex2Image& img, const Options& opt, std::size_t
     if (!hashes->image_note.empty())
       std::printf("  \"image_note\": \"%s\",\n", json_escape(hashes->image_note).c_str());
   }
+  if (scan && scan->imports) {
+    const auto& im = *scan->imports;
+    std::printf("  \"import_functions\": %zu,\n  \"import_variables\": %zu,\n  \"import_unnamed\": %zu,\n",
+                im.functions, im.variables, im.unnamed);
+    std::printf("  \"imports\": [");
+    for (std::size_t i = 0; i < im.entries.size(); ++i) {
+      const auto& e = im.entries[i];
+      std::printf(
+          "%s\n    {\"library\": \"%s\", \"ordinal\": %u, \"name\": %s, \"function\": %s, "
+          "\"thunk\": \"%s\", \"slot\": \"%s\"}",
+          i ? "," : "", json_escape(e.library).c_str(), e.ordinal,
+          e.name.empty() ? "null" : ("\"" + json_escape(e.name) + "\"").c_str(),
+          e.is_function ? "true" : "false", ttt2::hex_u32(e.thunk_address).c_str(),
+          ttt2::hex_u32(e.slot_address).c_str());
+    }
+    std::printf("\n  ],\n");
+  }
+  if (scan && !scan->helpers.empty()) {
+    std::printf("  \"helpers\": {");
+    for (std::size_t i = 0; i < scan->helpers.size(); ++i) {
+      const auto& h = scan->helpers[i];
+      std::printf("%s\"%s\": [", i ? ", " : "", std::string(h.name).c_str());
+      for (std::size_t k = 0; k < h.addresses.size(); ++k) {
+        std::printf("%s\"%s\"", k ? ", " : "", ttt2::hex_u32(h.addresses[k]).c_str());
+      }
+      std::printf("]");
+    }
+    std::printf("},\n");
+  }
   std::printf("  \"warnings\": [");
   for (std::size_t i = 0; i < img.warnings.size(); ++i) {
     std::printf("%s\"%s\"", i ? ", " : "", json_escape(img.warnings[i]).c_str());
@@ -252,6 +327,10 @@ int main(int argc, char** argv) {
       opt.headers = true;
     } else if (a == "--image-hash") {
       opt.image_hash = true;
+    } else if (a == "--imports") {
+      opt.imports = true;
+    } else if (a == "--helpers") {
+      opt.helpers = true;
     } else if (a == "--version") {
       std::printf("ttt2-xexinfo %s (%s)\n", ttt2::kProjectVersion, ttt2::kProjectGitDescribe);
       return 0;
@@ -290,24 +369,38 @@ int main(int argc, char** argv) {
     hashes.sha1 = ttt2::hash::to_hex(ttt2::hash::Sha1::compute(data.value()));
     hashes.sha256 = ttt2::hash::to_hex(ttt2::hash::Sha256::compute(data.value()));
   }
-  if (opt.image_hash) {
+  ImageScan scan;
+  if (opt.image_hash || opt.imports || opt.helpers) {
     opt.hash = true;
     auto image = ttt2::xex::load_basefile(parsed.value(), data.value());
     if (!image) {
       hashes.image_note = "not produced: " + image.error().message;
     } else {
-      hashes.image_sha1 = ttt2::hash::to_hex(ttt2::hash::Sha1::compute(image.value()));
-      hashes.image_sha256 = ttt2::hash::to_hex(ttt2::hash::Sha256::compute(image.value()));
+      if (opt.image_hash) {
+        hashes.image_sha1 = ttt2::hash::to_hex(ttt2::hash::Sha1::compute(image.value()));
+        hashes.image_sha256 = ttt2::hash::to_hex(ttt2::hash::Sha256::compute(image.value()));
+      }
       hashes.image_note =
           (ttt2::xex::looks_like_pe_image(image.value()) ? "PE image, "
                                                          : "NOT a PE image (wrong key or damaged file), ") +
           std::to_string(image->size()) + " bytes";
+      if (opt.imports) {
+        auto summary = ttt2::xex::resolve_imports(parsed.value(), image.value());
+        if (summary) {
+          scan.imports = std::move(summary.value());
+        } else {
+          parsed->warnings.push_back("imports: " + summary.error().message);
+        }
+      }
+      if (opt.helpers && parsed->security) {
+        scan.helpers = ttt2::xex::scan_save_restore_helpers(image.value(), parsed->security->load_address);
+      }
     }
   }
   if (opt.json) {
-    print_json(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr);
+    print_json(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan);
   } else {
-    print_text(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr);
+    print_text(parsed.value(), opt, data->size(), opt.hash ? &hashes : nullptr, &scan);
   }
   return 0;
 }
