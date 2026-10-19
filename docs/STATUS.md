@@ -83,10 +83,16 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   the new harness shim: identical results. Fetch-script override: accepted on a snapshot checkout, refused without
   it, pinned checkout unaffected (sh and pwsh 7.4).
 
+* PR #8 dispatched runs on `d9d21a1`, all green: SDK validation with `sdk_commit=bd833a2` (run 39240052895:
+  `rexglue 0.10.0.24-dev.gbd833a2`, PPC tests, smoke test with native runs, host built against the snapshot's
+  package, boot tests, boot step "clean exit" / "stall ...; closed afterwards") and with the pin (run
+  39240056253); the Windows workflow with the snapshot plus `native_run` and `build_host` (run 39240060409:
+  tool built, smoke test, snapshot package 54 MB with the licence bundle, `ttt2.exe` built and booted from it,
+  every boot form) and with the pin (run 39240064074). CI 10/10 on the head.
+
 **Not verified / open**
-* The SDK snapshot on Windows (tool build, smoke test, package, host, boot tests through `sdk_commit`) is pending
-  the dispatched Windows run of PR #8; the owner's first boot is the only test of the snapshot's kernel and GPU
-  changes with the real image.
+* The owner's first boot is the only test of the snapshot's kernel and GPU changes with the real image; a bump
+  stays a one-PR step (`docs/decisions/0002`).
 * A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to
   link (same MSVC ABI) but is unverified until the owner's run.
 * Everything on license-free programs; the real image still waits for the owner's run.
