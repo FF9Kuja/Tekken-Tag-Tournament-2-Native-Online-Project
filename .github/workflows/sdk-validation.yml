@@ -38,7 +38,7 @@ jobs:
         run: scripts/sdk-recompile-tests.sh third_party/rexglue-sdk/src third_party/rexglue-sdk/src/out/linux-amd64/rexglue out/ppc-tests
       - name: End-to-end codegen smoke test on license-free PowerPC programs
         run: scripts/codegen-smoke-test.sh third_party/rexglue-sdk/src/out/linux-amd64/rexglue third_party/rexglue-sdk/src out/codegen-smoke
-      - name: Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)
+      - name: "Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)"
         run: python3 -I scripts/check_instruction_coverage.py --expect-missing 2
       - name: Upload codegen reports
         if: always()
