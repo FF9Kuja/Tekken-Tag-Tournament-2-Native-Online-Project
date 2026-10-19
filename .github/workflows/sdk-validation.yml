@@ -70,8 +70,11 @@ jobs:
           # the manifests include the switch-table finder's output for the image (build-host.ps1 does this on Windows)
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables.json
           # codegen before the first configure: the generated glue only picks the recompiled sources up
-          # when generated/default exists at configure time (a fresh tree has none)
-          (cd recomp && ../out/sdk-install/bin/rexglue codegen ttt2_manifest.toml)
+          # when generated/default exists at configure time (a fresh tree has none). It runs through the
+          # function-boundary resolver, as build-host.ps1 and the owner pipeline run it (the manifest includes
+          # its output file; the reference does not apply to this image, whose helper fingerprint differs)
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen.log --report out/host-resolve.md
+          grep -q "codegen succeeded in round 1" out/host-resolve.md
           cmake -S recomp -B out/host-linux -G Ninja -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
                 -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/out/sdk-install"
           cmake --build out/host-linux --parallel
@@ -90,7 +93,7 @@ jobs:
           # The same host rebuilt on a program that spins forever: the watchdog's stall dump must fire.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/stall_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-stall.json
-          (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-stall.log --report out/host-resolve-stall.md --ignore-stamp
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-stall
           # The boot step on it: the 8 s timeout sends the close request (SIGTERM) after the 1 s watchdog's stall
@@ -101,9 +104,29 @@ jobs:
           # And on a program that writes to the null page: the crash report must be logged and the host exit 3.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/crash_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-crash.json
-          (cd recomp && ../out/sdk-install/bin/rexglue codegen --ignore-stamp ttt2_manifest.toml)
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-crash.log --report out/host-resolve-crash.md --ignore-stamp
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-crash
+          # The function-boundary cycle on the real host (recomp/tests/ppc/tailcall_ttt2.s, its boundary table as the
+          # reference): codegen through the resolver adds the two entries its errors call for; the host then calls a
+          # leaf only a pointer reaches, which nothing registered, and must end on the runtime's trap with exit code 4;
+          # resolve_functions.py boot turns the host's own log line into an entry; after codegen and the rebuild the
+          # program runs to its end. The owner pipeline's step 9b does exactly this with TTT2 Web's table.
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/tailcall_ttt2.s recomp/game/default.xex
+          python3 -I recomp/tests/ppc/functions_to_toml.py recomp/game/default.xex.syms recomp/tests/ppc/tailcall_ttt2.functions out/tailcall-reference.toml
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-tailcall.json
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference out/tailcall-reference.toml --log out/host-codegen-tailcall.log --report out/host-resolve-tailcall.md --ignore-stamp
+          grep -q "codegen succeeded in round 2 with 2 resolved entries" out/host-resolve-tailcall.md
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 60 --expect-fatal
+          python3 -I recomp/tools/resolve_functions.py boot --image recomp/game/default.xex \
+            --boot-log "$(ls -t out/host-linux/logs/*.log | head -1)" --codegen-log out/host-codegen-tailcall.log \
+            --reference out/tailcall-reference.toml --out recomp/game/ttt2_resolved_functions.toml --report out/host-resolve-tailcall-boot.md
+          grep -q "all 1 called addresses verified (1 new entries)" out/host-resolve-tailcall-boot.md
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference out/tailcall-reference.toml --log out/host-codegen-tailcall2.log --report out/host-resolve-tailcall2.md --ignore-stamp
+          grep -q "codegen succeeded in round 1 with 3 resolved entries" out/host-resolve-tailcall2.md
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 60 --no-imports
       - name: Upload the host boot log
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,6 +136,7 @@ jobs:
             out/host-linux/logs/
             out/run-host/
             out/run-host-stall/
+            out/host-resolve*.md
           if-no-files-found: ignore
       - name: "Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)"
         run: python3 -I scripts/check_instruction_coverage.py --expect-missing 2

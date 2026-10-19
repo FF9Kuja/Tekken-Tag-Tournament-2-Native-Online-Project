@@ -60,6 +60,12 @@ Goal: a verified codegen workflow for the TTT2 TU3 image, with limitations docum
    `[[invalid_instructions]]` to `recomp/ttt2_config.toml`; cross-check with XenonAnalyse. [x] TTT2 Web's 18k
    explicit function boundaries are converted and ready (`recomp/ttt2_functions.ttt2web.toml`), applied only if
    the owner's image matches TTT2 Web's helper-address fingerprint (the pipeline checks and runs both variants).
+   [x] (2026-10-19) First codegen on the owner's base image: 596 switch tables, 49,708 functions sealed, stopped
+   on 14 `UnresolvedCall` errors (a ReXGlue analysis limitation: `b` targets are never registered, gap fill misses
+   code after a function's last branch; `docs/RESEARCH.md` 8b). [x] `recomp/tools/resolve_functions.py` resolves
+   such errors, and the runtime's calls to unregistered functions from a boot log, with entries verified against
+   the image and TTT2 Web's table; the pipeline, `build-host.ps1` and the SDK workflows run codegen through it.
+   [ ] The owner's rerun: codegen complete, then the host build and the first boot (Milestone 4).
 5. [ ] Document compatible executable versions (base 0.0.0.2 + TU3 0.0.3.2) and the refusal rules for others
    (the tools already refuse other titles/versions; the owner's hashes complete the table).
 6. [x] Diagnostic pipeline: codegen logs, validation reports (`codegen_report.py`, `ttt2-validate --json`,

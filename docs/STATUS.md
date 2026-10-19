@@ -37,6 +37,31 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   chain on a retail-form wrap of the license-free program (`tests/tools/make_retail_xex.cpp`): wrap -> 5c ->
   finder -> codegen -> host -> boot on the plain file and on the retail-form file.
 
+* **The owner's second run (with the step 5c fix, 2026-10-19)**: plain image prepared and verified, 596 switch
+  tables (18 bounded or byte-switch dispatches unrecognised), ReXGlue analysed the whole executable (49,708
+  functions sealed, 13 not) and stopped on 14 `UnresolvedCall: b T from S - target not in any function` errors;
+  host build and boot not reached. **Validated on the real files so far: identification, imports/helpers, the plain
+  image, the finder, ReXGlue's analysis up to those errors.**
+* Diagnosis (`docs/RESEARCH.md` 8b): a ReXGlue 0.10.0 analysis limitation (identical code at upstream `bd833a2`):
+  `b` targets are never registered as functions (only `bl` targets), and gap fill misses the code after a
+  function's last branch. Thirteen targets are TTT2 Web function starts reached only from 1-2 instruction thunks
+  (missing boundaries); one branch is internal to TTT2 Web's 0x82959A80+0x78, which gap fill cut in two (wrong
+  range). Whole-image comparison: 17,656 of TTT2 Web's 18,351 starts coincide with ReXGlue's; all 1,123
+  disagreements are ReXGlue gap-fill guesses; 695 TTT2 Web functions (15 KB) stay unregistered, 13 of them reached
+  by direct branches.
+* Fix (this PR): `recomp/tools/resolve_functions.py` (`codegen` loop, `verify`, `boot`): each error becomes a
+  `[functions]` entry only when the branch decodes from the image and TTT2 Web's table (fingerprint-checked against
+  ReXGlue's own helper detection) or `.pdata` agrees; entry points get no size (ReXGlue finds the extent), internal
+  branches get the reference function's extent; everything else is reported. Output
+  `recomp/game/ttt2_resolved_functions.toml` (included by the default manifest, image-SHA-1-stamped, git-ignored).
+  On the owner's log: 13 entries plus 0x82959A80+0x78, no conflicts. The pipeline (step 6b), `build-host.ps1` and
+  the SDK workflows run codegen through it. Runtime counterpart: the triage recognises the runtime's
+  `[FATAL] Call to invalid or unregistered function` trap, `Ttt2App` turns `abort()` into a logged exit with code 4
+  (no C runtime dialog on Windows), and pipeline step 9b verifies the called address from the boot log, rebuilds
+  and boots again (`-BootRounds`, default 3). Also: the pipeline runs its child scripts (`build.ps1`,
+  `build-host.ps1`, `run-host.ps1`) in a child PowerShell, so their native tools' stderr cannot abort them under
+  Windows PowerShell 5.1, and strips PowerShell's error colouring and `RemoteException` noise from the report.
+
 **Completed**
 * **PR #6 merged into `main`** (merge commit `5acfb19`): `host-boot-test.sh --gpu` and the Windows workflow's
   informative GPU step, which passed on the runner's software D3D12 adapter (run 39227512735; see session 4).
@@ -153,9 +178,21 @@ Newest first. Each entry says what was done, what was verified and where, and wh
   PowerShell 7.4 parse clean; the stop-on-critical path exercised (missing tools -> `CRITICAL:` line, report
   written, throw).
 
+* Function-boundary resolution, Linux container: `recomp/tests/ppc/tailcall_ttt2.s` (three shapes) with the
+  pinned SDK: pass 1 fails with exactly the two expected `UnresolvedCall` errors; the resolver adds one entry point
+  and one function boundary and codegen succeeds (7 functions); the headless harness traps on the pointer-only leaf
+  (exit 134, runtime FATAL line), `resolve_functions.py boot` adds it, codegen and the harness then give
+  1002 112 24 406 35. The real host on the same program: exit code 4 with the FATAL and abort lines, `run-host.ps1`
+  (pwsh 7.4) triage "fatal: the game called 0x82010108 through a pointer", resolution from the host's own log,
+  rebuild, clean exit 0. The resolver's decisions on the owner's actual log (image decode excepted): 13 entries and
+  0x82959A80+0x78, fingerprint 8 of 8. Python: 38 tests (17 new). The pipeline's boot loop exercised under pwsh 7.4
+  with stubbed steps and the real resolver (add/rebuild/reboot, no progress, round limit, no -Codegen).
+
 **Not verified / open**
-* The pipeline's step 5c, the finder and codegen on the owner's real executable: the fix is tested on synthetic
-  retail-form inputs and on a license-free program in the retail form, not yet on the game (the owner reruns).
+* Codegen through the resolver, the host build and the boot on the owner's real executable (the owner reruns).
+* The 18 dispatches the finder could not read are not codegen errors; if ReXGlue compiled them as indirect calls, a
+  boot reaching one stops on the runtime trap with an address inside a function, which step 9b reports instead of
+  resolving: the finder then needs those shapes.
 * The owner's first boot is the only test of the snapshot's kernel and GPU changes with the real image; a bump
   stays a one-PR step (`docs/decisions/0002`).
 * A package built on the runner's LLVM consumed by an owner's different LLVM 20+ minor version is expected to

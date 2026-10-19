@@ -23,9 +23,24 @@ image. It then stopped at the recompilation: the pipeline handed the executable 
 extracted from the disc, AES-encrypted and basic-compressed, which the finder and `rexglue codegen` do not read.
 That is fixed: step 5c of the pipeline now prepares the plain form of the executable (`ttt2-xexinfo --write-plain`,
 verified after writing) and every later step reads that file; a stage that fails now stops the pipeline with a
-`CRITICAL:` line instead of running on with missing files. **Rerun the same command** (below). **Not yet done with
-your files:** the Title Update 3 steps (you do not have the update yet), the recompilation, the host build and the
-first boot; nothing beyond identification and the import/helper analysis is validated on the real game so far.
+`CRITICAL:` line instead of running on with missing files.
+
+Your second run (with that fix) prepared and verified the plain image, found 596 switch tables, and got ReXGlue
+through analysing the whole executable: 49,708 functions sealed, 13 not, and 14 `UnresolvedCall: target not in any
+function` errors stopped it. Cause (`docs/RESEARCH.md` 8b): the pinned ReXGlue registers a function for every `bl`
+target but never for the target of a plain `b`, and its gap fill misses the code right after a function's last
+branch. Thirteen of the 14 targets are small functions only a thunk branches to; TTT2 Web's published table lists
+each of them as a function start. The fourteenth is a block ReXGlue cut off its function; TTT2 Web's table has
+branch and target in one function. The pipeline now runs codegen through `recomp\tools\resolve_functions.py`,
+which adds such a function only after checking the branch in your image and finding the same boundary in TTT2
+Web's table (used only because your helper fingerprint matches it 8 of 8), then reruns codegen. On your log it adds
+13 entry points and one function boundary, nothing else. When a boot later stops on a call to an unregistered
+function (the runtime logs `[FATAL] Call to invalid or unregistered function at guest address ...`), the pipeline
+verifies that address the same way, rebuilds and boots again (step 9b, up to `-BootRounds 3`).
+**Rerun the same command** (below). **Not yet done with your files:** the Title Update 3 steps (you do not have the
+update yet), a complete recompilation, the host build and the first boot; validated on the real game so far:
+identification, the import/helper analysis, the plain image, the switch-table finder and ReXGlue's analysis up to
+those 14 errors.
 
 ## No Title Update 3 yet? Use the base-image path
 
@@ -178,7 +193,8 @@ it). Steps 6 and 7 read that file; the report shows `Plain image: verified` and 
 ```
 
 Then let the pipeline script do the rest (it copies the prepared image to `recomp\game\default.xex`, runs the
-finder on it, runs `rexglue codegen` on `recomp\ttt2_manifest.toml`, and summarises the generated code):
+finder on it, runs `rexglue codegen` on `recomp\ttt2_manifest.toml` through `recomp\tools\resolve_functions.py`,
+and summarises the generated code):
 
 ```powershell
 scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -TitleUpdate "D:\path\TU_..." -Codegen -Rexglue "path\to\rexglue.exe"
@@ -198,8 +214,22 @@ names the preparation step):
 python -I recomp\tools\find_switch_tables.py work\default_base_plain.xex --toml recomp\game\ttt2_switch_tables.toml --json work\switch_tables.json
 ```
 
-**Send `work\report.txt`, `work\codegen-REPORT.md`, `work\codegen.log` and `work\switch_tables.json`.** They
-contain function counts, addresses, names and error messages: no game bytes. `recomp\game\ttt2_switch_tables.toml`
+**Function boundaries ReXGlue misses (step 6b).** ReXGlue 0.10.0 never makes the target of a plain `b` a function,
+so a small function that only a thunk branches to, or a block cut off its function, makes codegen stop with
+`UnresolvedCall: ... target not in any function`. `resolve_functions.py` reads each such error, checks in the image
+that the instruction really branches there, and looks the target up in TTT2 Web's table (only when your image's
+helper fingerprint matches it, as yours does): a function starting at the target becomes an entry point, a branch
+inside one function makes that function's boundary an entry. The entries go to `recomp\game\ttt2_resolved_functions.toml`
+(addresses only, git-ignored, tied to your image's SHA-1) and codegen runs again. Anything it cannot verify stops
+the pipeline with the reason; it never guesses. Its report is `work\resolve-REPORT.md` (each entry with its
+evidence); the codegen logs of failed rounds are kept as `work\codegen.round<N>.log`. By hand, on a failed log:
+
+```powershell
+python -I recomp\tools\resolve_functions.py verify --image recomp\game\default.xex --log work\codegen.log --reference recomp\ttt2_functions.ttt2web.toml --report work\resolve-REPORT.md
+```
+
+**Send `work\report.txt`, `work\resolve-REPORT.md`, `work\codegen-REPORT.md`, `work\codegen.log` and
+`work\switch_tables.json`.** They contain function counts, addresses, names and error messages: no game bytes. `recomp\game\ttt2_switch_tables.toml`
 is addresses only too and stays on your PC with the image (git-ignored). The generated C++ in
 `recomp\generated\default\` stays on your PC as well (git-ignored and refused by the hygiene check).
 
@@ -235,7 +265,18 @@ ends and runs the triage described below. When the window stays black or freezes
 The build folder holds everything the host needs: `ttt2.exe`, `rexruntime.dll` and the Xenos GPU plugin
 `rexgpu-xenos.dll`, which the host loads by default (`--gpu_plugin=none` runs without GPU emulation, which is
 only useful for log-gathering; the game cannot draw that way). The host exits by itself when the game's main
-thread ends, and after a crash it writes the report below and exits with code 3 instead of hanging.
+thread ends, and after a crash it writes the report below and exits with code 3 instead of hanging. When the
+runtime gives up (a `[FATAL] ...` line in the log, for instance a call to an address no recompiled function starts
+at), the host logs that and exits with code 4 instead of showing the "abort() has been called" box.
+
+**Calls to functions ReXGlue never registered (step 9b).** Functions that only a pointer reaches (vtables without
+RTTI, callback tables) pass codegen unregistered; the first call to one ends the run with
+`[FATAL] Call to invalid or unregistered function at guest address X`. The triage names X; the pipeline then runs
+`resolve_functions.py boot` on the run's log, adds X as an entry when your image has code there and TTT2 Web's
+table lists a function starting there, and (with `-Codegen -BuildHost`) recompiles, rebuilds and boots again, at
+most `-BootRounds` (default 3) runs. An X inside a function is a jump into its middle, usually a jump table the
+finder did not recognise: that is reported for us to fix, never turned into an entry. Each round's report is
+`work\resolve-boot-<N>.md`; send them with the triage.
 
 Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
 `ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`; the window itself shows nothing useful before the game

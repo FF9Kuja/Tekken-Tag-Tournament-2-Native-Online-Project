@@ -93,6 +93,19 @@ use to put a license-free program into the retail form) round-tripped. All input
 
 ## Recompiler tooling (`recomp/tools`, `scripts`)
 
+* `recomp/tools/resolve_functions.py codegen --rexglue R --manifest M --image X --out F [--reference T]` runs
+  `rexglue codegen` and turns each `UnresolvedCall` ("target not in any function") into a `[functions]` entry in F,
+  then reruns; `verify` does one round on an existing log, `boot` does the same for the runtime's
+  "Call to invalid or unregistered function" lines in host logs. An entry is written only when the branch decodes
+  from the image and the reference T (TTT2 Web's table; only when ReXGlue's helper detection in the same codegen log
+  matches its fingerprint) or the image's `.pdata` agrees: a reference function starting at the target gives the
+  entry point alone, branch and target inside one reference function give that function with its size; anything
+  else is reported and nothing is guessed. F carries the image's SHA-1 and is reset for another image. Tests:
+  `tests/python/test_resolve_functions.py`; end to end on `recomp/tests/ppc/tailcall_ttt2.s` (three shapes, with
+  `tailcall_ttt2.functions` as its reference via `recomp/tests/ppc/functions_to_toml.py`) in
+  `scripts/codegen-smoke-test.sh` (codegen errors, resolution, harness run with the runtime trap, boot resolution,
+  clean run) and on the real host in both SDK workflows (`host-boot-test.sh --expect-fatal`, then `--no-imports`).
+
 * `recomp/tools/codegen_report.py <generated dir> [--log codegen.log]` - summarises a `rexglue codegen` run
   (functions, imports, jump tables, unimplemented sites, analysis errors, instruction mix) as REPORT.md / JSON
   with counts and addresses only; `--expect-*` options turn it into a check. Unit tests: `tests/python`

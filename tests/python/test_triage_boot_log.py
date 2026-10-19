@@ -135,6 +135,21 @@ class Triage(unittest.TestCase):
         md = MOD.render_markdown(t, "x.log")
         self.assertIn("closed afterwards", md)
 
+    def test_call_to_unregistered_function(self):
+        lines = [
+            P.format(ms=100, level="info", tid=1) + "ttt2: executable title 4E4D0859 version 0.0.0.2 (base 0.0.0.2), media 5D762D06",
+            P.format(ms=200, level="info", tid=1) + "ttt2: main guest thread created (id 7)",
+            P.format(ms=300, level="critical", tid=2) + "[FATAL] Call to invalid or unregistered function at guest address 0x82b10a28",
+            P.format(ms=301, level="critical", tid=2) + "ttt2: the runtime aborted (the [FATAL] line above says why); exiting with code 4",
+        ]
+        t = MOD.triage(lines)
+        self.assertTrue(t["outcome"].startswith("fatal: the game called 0x82B10A28 through a pointer"))
+        self.assertEqual([c["address"] for c in t["invalid_calls"]], ["0x82B10A28"])
+        self.assertTrue(any("resolve_functions.py boot" in r for r in t["recommendations"]))
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("## Calls to unregistered functions (runtime trap)", md)
+        self.assertIn("indirect call to 0x82B10A28", md)
+
     def test_address_helpers(self):
         arena = (0x100000000, 0x200000000)
         self.assertEqual(MOD.guest_address(0x170110004, arena), ("virtual", 0x70110004))

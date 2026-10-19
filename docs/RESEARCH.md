@@ -410,6 +410,59 @@ Clang 18 lowers both C smoke programs' switches to value tables (no `bctr`), so 
 tables; assembly through the SDK's bundled `powerpc-none-elf-as` can (VMX128 included; `vrlw128`/`vsel128` need
 raw words because of an operand-table defect in that binutils build).
 
+## 8b. Function boundaries on the owner's executable (codegen run of 2026-10-19)
+
+**What the owner's run measured.** Base retail executable 0.0.0.2 (image SHA-1 `8d6389ac...`), prepared plain
+by step 5c, 596 switch tables from our finder (37 with 1-byte, 28 with 2-byte, 531 with 4-byte entries; 18
+dispatches with a bounds check it could not read, 1263 other `bctr` sites). `rexglue codegen` (pin `c94f5eb`)
+discovered 39,374 functions (fixed point at 39,018 before the vtable and pointer scans) and gap fill 11,388 more;
+49,708 sealed, 13 could not seal, and validation stopped on 14 `UnresolvedCall` errors, all of the form
+`b T from S - target not in any function`.
+
+**Mechanism, from the SDK source (identical at upstream `bd833a2`, so a pin bump does not change it).**
+`phase_discover.cpp` registers new functions for `bl` targets only ("Register external call targets as new
+functions (bl only, not b)"); a plain `b` to an address outside the current function is recorded as a tail call
+that waits for its target to become a function by other means (`.pdata`, `bl`, RTTI vtable, lis/addi pointer,
+`[functions]` config, gap fill). `phase_gapfill.cpp` splits the code into runs at `blr` and at `b` to an
+already-known function, and skips a whole run when its start is already a function; the function's own discovery
+stops at its first unconditional branch, so the code after it in that run is in no function. And gap fill cuts a
+block that sits after a `blr` into a function of its own when the real function was never registered.
+`recomp/tests/ppc/tailcall_ttt2.s` reproduces both shapes with the pinned SDK (pass 1 of the smoke test fails with
+exactly two such errors).
+
+**Each of the 14, against TTT2 Web's published table (CC0, its control-flow walk of the same image; the helper
+fingerprint matches 8 of 8).** In 13 cases the branch site is a 1- or 2-instruction function in both tools
+(TTT2 Web sizes 4 or 8: `b T` or an adjustor-style `addi r3,r3,N; b T`) and the target is the start of a TTT2
+Web function of 0x8 to 0x68 bytes that ReXGlue never registered: 0x82CD9EA8, 0x82B16488, 0x82AAF478, 0x82AAFE00,
+0x826CC0A8, 0x826CC488, 0x826CC4A8, 0x826CD708, 0x82B10A28, 0x826CC480, 0x82A4AAD0, 0x82A8EE50, 0x82ABAB40. In
+the remaining case, `b 0x82959AC0` at 0x82959AF4, branch and target both lie inside TTT2 Web's function
+0x82959A80+0x78: ReXGlue had no function at 0x82959A80 and its gap fill made the block at 0x82959AF0 (after the
+function's `blr`) a function of its own. So: **missing boundaries (13) and one wrong range (1), both caused by an
+analysis limitation of ReXGlue 0.10.0**, not by anything in our manifest, which had no explicit boundaries.
+
+**The two tables compared on the whole image (from the owner's codegen log).** TTT2 Web lists 18,351 functions;
+17,656 start where ReXGlue registered one, and of the single-block ones 14,433 agree on the size and 114 differ.
+All 1,123 ReXGlue function starts that lie strictly inside a TTT2 Web function came from gap fill, none from
+discovery: the published boundaries never contradict an entry point ReXGlue found itself, only its gap-fill
+guesses. 695 TTT2 Web functions are not registered by ReXGlue at all (586 certainly uncovered, 28 inside a
+single-block ReXGlue function, 81 undetermined), 15 KB of code in total, mostly 4, 8 and 32 bytes long. Only 13 of
+them are reached by direct branches (the errors above); the rest are either dead or reached through pointers that
+ReXGlue's scans do not see (vtables without RTTI: it found 352 RTTI complete object locators), which at run time
+ends in the runtime's `[FATAL] Call to invalid or unregistered function at guest address X`.
+
+**What the pipeline does about it (recomp/tools/resolve_functions.py).** Codegen runs through the resolver: each
+`b T from S` error becomes a `[functions]` entry only when the instruction at S in the image is a direct branch to
+T and TTT2 Web's table (applied only when ReXGlue's own helper detection in the same run matches its fingerprint)
+or the image's `.pdata` agrees: T a function start gives the entry point alone (`"0xT" = {}`, ReXGlue's own
+discovery finds the extent), S and T inside one reference function F give F with its size. Anything else is
+reported, never guessed. On the owner's log this gives 13 entry points and 0x82959A80+0x78, no conflicts. The
+boot step does the same for the runtime trap: a called address where TTT2 Web's table starts a function becomes an
+entry, an address inside a function (an indirect jump into its middle, such as a jump table the finder missed) is
+reported. Verified on license-free programs with the pinned SDK on Linux: the codegen errors, their resolution
+and the native results (the headless harness), and the real host's trap (exit code 4), its resolution from the
+host's own log and the clean run after the rebuild; the SDK workflows repeat the cycle on Linux and on Windows
+(`ttt2.exe`, with the owner's boot step and triage).
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source

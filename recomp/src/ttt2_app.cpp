@@ -11,6 +11,7 @@
 #include <rex/system/xthread.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -97,6 +98,20 @@ void Ttt2App::OnPostSetup() {
   // returns true), so this one only sees crashes nothing else claims.
   rex::arch::ExceptionHandler::Install(&Ttt2App::OnHostException, this);
   crash_handler_installed_ = true;
+  // REX_FATAL (an indirect call to an address no recompiled function starts at, for one) ends in
+  // abort(): turn that into a logged exit with its own code instead of the C runtime's dialogs.
+#if REX_PLATFORM_WIN32
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+  std::signal(SIGABRT, &Ttt2App::OnAbort);
+}
+
+void Ttt2App::OnAbort(int /*signal*/) {
+  // abort() runs this on the aborting thread, after REX_FATAL has logged its reason and flushed.
+  REXLOG_CRITICAL("ttt2: the runtime aborted (the [FATAL] line above says why); exiting with code {}",
+                  kExitCodeFatal);
+  rex::FlushLogging();
+  std::_Exit(kExitCodeFatal);
 }
 
 bool Ttt2App::OnHostException(rex::arch::Exception* ex, void* data) {

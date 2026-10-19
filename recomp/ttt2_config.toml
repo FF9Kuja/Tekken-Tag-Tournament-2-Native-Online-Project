@@ -32,6 +32,10 @@ data_region_threshold = 16
 #                    recomp/ttt2_functions.ttt2web.toml holds 18k of them converted from TTT2 Web (CC0);
 #                    ttt2_manifest.ttt2web.toml includes it when the image's save/restore helper
 #                    addresses match TTT2 Web's published ones (ttt2-xexinfo --helpers reports this).
+#                    The default manifest takes only the entries its own errors call for:
+#                    recomp/tools/resolve_functions.py turns each "target not in any function" error
+#                    into an entry verified against the image and that table, in
+#                    game/ttt2_resolved_functions.toml (image-specific, git-ignored).
 # [[switch_tables]]  the 526-535 TTT2 jump tables: recomp/tools/find_switch_tables.py writes them to
 #                    game/ttt2_switch_tables.toml (git-ignored with the image), which the manifests include;
 #                    the SDK's own detector misses/miscompiles several shapes (docs/RESEARCH.md 8a)

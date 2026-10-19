@@ -165,3 +165,16 @@ jobs:
           if ($crit -match '8\. Extract the disc') { throw "the pipeline went on to extraction after the critical failure" }
           $global:LASTEXITCODE = 0
           Write-Host "stop-on-critical OK"
+          # -BuildHost without an SDK package: build-host.ps1 runs as a child PowerShell (its native tools must not
+          # write into this script's error stream), copies the prepared image, runs the switch-table finder and stops
+          # at the missing package; the pipeline must report that as a critical host-build failure with the child's
+          # own messages and exit code.
+          $failed = $false
+          try { scripts\owner-pipeline.ps1 -Iso "$fx\synthetic.iso" -Work out\pipeline-host -SkipBuild -BuildHost -SdkInstall out\no-such-sdk } catch { $failed = $true; Write-Host "stopped as expected: $($_.Exception.Message)" }
+          if (-not $failed) { throw "the pipeline did not stop without an SDK package" }
+          $hostReport = Get-Content out\pipeline-host\report.txt -Raw
+          foreach ($needle in @('Copied .*default_base_plain\.xex -> recomp\\game\\default\.xex', 'Finding switch jump tables', 'ReXGlue SDK package not found', 'CRITICAL: the host build failed \(exit 1\)')) {
+            if ($hostReport -notmatch $needle) { throw "host-build report lacks '$needle': $hostReport" }
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host "host-build child process OK"

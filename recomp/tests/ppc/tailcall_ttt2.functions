@@ -1,0 +1,13 @@
+# Function boundaries of tailcall_ttt2.s as a control-flow walk of the program gives them (each
+# function's reachable code, capped at the next entry point), one "start end" label pair per line.
+# scripts/codegen-smoke-test.sh turns this into the [functions] reference recomp/tools/resolve_functions.py
+# checks the codegen errors against: the test's stand-in for TTT2 Web's published table. _start has a
+# .pdata entry and needs no line.
+gapfill_leaf fwd_merge
+fwd_merge leaf_tail
+leaf_tail merged_tail
+merged_tail adjustor_thunk
+adjustor_thunk tail_to_gapfill
+tail_to_gapfill ptr_func
+ptr_func ptr_end
+ptr_leaf ptr_leaf_end
