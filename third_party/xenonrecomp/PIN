@@ -1,0 +1,6 @@
+# XenonRecomp (MIT, https://github.com/hedge-dev/XenonRecomp): pinned source of XenonUtils, whose
+# XexPatcher (Xenia-derived, BSD) applies Xbox 360 title-update (.xexp) delta patches.
+# Fetched on demand by scripts/fetch-xenonrecomp.sh into third_party/xenonrecomp/src (git-ignored).
+url=https://github.com/hedge-dev/XenonRecomp.git
+commit=ddd128bcca99fe8bfbb99bea583c972351fa6ace
+submodules=thirdparty/libmspack thirdparty/tiny-AES-c

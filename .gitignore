@@ -34,8 +34,11 @@ dumps/
 private/
 
 # --- Code generated from the game executable (ReXGlue / XenonRecomp output) ---
-generated/
-recomp/generated/
+# codegen output (the SDK-generated rexglue.cmake next to it IS committed)
+**/generated/default/
+recomp.*.cpp
+codegen.d
+codegen.build.stamp
 re/ppc/
 ppc_recomp*.cpp
 ppc_recomp*.h
@@ -133,3 +136,15 @@ venv/
 *~
 .DS_Store
 Thumbs.db
+
+# doctest header: downloaded at configure time (third_party/doctest/CMakeLists.txt); a local copy is allowed but not committed
+third_party/doctest/doctest.h
+
+# ReXGlue SDK checkout (fetched by scripts/fetch-rexglue-sdk.sh)
+third_party/rexglue-sdk/src/
+
+# XenonRecomp checkout (fetched by scripts/fetch-xenonrecomp.sh)
+third_party/xenonrecomp/src/
+
+# codegen smoke-test outputs
+/out/codegen-smoke/

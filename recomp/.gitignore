@@ -1,0 +1,5 @@
+# The player's game files and everything generated from them stay local.
+game/
+generated/default/
+out/
+build/

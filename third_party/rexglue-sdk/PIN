@@ -1,0 +1,6 @@
+# ReXGlue SDK pin (BSD-3-Clause, https://github.com/rexglue/rexglue-sdk).
+# The SDK is not vendored; scripts/fetch-rexglue-sdk.sh clones it here at exactly this commit.
+# Bump deliberately: the SDK warns of breaking API changes between releases.
+url=https://github.com/rexglue/rexglue-sdk.git
+commit=c94f5ebdcb3c9d1a460ca48e04f9758448f8d518
+tag=v0.10.0

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuses commits that contain game content, generated game code or secrets.
+# Install with: scripts/install-git-hooks.sh
+exec python3 "$(git rev-parse --show-toplevel)/scripts/check_repo_hygiene.py" --staged

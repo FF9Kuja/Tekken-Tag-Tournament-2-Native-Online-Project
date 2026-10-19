@@ -1,0 +1,22 @@
+# Google style with a wider line and no bin-packing of parameters; matches the
+# formatting of the ReXGlue SDK so project code and SDK code read alike.
+BasedOnStyle: Google
+ColumnLimit: 110
+IndentWidth: 2
+AccessModifierOffset: -1
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<doctest.h>'
+    Priority: 0
+  - Regex: '^<.*\.h>'
+    Priority: 1
+  - Regex: '^<.*'
+    Priority: 2
+  - Regex: '^"ttt2/'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 3
