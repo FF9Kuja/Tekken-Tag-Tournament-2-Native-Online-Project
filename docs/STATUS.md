@@ -53,6 +53,14 @@ stubs. Thread 19: about 329 million traced calls. Critical section `0x40000618` 
   program (frame 4 counted as not followed), the boot step's triage naming its timeout, and the owner pipeline end to
   end twice (its patch check passes with the package).
 
+**After the merge.** The Windows workflow on `main` (39509375027, `f422acd`) failed one boot-test check on the deadlock
+program: the spinner's event description, which the dump printed only on the thread's `wait:` line, so a dump that
+caught the spinner between two calls ("wait: none") had none. That check depended on timing (it passed on the PR run and
+locally); reproduced locally in 2 of 5 runs. The dump now prints each object a thread's busy calls name on an
+`object:` line of its own, whatever the thread is doing when the dump is taken, and the check reads that line (5 of 5
+local runs pass; the triage carries the lines). The owner's dumps gain the same: thread 19's event is described even
+when the dump catches it between calls.
+
 **Not verified yet:** the owner's copy - whether the patched codegen frees the heap lock, and what the frames draw.
 
 ## 2026-10-20 - Session 9: the second black-screen run - a frozen kernel clock, missing names, frame and thread diagnostics
