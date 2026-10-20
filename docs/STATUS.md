@@ -46,9 +46,15 @@ stopped after one run (no unregistered function called). The report files were d
   `crash_ttt2`; `run-host.ps1` under PowerShell 7 on `wait_ttt2` (the triage reports the wait chain and the
   window-close dump); 92 Python tests; actionlint; hygiene.
 
-**Not verified yet:** the Windows runs of the new tests (the wrapper lookup through `GetProcAddress` in particular),
-and the owner's copy: whether the sector query was the cause, and what the boot monitor shows if the window stays
-black.
+* **CI and workflows on PR #16 (`55e35ec`):** CI green (push 39470736185, PR 39470791472); SDK validation on Linux
+  39470797065: the smoke test with native execution (the new `io_ttt2` harness runs in both modes), the real host on
+  the deadlock (`--expect-stall --expect-waits`, then the boot step's triage with the wait chain) and on the
+  file-system program (`--expect-io`); the Windows workflow with `build_host` and `native_run` 39470801417: the same
+  on Windows, every boot logging that the export wrappers found the runtime's originals (through `GetProcAddress`
+  in `rexruntime.dll`), and the owner pipeline end to end under Windows PowerShell 5.1 unchanged.
+
+**Not verified yet:** the owner's copy: whether the sector query was the cause, and what the boot monitor shows if
+the window stays black.
 
 ## 2026-10-20 - Session 7: the boot repair runs by itself; functions only a pointer reaches registered ahead of time
 
