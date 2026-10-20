@@ -41,7 +41,7 @@ restart the pipeline every three rebuilds.
 * **Measured with the pinned SDK:** registering a function that ReXGlue had folded into another one splits it
   cleanly: an unconditional branch becomes a tail call, a conditional one a conditional tail call; `pointer_ttt2`
   computes `50 6 57 205 204 1004 62` with the two entries and traps at its first pointer call without them.
-* **Local runs:** the smoke test with `--exec` (40 checks, 6 new), 88 Python tests, 26 ctests on both Linux presets
+* **Local runs:** the smoke test with `--exec` (39 checks, 5 new), 88 Python tests, 26 ctests on both Linux presets
   with warnings as errors, the loop test under PowerShell 7.4 (19 cases; 4 mutations of the loop each caught),
   hygiene.
 
