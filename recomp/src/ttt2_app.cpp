@@ -130,6 +130,15 @@ void Ttt2App::OnPostSetup() {
   ttt2::kernel_clock::Start(*runtime());
   // TTT2_PIXEL_CHECK=1: sample the presented front buffer (frame_monitor.h); the GPU plugin is loaded by now.
   ttt2::frames::ConfigurePixelCheck();
+  // The frame monitor follows the GPU's command stream up to the write pointer the game gives the GPU
+  // (CP_RB_WPTR), readable through the Xenos plugin's register file (SDK inline accessors, as ReadGpuState).
+  if (auto* rt = runtime(); gpu_plugin_ == "xenos" && rt && rt->graphics_system()) {
+    auto* graphics = static_cast<rex::graphics::GraphicsSystem*>(rt->graphics_system());
+    ttt2::frames::SetWritePointerSource([graphics]() -> std::optional<std::uint32_t> {
+      if (!graphics->command_processor()) return std::nullopt;
+      return graphics->register_file()->values[0x01C5];  // CP_RB_WPTR
+    });
+  }
 }
 
 void Ttt2App::OnAbort(int /*signal*/) {
@@ -286,6 +295,7 @@ bool Ttt2App::OnWindowCloseRequested() {
 
 void Ttt2App::OnShutdown() {
   StopWatchdog();
+  ttt2::frames::SetWritePointerSource(nullptr);  // before the graphics system goes away
   ttt2::kernel_clock::Stop();
   if (crash_handler_installed_) {
     rex::arch::ExceptionHandler::Uninstall(&Ttt2App::OnHostException, this);

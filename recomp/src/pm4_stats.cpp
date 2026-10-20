@@ -238,6 +238,7 @@ void Parser::ParseBuffer(const std::uint32_t* words, std::size_t count, FrameSta
           }
           case kOpXeSwap:
             ++stats.swaps;
+            if (on_swap_) on_swap_(stats);
             break;
           case kOpSetBinMaskLo: bin_mask_ = (bin_mask_ & 0xFFFFFFFF00000000ull) | body[0]; break;
           case kOpSetBinMaskHi: bin_mask_ = (bin_mask_ & 0xFFFFFFFFull) | (std::uint64_t(body[0]) << 32); break;
@@ -276,6 +277,33 @@ std::vector<RingSpan> RingSpans(std::uint32_t ring_bytes, std::uint32_t from, st
     if (to) spans.push_back({0, to});
   }
   return spans;
+}
+
+RingFollower::RingFollower(ReadFn read, std::uint32_t base, std::uint32_t dwords, std::uint32_t start)
+    : read_(read), parser_(std::move(read)), base_(base), dwords_(dwords), position_(dwords ? start % dwords : 0) {}
+
+bool RingFollower::Advance(std::uint32_t write_pointer, const FrameFn& on_frame) {
+  if (!dwords_) return false;
+  write_pointer %= dwords_;
+  if (write_pointer == position_) return false;
+  words_.clear();
+  for (const auto& span : RingSpans(dwords_ * 4, position_ * 4, write_pointer * 4)) {
+    if (!read_ || !read_(base_ + span.offset, span.bytes / 4, part_) || part_.size() != span.bytes / 4) {
+      ++pending_.unreadable;
+      continue;
+    }
+    words_.insert(words_.end(), part_.begin(), part_.end());
+  }
+  position_ = write_pointer;
+  words_read_ += words_.size();
+  parser_.SetSwapHandler([&](FrameStats& stats) {
+    ++frames_;
+    if (on_frame) on_frame(stats);
+    stats = FrameStats{};
+  });
+  parser_.Parse(words_.data(), words_.size(), pending_);
+  parser_.SetSwapHandler(nullptr);
+  return true;
 }
 
 std::string Describe(const FrameStats& s) {

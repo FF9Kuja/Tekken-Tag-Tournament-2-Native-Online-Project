@@ -679,6 +679,8 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         # The frame monitor (gpu_ttt2.s, recomp/src/frame_monitor.cpp, pm4_stats.cpp): three frames of PM4 packets in a
         # 4 KB ring buffer, the third wrapping around its end, handed to VdSwap; the host must count each frame's
         # draws, resolves, clears, render target changes, indirect buffers and the packet the GPU emulation skips.
+        # A fourth frame's swap words lie outside the ring, as TTT2's do: with no GPU write pointer to follow (no
+        # GPU emulation here) it must be counted as not followed, not as a frame without draws.
         # TTT2_PIXEL_CHECK=1 samples the front buffer (192 of its 256 pixels hold 0x11223344); TTT2_FRAME_STATS=0
         # turns the counting off. No GPU emulation is involved: VdSwap only fills its 64 words.
         dir="$work/gpu_ttt2"
@@ -692,8 +694,10 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             && grep -q "ttt2: gpu: first frame with draws: frame 1:" "$dir/exec.log" \
             && grep -q "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute" "$dir/exec.log" \
             && grep -q "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 1 unreadable buffer, 3 packets (7 words of commands)" "$dir/exec.log" \
-            && grep -q "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "$dir/exec.log"; then
-            echo "ok   exec: the frame monitor counted each frame's draws, resolves, clears and skipped packets, across the end of the ring, and left an indirect buffer without memory unread"
+            && grep -q "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 4: VdSwap's buffer 0x[0-9A-F]* (physical 0x[0-9A-F]*) is not in the ring buffer at 0x[0-9A-F]* (4096 bytes) and the GPU's write pointer is not readable (no GPU emulation): the frame's commands cannot be followed, its draws are unknown" "$dir/exec.log" \
+            && grep -q "headless_host: frames: 3 followed in the GPU command stream by the ring between swaps, 1 not followed; 2 with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16" "$dir/exec.log"; then
+            echo "ok   exec: the frame monitor counted each frame's draws, resolves, clears and skipped packets, across the end of the ring, left an indirect buffer without memory unread, and counted the frame whose swap lies outside the ring as not followed"
         else
             echo "FAIL exec: native run of the GPU-frames program (exit $rc, see $dir/exec.log)"
             tail -20 "$dir/exec.log"

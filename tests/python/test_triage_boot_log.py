@@ -409,6 +409,70 @@ class Triage(unittest.TestCase):
         self.assertTrue(any(r.startswith("The frames hold 1 GPU packets the GPU emulation does not execute") for r in recs))
         self.assertTrue(any(r.startswith("Pixel check (frame 1): front buffer 16x16") for r in recs))
 
+    def frames_activity(self, frames_part):
+        return ("ttt2: activity: files 6 opened, 1 failed (1 device paths); read 0.0 MB in 2 reads (0 failed); sector "
+                "queries 0; missing names 1; threads created 22; gpu: engines initialized, ring buffer 0x0BFE8000, "
+                "interrupt callback 0x82712560, vblanks 21448, ring write pointer 0xEBB; frames presented " + frames_part +
+                "; audio clients 1, audio frames 1; input polls 10676; traced kernel calls 329000000; kernel clock 180.1 s "
+                "(tick count 180.1 s)")
+
+    def test_frames_outside_the_ring_are_not_zero_draws(self):
+        # The owner's boot of PR #17 (checkout 8cadd71): every VdSwap buffer lay outside the 32 KB ring, so that host
+        # read no frame at all. Its "0 with draws" is no evidence of empty frames.
+        line = self.frames_activity("10674 (0 with draws, 0 with resolves; draws 0, resolves 0, clears 0, 10674 swaps "
+                                    "outside the ring; front buffer 1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_presented"], a["frames_with_draws"], a["swaps_outside_ring"]), (10674, 0, 10674))
+        self.assertEqual(MOD.frame_coverage(a), (0, 10674, "the ring between swaps"))
+        recs = t["recommendations"]
+        self.assertFalse(any("not one asked the GPU to draw" in r for r in recs))
+        none = [r for r in recs if r.startswith("None of the 10674 presented frames could be followed")]
+        self.assertEqual(len(none), 1)
+        self.assertIn("unknown, not zero", none[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("| Frames presented (VdSwap) | 10674 (0 followed in the GPU command stream by the ring between "
+                      "swaps, 10674 not followed): 0 with draws", md)
+
+    def test_frames_followed_by_the_write_pointer(self):
+        line = self.frames_activity("600 (599 followed in the GPU command stream by the ring write pointer; 0 with draws, "
+                                    "0 with resolves; draws 0, resolves 0, clears 0; last frame: 12 packets; front buffer "
+                                    "1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_followed"], a["follow_method"], a["frames_with_draws"]),
+                         (599, "the ring write pointer", 0))
+        self.assertNotIn("frames_not_followed", a)
+        self.assertEqual(a["last_frame"], "12 packets")
+        recs = t["recommendations"]
+        empty = [r for r in recs if r.startswith("600 frames were presented and not one asked the GPU to draw")]
+        self.assertEqual(len(empty), 1)
+        self.assertIn("read by the ring write pointer", empty[0])
+
+        line = self.frames_activity("600 (590 followed in the GPU command stream by the ring write pointer, 10 not "
+                                    "followed; 0 with draws, 0 with resolves; draws 0, resolves 0, clears 0; last frame: "
+                                    "12 packets; front buffer 1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        self.assertEqual(MOD.frame_coverage(t["activity"]), (590, 10, "the ring write pointer"))
+        self.assertTrue(any(r.startswith("590 of 600 frames were followed in the GPU command stream (by the ring write "
+                                         "pointer) and not one of them asked the GPU to draw") for r in t["recommendations"]))
+
+    def test_frames_with_draws_some_not_followed(self):
+        line = self.frames_activity("4 (3 followed in the GPU command stream by the ring between swaps, 1 not followed; 2 "
+                                    "with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, "
+                                    "1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)")
+        t = MOD.triage(head() + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_with_draws"], a["frames_with_resolves"], a["draws_total"], a["skipped_packets"]),
+                         (2, 1, 5, 1))
+        self.assertEqual((a["frames_followed"], a["frames_not_followed"]), (3, 1))
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("The game draws: 5 draws and 1 resolves (1 clearing) in 2 of 3 frames followed "
+                                         "(of 4 presented)") for r in recs))
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("| Frames presented (VdSwap) | 4 (3 followed in the GPU command stream by the ring between swaps, 1 "
+                      "not followed): 2 with draws", md)
+
     def test_parse_activity_without_gpu(self):
         a = MOD.parse_activity(
             "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "

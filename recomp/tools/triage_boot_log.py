@@ -87,7 +87,15 @@ ACTIVITY_FIELDS = {
     "missing_names": r"missing names (\d+)",
     "kernel_clock_s": r"kernel clock ([\d.]+) s", "tick_count_s": r"tick count ([\d.]+) s",
     "kernel_clock_state": r"kernel clock (off|missing|not started)",
-    "frames_with_draws": r"frames presented \d+ \((\d+) with draws", "frames_with_resolves": r"(\d+) with resolves",
+    "frames_with_draws": r"frames presented \d+ \((?:\d+ followed in the GPU command stream by [^;]+; )?(\d+) with draws",
+    "frames_with_resolves": r"(\d+) with resolves",
+    # Which frames the host could read: newer hosts follow the GPU's command stream (by the ring's write pointer with
+    # the GPU emulation, else between swaps in the ring) and count the rest as not followed; older ones read only the
+    # ring between swaps and counted the swaps outside it.
+    "frames_followed": r"frames presented \d+ \((\d+) followed in the GPU command stream",
+    "follow_method": r"followed in the GPU command stream by (the ring write pointer|the ring between swaps|nothing)",
+    "frames_not_followed": r"followed in the GPU command stream by [^,;]+, (\d+) not followed",
+    "swaps_outside_ring": r"(\d+) swaps? outside the ring",
     "draws_total": r"; draws (\d+), resolves \d+, clears \d+", "resolves_total": r"; draws \d+, resolves (\d+), clears \d+",
     "clears_total": r"; draws \d+, resolves \d+, clears (\d+)", "max_draws": r"at most (\d+) draws in a frame",
     "skipped_packets": r"clears \d+(?:, at most \d+ draws in a frame)?, (\d+) packets? the GPU emulation skips",
@@ -195,6 +203,16 @@ def parse_activity(text):
             out[key] = value
     out["gpu_emulation"] = "no GPU emulation" not in text
     return out
+
+
+def frame_coverage(a):
+    """(frames whose commands were read, frames presented whose commands were not, how) from an activity dict.
+    Older hosts read the ring between swaps and only counted the swaps outside it."""
+    presented = a.get("frames_presented", 0)
+    if "frames_followed" in a:
+        return a["frames_followed"], a.get("frames_not_followed", 0), a.get("follow_method", "?")
+    outside = a.get("swaps_outside_ring", 0)
+    return max(0, presented - outside), outside, "the ring between swaps"
 
 
 def owner_ids(wait_text):
@@ -568,19 +586,37 @@ def triage(lines, ttt2web=None):
         elif "frames_with_draws" in activity:
             with_draws = activity["frames_with_draws"]
             with_resolves = activity.get("frames_with_resolves", 0)
-            if with_draws == 0 and with_resolves == 0:
+            followed, not_followed, method = frame_coverage(activity)
+            if followed == 0:
                 recommendations.append(
-                    f"{presented} frames were presented and not one asked the GPU to draw: their command streams hold no "
-                    "draw and no resolve (last frame: " + activity.get("last_frame", "?") + "). The game presents empty "
-                    "frames - a black screen of its own, as while it waits for its data or a timer - so the GPU emulation "
-                    "is not what keeps the window black: what the game's threads wait for is (see the dumps below).")
+                    f"None of the {presented} presented frames could be followed in the GPU command stream"
+                    + (f" ({not_followed} with VdSwap's buffer outside the primary ring buffer - in Direct3D's own command "
+                       "buffer - which this host does not read)" if activity.get("swaps_outside_ring") else
+                       f" ({not_followed} not followed)" if not_followed else "")
+                    + ": what they asked the GPU to draw is unknown, not zero. Hosts that follow the ring's write pointer "
+                    "(with the GPU emulation loaded) read every frame's commands, indirect buffers included.")
+            elif with_draws == 0 and with_resolves == 0:
+                if not_followed:
+                    recommendations.append(
+                        f"{followed} of {presented} frames were followed in the GPU command stream (by {method}) and not "
+                        "one of them asked the GPU to draw: their commands hold no draw and no resolve (last frame: "
+                        + activity.get("last_frame", "?") + f"). The other {not_followed} could not be followed; their "
+                        "draws are unknown. Empty frames are a black screen of the game's own, as while it waits for its "
+                        "data or a timer: what the game's threads wait for is the next question (see the dumps below).")
+                else:
+                    recommendations.append(
+                        f"{presented} frames were presented and not one asked the GPU to draw: their command streams hold no "
+                        "draw and no resolve (last frame: " + activity.get("last_frame", "?") + f"; read by {method}). The "
+                        "game presents empty frames - a black screen of its own, as while it waits for its data or a timer - "
+                        "so the GPU emulation is not what keeps the window black: what the game's threads wait for is (see "
+                        "the dumps below).")
             else:
                 recommendations.append(
                     f"The game draws: {activity.get('draws_total', '?')} draws and {activity.get('resolves_total', '?')} "
-                    f"resolves ({activity.get('clears_total', '?')} clearing) in {with_draws} of {presented} frames, at most "
-                    f"{activity.get('max_draws', '?')} in one. If the window stays black, the question is what the frames "
-                    "contain: boot again with TTT2_PIXEL_CHECK=1 (the host samples the presented front buffer, with the "
-                    "GPU emulation's readback of resolves turned on).")
+                    f"resolves ({activity.get('clears_total', '?')} clearing) in {with_draws} of {followed} frames "
+                    f"followed (of {presented} presented), at most {activity.get('max_draws', '?')} in one. If the window "
+                    "stays black, the question is what the frames contain: boot again with TTT2_PIXEL_CHECK=1 (the host "
+                    "samples the presented front buffer, with the GPU emulation's readback of resolves turned on).")
             if activity.get("skipped_packets"):
                 first = frames["skipped_packets"]
                 recommendations.append(
@@ -768,6 +804,8 @@ def render_markdown(t, source):
                   + (f", vblanks {a['vblanks']}, ring write pointer {a.get('ring_write_pointer', '?')}" if "vblanks" in a
                      else ", no GPU emulation") + " |",
                   f"| Frames presented (VdSwap) | {a.get('frames_presented', '?')}"
+                  + ((lambda c: f" ({c[0]} followed in the GPU command stream by {c[2]}"
+                      + (f", {c[1]} not followed" if c[1] else "") + ")")(frame_coverage(a)) if "frames_with_draws" in a else "")
                   + (f": {a['frames_with_draws']} with draws, {a.get('frames_with_resolves', '?')} with resolves; "
                      f"{a.get('draws_total', '?')} draws, {a.get('resolves_total', '?')} resolves, "
                      f"{a.get('clears_total', '?')} clears; last frame: {a.get('last_frame', '?')}"
