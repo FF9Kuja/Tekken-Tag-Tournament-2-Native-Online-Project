@@ -312,6 +312,7 @@ jobs:
         # registered ahead of time, each pointer-only function ends a run with the runtime's trap: run 1 at
         # cond_target, run 2 (after the loop's own rebuild) at over_target, run 3 ends cleanly. -MinFreeGb 1: the
         # runner's disk is small (the owner keeps the default 5).
+        # The CRITICAL check is case-sensitive: the triage in the report lists the host log's "critical" level.
         if: inputs.build_host
         shell: powershell
         env:
@@ -330,7 +331,7 @@ jobs:
                                 '2 verified entries \(0 of them registered ahead of time\), kept for the next run')) {
             if ($report -notmatch $needle) { Get-Content out\e2e\work-plain\report.txt -Tail 80; throw "report lacks '$needle'" }
           }
-          if ($report -match 'CRITICAL') { throw "the pipeline stopped on a critical failure" }
+          if ($report -cmatch '(?m)^CRITICAL: ') { throw "the pipeline stopped on a critical failure" }
           Write-Host "boot repair from the boot logs: 3 runs, 2 automatic rebuilds, clean end"
       - name: Owner pipeline end to end with the functions registered ahead of time (the default; no rebuild)
         # The same disc and command without -NoIndirect, from an empty resolved file: step 6 registers both
@@ -352,7 +353,7 @@ jobs:
             if ($report -notmatch $needle) { Get-Content out\e2e\work-aot\report.txt -Tail 80; throw "report lacks '$needle'" }
           }
           if ($report -match '9b\. Calls to functions ReXGlue never registered') { throw "the loop had to repair a run" }
-          if ($report -match 'CRITICAL') { throw "the pipeline stopped on a critical failure" }
+          if ($report -cmatch '(?m)^CRITICAL: ') { throw "the pipeline stopped on a critical failure" }
           Write-Host "ahead of time: both functions registered in step 6, the first run ends cleanly"
       - name: Upload the host boot log and the boot-step reports
         if: always() && inputs.build_host
