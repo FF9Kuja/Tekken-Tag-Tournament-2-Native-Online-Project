@@ -59,7 +59,9 @@ caught the spinner between two calls ("wait: none") had none. That check depende
 locally); reproduced locally in 2 of 5 runs. The dump now prints each object a thread's busy calls name on an
 `object:` line of its own, whatever the thread is doing when the dump is taken, and the check reads that line (5 of 5
 local runs pass; the triage carries the lines). The owner's dumps gain the same: thread 19's event is described even
-when the dump catches it between calls.
+when the dump catches it between calls. PR #19 (`54f211c`): CI green (push 39511601062, PR 39511637982), SDK
+validation on Linux 39511647980, the Windows workflow with `build_host` and `native_run` 39511651515 (every step,
+the deadlock boot test and both owner-pipeline runs included).
 
 **Not verified yet:** the owner's copy - whether the patched codegen frees the heap lock, and what the frames draw.
 
