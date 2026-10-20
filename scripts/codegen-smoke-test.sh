@@ -32,7 +32,9 @@
 # registered ahead of time (must pass) and without them (must trap at the first pointer call). The
 # file-system program (io_ttt2.s) and the kernel-clock program (clock_ttt2.s) run with the host's answers
 # and with the runtime's own (TTT2_SECTOR_QUERY=runtime, TTT2_NOT_FOUND_STATUS=runtime,
-# TTT2_KERNEL_CLOCK=runtime); the GPU-frames program (gpu_ttt2.s) checks the host's per-frame counts.
+# TTT2_KERNEL_CLOCK=runtime); the GPU-frames program (gpu_ttt2.s) checks the host's per-frame counts; the
+# fall-through program (falloff_ttt2.s) checks project patch 0001: a function whose .pdata length ends before
+# its code does must continue into the code that follows instead of returning with a critical section held.
 #
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
@@ -72,7 +74,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
 rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2 \
-    "$work"/pointer_ttt2 "$work"/io_ttt2 "$work"/wait_ttt2 "$work"/clock_ttt2 "$work"/gpu_ttt2
+    "$work"/pointer_ttt2 "$work"/io_ttt2 "$work"/wait_ttt2 "$work"/clock_ttt2 "$work"/gpu_ttt2 "$work"/falloff_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -285,6 +287,12 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     # Three frames of GPU commands handed to VdSwap (gpu_ttt2.s): the entry point, its two helpers (copy_words,
     # swap) and one function per thunk.
     run_case gpu_ttt2 "$root/recomp/tests/ppc/gpu_ttt2.s" 7 0 0 "--expect-imports 4"
+    # A function whose recorded extent ends before its code does (falloff_ttt2.s): its .pdata length ends after
+    # the call that enters a critical section, and the code that leaves the section is the next .pdata function.
+    # Patch 0001 must continue there - one site, named in the log - instead of returning early; the log must name
+    # the patch (an SDK built without it fails here, which is the point).
+    run_case falloff_ttt2 "$root/recomp/tests/ppc/falloff_ttt2.s" 6 0 0 \
+        "--expect-imports 3 --expect-fallthrough 1 --require-patches 0001-fall-through"
 
     # Function boundaries (tailcall_ttt2.s): the two shapes behind the 14 "target not in any function"
     # errors on the owner's executable. Pass 1, codegen alone: exactly those two errors (measured with
@@ -712,9 +720,26 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             tail -20 "$dir/exec-off.log"
             status=1
         fi
+
+        # Fall-through at a function's end (falloff_ttt2.s, patch 0001): five calls of a function whose .pdata
+        # length ends right after it enters a critical section must leave the section free (recursion 0, no
+        # owner), the code after the split having run five times. Unpatched ReXGlue 0.10.0 leaves the section
+        # at recursion 5, owned by the main thread, and never runs that code (measured, docs/RESEARCH.md 8g).
+        dir="$work/falloff_ttt2"
+        rc=0
+        run_host falloff_ttt2 "$dir/generated/default" "$(results_of "$dir/falloff_ttt2.xex.syms"):4" "5,0,0,5" \
+            > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log"; then
+            echo "ok   exec: a function that runs on past its .pdata end leaves its critical section (5 calls, recursion 0, no owner, 5 rounds after the split)"
+        else
+            echo "FAIL exec: falloff_ttt2 (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
     fi
 else
-    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / io_ttt2 / wait_ttt2 / clock_ttt2 / gpu_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / io_ttt2 / wait_ttt2 / clock_ttt2 / gpu_ttt2 / falloff_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

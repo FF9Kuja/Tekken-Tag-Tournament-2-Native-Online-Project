@@ -24,9 +24,19 @@ Exit code 0 when every --expect/--fail-on condition holds (or none was given), 1
         __builtin_trap(); // ERROR - detected jump to null value
         switch (ctx.rN.u32) {        a recognised jump table (one per bctr)
         REX_FATAL("...")             fatal at run time (unresolved call / jump target)
+        // TTT2 fall-through: ...    a block that runs on past its function's end, continued into the
+                                     code that follows (project patch 0001, third_party/rexglue-patches)
   * log                        "=== ANALYSIS ERRORS ===", "<Category> (N):", "  0xA from 0xB: msg",
                                "Jump table detection failed at bctr 0x...", "Unimplemented: <m> at 0x...",
-                               "Cannot resolve ordinal N from lib", "Unresolved b target 0x... from 0x..."
+                               "Cannot resolve ordinal N from lib", "Unresolved b target 0x... from 0x...",
+                               "TTT2 SDK patches: <names>", "Fall-through: function 0x... runs on past
+                               its end at 0x... into <name> (0x...)" (project patch 0001)
+
+Fall-through at a function's end: when a function's recorded extent (.pdata length, a [functions] size, a
+gap-fill run) ends before its code does, ReXGlue 0.10.0 ends the generated function there and returns to
+the caller, where the CPU goes on into the code that follows - silently. Patch 0001 continues into the
+function that starts there and marks the site; code generated without the patch is checked for functions
+whose last translated instruction can fall through ("silent fall-offs").
 """
 import argparse
 import collections
@@ -58,6 +68,18 @@ RE_LOG_UNRES_B = re.compile(r"Unresolved b target 0x([0-9A-Fa-f]+) from 0x([0-9A
 RE_LOG_IMPORTS = re.compile(r"loaded (\d+) imports \((\d+) resolved, (\d+) unresolved, (\d+) variables skipped\)")
 RE_LOG_SUMMARY = re.compile(r"Codegen summary: (\d+) written, (\d+) unchanged, (\d+) deleted")
 RE_LOG_VALIDATION = re.compile(r"Code generation blocked: (\d+) validation errors")
+RE_LOG_PATCHES = re.compile(r"TTT2 SDK patches: (.+?)\s*$")
+RE_LOG_FALLTHROUGH = re.compile(r"Fall-through after (\S+): function 0x([0-9A-Fa-f]+) runs on past its end at 0x([0-9A-Fa-f]+) "
+                                r"into (?:(\w+) \(0x([0-9A-Fa-f]+)\); emitted as a tail call|0x([0-9A-Fa-f]+), where no function starts)")
+RE_FALLTHROUGH_MARK = re.compile(r"^\t+// TTT2 fall-through after (\S+): (?:the code runs on into (\w+) \(0x([0-9A-Fa-f]+)\)"
+                                 r"|the code runs on into 0x([0-9A-Fa-f]+), where no function starts|continues at loc_([0-9A-Fa-f]+))")
+RE_ANY_MNEMONIC = re.compile(r"^\t+// ([a-z][a-z0-9_.+-]*)(?: (.*))?$")
+RE_SEH_BODY_END = re.compile(r"^\t+\} SEH_CATCH_ALL \{")
+# Instructions after which the CPU never goes on to the next word: unconditional branches, returns and
+# traps (the disassembler's simplified mnemonics); bc/bclr/bcctr count only with BO = 20 (branch always).
+TERMINATORS = {"b", "ba", "blr", "bctr", "trap", "rfi"}
+ALWAYS_FORMS = {"bc", "bca", "bclr", "bcctr"}
+TRAP_FORMS = {"tw", "twi", "td", "tdi"}
 RE_LOG_LEVEL = re.compile(r"\[(trace|debug|info|warning|warn|error|critical)\]", re.I)
 
 
@@ -94,6 +116,10 @@ def analyse_generated(gen_dir, project):
         "fatals": [],
         "definitions": 0,
         "mnemonics": {},
+        "fallthrough_calls": [],     # patch 0001: {"function", "into", "address"}
+        "fallthrough_none": [],      # patch 0001: no function starts where the code runs on
+        "fallthrough_gotos": 0,      # patch 0001: continues at a label of the same function
+        "silent_falloffs": [],       # unpatched code: {"function", "mnemonic"} whose last instruction falls through
     }
     funcs_h = os.path.join(gen_dir, f"{project}_funcs.h")
     if os.path.isfile(funcs_h):
@@ -122,6 +148,7 @@ def analyse_generated(gen_dir, project):
         rep["unknown_bc"] += [a for a in RE_UNKNOWN_BC.findall(text)]
         rep["null_jumps"] += len(RE_NULL_JUMP.findall(text))
         rep["fatals"] += RE_FATAL.findall(text)
+        scan_fallthrough(text, rep)
         # Each `switch (rN.u32) {` is one recognised jump table; count its cases up to the
         # matching `default:`.
         for m in RE_SWITCH.finditer(text):
@@ -129,6 +156,52 @@ def analyse_generated(gen_dir, project):
             body = text[m.end(): end if end >= 0 else m.end()]
             rep["switches"].append({"register": m.group(1), "cases": len(RE_CASE.findall(body)), "file": name})
     return rep
+
+
+def can_fall_through(mnemonic, operands):
+    """Whether the CPU goes on to the next word after this translated instruction."""
+    if mnemonic in TERMINATORS:
+        return False
+    ops = (operands or "").replace(" ", "")
+    if mnemonic in ALWAYS_FORMS and ops.startswith("20,"):
+        return False
+    if mnemonic in TRAP_FORMS and ops.startswith("31,"):
+        return False
+    return True
+
+
+def scan_fallthrough(text, rep):
+    """Fall-through sites at function ends: the patch's markers, or (code generated without the patch)
+    functions whose last translated instruction can fall through, i.e. silently return early."""
+    func = None
+    last = None          # (mnemonic, operands) of the last instruction comment in the current function
+    marked = False       # a TTT2 fall-through marker follows that instruction
+    for line in text.splitlines():
+        m = RE_FUNC_DEF.match(line)
+        if m:
+            func, last, marked = m.group(1), None, False
+            continue
+        if func is None:
+            continue
+        mk = RE_FALLTHROUGH_MARK.match(line)
+        if mk:
+            marked = True
+            if mk.group(2):
+                rep["fallthrough_calls"].append({"function": func, "into": mk.group(2), "address": "0x" + mk.group(3).upper(),
+                                                 "after": mk.group(1)})
+            elif mk.group(4):
+                rep["fallthrough_none"].append({"function": func, "address": "0x" + mk.group(4).upper(), "after": mk.group(1)})
+            else:
+                rep["fallthrough_gotos"] += 1
+            continue
+        mi = RE_ANY_MNEMONIC.match(line)
+        if mi:
+            last, marked = (mi.group(1), mi.group(2)), False
+            continue
+        if line == "}" or RE_SEH_BODY_END.match(line):
+            if last and not marked and can_fall_through(*last):
+                rep["silent_falloffs"].append({"function": func, "mnemonic": last[0]})
+            func, last, marked = None, None, False
 
 
 def analyse_log(path):
@@ -142,6 +215,8 @@ def analyse_log(path):
         "imports": None,
         "summary": None,
         "blocked_validation_errors": None,
+        "patches": None,
+        "fallthrough": [],
         "levels": collections.Counter(),
     }
     current = None
@@ -190,6 +265,18 @@ def analyse_log(path):
         m = RE_LOG_VALIDATION.search(line)
         if m:
             log["blocked_validation_errors"] = int(m.group(1))
+        m = RE_LOG_PATCHES.search(line)
+        if m:
+            log["patches"] = [p.strip() for p in m.group(1).split(",") if p.strip()]
+        m = RE_LOG_FALLTHROUGH.search(line)
+        if m:
+            log["fallthrough"].append({
+                "after": m.group(1),
+                "function": "0x" + m.group(2).upper(),
+                "last": "0x" + m.group(3).upper(),
+                "into": m.group(4) or None,
+                "address": "0x" + (m.group(5) or m.group(6)).upper(),
+            })
     log["levels"] = dict(log["levels"])
     return log
 
@@ -222,10 +309,16 @@ def render_markdown(rep, log, checks):
     lines.append(f"| Conditional branches to unknown addresses | {len(rep['unknown_bc'])} |")
     lines.append(f"| Null jump-table entries | {rep['null_jumps']} |")
     lines.append(f"| Run-time fatals emitted | {len(rep['fatals'])} |")
+    lines.append(f"| Fall-through at a function's end (patch 0001): continued into the next function / "
+                 f"no function there / within the function | {len(rep['fallthrough_calls'])} / "
+                 f"{len(rep['fallthrough_none'])} / {rep['fallthrough_gotos']} |")
+    lines.append(f"| Functions that silently return where the code runs on (no patch 0001) | {len(rep['silent_falloffs'])} |")
     if log:
         imp = log.get("imports")
         if imp:
             lines.append(f"| Imports (log) | {imp['total']} total, {imp['resolved']} resolved, {imp['unresolved']} unresolved, {imp['variables']} variables |")
+        lines.append(f"| Project codegen patches in this rexglue (log) | "
+                     f"{', '.join(log['patches']) if log.get('patches') else 'none: an SDK package without the project patches'} |")
         if log.get("blocked_validation_errors") is not None:
             lines.append(f"| Validation errors blocking codegen | {log['blocked_validation_errors']} |")
         lines.append(f"| Jump-table detection failures (log) | {len(log['jump_table_failures'])} |")
@@ -267,6 +360,27 @@ def render_markdown(rep, log, checks):
                      "Candidates for `[[switch_tables]]` entries (recomp/tools/find_switch_tables.py).")
         for a in log["jump_table_failures"][:100]:
             lines.append(f"* {a}")
+        lines.append("")
+    if rep["fallthrough_calls"] or rep["fallthrough_none"] or rep["silent_falloffs"]:
+        lines.append("## Fall-through at a function's end")
+        lines.append("")
+        lines.append("Functions whose recorded extent ends before their code does: on the console the CPU runs on into "
+                     "the code that follows. Patch 0001 (third_party/rexglue-patches) continues there; without it the "
+                     "generated function returns early, skipping that code (a lock left held, a stack frame not "
+                     "restored).")
+        lines.append("")
+        kinds = collections.Counter(e["after"] for e in rep["fallthrough_calls"] + rep["fallthrough_none"])
+        if kinds:
+            lines.append("Last instruction before the end, by mnemonic (after a `bl` the code only runs on when the "
+                         "called function returns; a call to one that never does - a throw, an abort - ends there "
+                         "on the console too): " + ", ".join(f"`{k}` {n}" for k, n in kinds.most_common()))
+            lines.append("")
+        for e in rep["fallthrough_calls"][:50]:
+            lines.append(f"* {e['function']} continues into {e['into']} ({e['address']}) after `{e['after']}`")
+        for e in rep["fallthrough_none"][:50]:
+            lines.append(f"* {e['function']} runs on into {e['address']} after `{e['after']}`, where no function starts (returns there)")
+        for e in rep["silent_falloffs"][:50]:
+            lines.append(f"* {e['function']} returns after a `{e['mnemonic']}` where the code runs on (generated without patch 0001)")
         lines.append("")
     if rep["unresolved_bl"] or rep["unknown_bc"]:
         lines.append("## Unresolved branch targets in the generated code")
@@ -315,6 +429,10 @@ def main(argv):
                     help="file with one mnemonic per line (# comments allowed); each must occur in the generated code")
     ap.add_argument("--absent-ok", default="",
                     help="comma-separated mnemonics from --expect-mnemonics that may be absent (known gaps)")
+    ap.add_argument("--expect-fallthrough", type=int,
+                    help="exact number of fall-through sites continued into the next function (patch 0001 markers)")
+    ap.add_argument("--require-patches", default="",
+                    help="comma-separated project patch names the codegen log must name (TTT2 SDK patches: ...)")
     ap.add_argument("--fail-on-unimplemented", action="store_true")
     ap.add_argument("--fail-on-errors", action="store_true",
                     help="fail on unresolved calls, analysis errors or jump-table detection failures")
@@ -353,6 +471,16 @@ def main(argv):
         checks.append((not unexpected, f"{len(wanted) - len(absent)}/{len(wanted)} listed mnemonics translated"
                        + (f"; absent: {', '.join(absent)}" if absent else "")
                        + (f" (tolerated: {', '.join(sorted(tolerated & set(absent)))})" if tolerated & set(absent) else "")))
+    if args.expect_fallthrough is not None:
+        checks.append((len(rep["fallthrough_calls"]) == args.expect_fallthrough and not rep["silent_falloffs"],
+                       f"{len(rep['fallthrough_calls'])} fall-through sites continued into the next function "
+                       f"(expected {args.expect_fallthrough}), {len(rep['silent_falloffs'])} silent fall-offs"))
+    required = [p.strip() for p in args.require_patches.split(",") if p.strip()]
+    if required:
+        have = (log or {}).get("patches") or []
+        missing = [p for p in required if p not in have]
+        checks.append((not missing, "codegen ran with the project patches " + ", ".join(required)
+                       + (f" (missing: {', '.join(missing)}; the rexglue used predates them)" if missing else "")))
     if args.fail_on_unimplemented:
         checks.append((not rep["unimplemented"], f"{len(rep['unimplemented'])} unimplemented instruction sites"))
     if args.fail_on_errors:
