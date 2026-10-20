@@ -168,8 +168,8 @@ if [ "$expect_stall" = 1 ]; then
             "the worker's hold on the critical section names the call site of its open enter"
         check "calls by site: NtSignalAndWaitForSingleObjectEx signal 0x[0-9A-F]* wait 0x[0-9A-F]* from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*): [0-9]*" \
             "the spinner's calls were counted by call site and object"
-        check "(synchronization event, created by thread id [0-9]* at t+[0-9.]* s; last signaled by thread id [0-9]* from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) at t+[0-9.]* s, [0-9]* signals)" \
-            "the spinner's event was described from its create call and its signals"
+        check "object: handle 0x[0-9A-F]* (synchronization event, created by thread id [0-9]* at t+[0-9.]* s; last signaled by thread id [0-9]* from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) at t+[0-9.]* s, [0-9]* signals)" \
+            "the spinner's event was described from its create call and its signals (whether or not the dump caught it in its wait)"
         check "ttt2: NtSignalAndWaitForSingleObjectEx from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*): wait mode 0, alertable 0" \
             "the signal-and-wait's wait mode and alertable flag were logged"
         check "ttt2: thread state at window close:" "the thread dump was written on window close"

@@ -497,6 +497,7 @@ class Triage(unittest.TestCase):
             W(965, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40000618 (owned by nuscMain (id 6), recursion 390), no timeout, for at least 173.1 s, called from 0x82BD6888 (sub_82BD67E0+0xA8)"),
             W(965, "ttt2:   (unnamed)                        id 19     running priority 0 suspend 0 wait_result 0x0"),
             W(965, "ttt2:     calls by site: NtWaitForSingleObjectEx on 0xF8000104 from 0x82BDA250 (sub_82BDA218+0x38): 164000000; NtSignalAndWaitForSingleObjectEx signal 0xF8000104 wait 0xF8000108 from 0x82BCA6DC (sub_82BCA698+0x44): 164000000"),
+            W(965, "ttt2:     object: handle 0xF8000108 (synchronization event, created by nuscMain (id 6) at t+0.3 s; last signaled by thread id 19 from 0x82BCA6DC (sub_82BCA698+0x44) at t+180.0 s, 164000000 signals)"),
             W(966, "ttt2: main guest thread ended by the window close (id 6)"),
         ]
         t = MOD.triage(lines, {}, closed_by="the boot step's 180 s timeout")
@@ -529,6 +530,10 @@ class Triage(unittest.TestCase):
         self.assertIn("## The game's own calls (thread names, exceptions, debug breaks, APCs, memory)", md)
         self.assertIn("* thread name 'nuscMain' for thread id 6: thread id 6 is named so now", md)
         self.assertIn("  * holds: critical section 0x40000618 at depth 390", md)
+        self.assertEqual(t["close_dump"]["threads"][2]["objects"],
+                         ["handle 0xF8000108 (synchronization event, created by nuscMain (id 6) at t+0.3 s; last signaled by "
+                          "thread id 19 from 0x82BCA6DC (sub_82BCA698+0x44) at t+180.0 s, 164000000 signals)"])
+        self.assertIn("  * object: handle 0xF8000108 (synchronization event, created by nuscMain (id 6)", md)
 
     def test_file_information_reads_writes_and_directory_queries(self):
         # The loader's first calls with the new host: the information classes it asks for (one the runtime refuses),

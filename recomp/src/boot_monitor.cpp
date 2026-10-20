@@ -772,6 +772,20 @@ std::vector<std::string> DescribeThread(rex::system::XThread& thread, std::uint6
       text += (text.empty() ? "" : "; ") + what;
     }
     if (!text.empty()) lines.push_back("    calls by site: " + text);
+    // The objects those calls name, described from their create calls and the signals the host saw. A busy loop is
+    // caught between two calls as often as inside one, and the wait line describes an object only when the thread
+    // is inside the call, so the objects get lines of their own.
+    std::vector<std::uint32_t> described;
+    for (std::size_t i = 0; i < sigs.size() && i < 4; ++i) {
+      for (const std::uint32_t key : {sigs[i]->object.load(std::memory_order_relaxed),
+                                      sigs[i]->object2.load(std::memory_order_relaxed)}) {
+        if (!key || std::find(described.begin(), described.end(), key) != described.end()) continue;
+        const auto info = objects::Find(key);
+        if (!info || info->kind == objects::Kind::kUnknown) continue;
+        described.push_back(key);
+        lines.push_back("    object: " + DescribeHandle(key));
+      }
+    }
   }
 
   // The critical sections it holds, how deep and since when, and from where it entered them without leaving.

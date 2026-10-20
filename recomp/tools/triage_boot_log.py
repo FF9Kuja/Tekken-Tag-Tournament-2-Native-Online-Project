@@ -40,7 +40,7 @@ RE_STILL_STALLED = re.compile(r"ttt2: still stalled after (\d+) ms")
 RE_DUMP_HEADER = re.compile(r"ttt2: thread state at (.+):$")
 RE_STALL_THREAD = re.compile(r"ttt2:\s+(\S.*?)\s+id (\d+)\s+(running|stopped) priority (-?\d+) suspend (\d+) wait_result (0x[0-9a-fA-F]+)")
 # The boot monitor's lines (recomp/src/boot_monitor.cpp and the export wrappers).
-RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack|busy|calls by site|holds): (.*)$")
+RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack|busy|calls by site|holds|object): (.*)$")
 RE_HOLD = re.compile(r"critical section (0x[0-9A-Fa-f]+) at depth (\d+) since t\+([\d.]+) s \(the section's own count: "
                      r"(-?\d+)\), unchanged for ([\d.]+) s; (\d+) enters and (\d+) leaves since then; open enters from (.*)$")
 RE_HOLD_STACK = re.compile(r"critical section (0x[0-9A-Fa-f]+) entered to depth (\d+) at t\+([\d.]+) s: (.*)$")
@@ -402,8 +402,9 @@ def triage(lines, ttt2web=None, closed_by=None):
                                             "wait_result": mm.group(6), "wait": None, "calls": None, "stack": None,
                                             "busy": None, "sites": None, "holds": []})
         elif current_dump is not None and current_dump["threads"] and (mm := RE_THREAD_DETAIL.search(msg)):
-            if mm.group(1) == "holds":
-                current_dump["threads"][-1].setdefault("holds", []).append(mm.group(2))
+            if mm.group(1) in ("holds", "object"):
+                key = "holds" if mm.group(1) == "holds" else "objects"
+                current_dump["threads"][-1].setdefault(key, []).append(mm.group(2))
             else:
                 key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack", "busy": "busy",
                        "calls by site": "sites"}[mm.group(1)]
@@ -1100,6 +1101,8 @@ def render_markdown(t, source):
                                ("stack", "guest stack")):
                 if th.get(key):
                     out.append(f"  * {label}: {th[key]}")
+            for obj in th.get("objects") or []:
+                out.append(f"  * object: {obj}")
             for hold in th.get("holds") or []:
                 out.append(f"  * holds: {hold}")
         if dump.get("busiest"):
