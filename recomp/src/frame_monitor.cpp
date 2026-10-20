@@ -38,17 +38,24 @@ rex::memory::Memory* GuestMemory() {
   return rex::system::kernel_memory();
 }
 
-/// `dwords` words of guest physical memory at `address`, byte-swapped; false unless every page is allocated.
+// Physical ranges found committed while parsing the current frame (on the thread that presents it): a frame's
+// indirect buffers mostly lie in a few allocations, and a commit check walks the page table of a whole region.
+thread_local std::vector<std::pair<std::uint64_t, std::uint64_t>> t_committed;
+
+/// `dwords` words of guest physical memory at `address`, byte-swapped; false unless every page is committed.
 bool ReadPhysical(std::uint32_t address, std::uint32_t dwords, std::vector<std::uint32_t>& out) {
   auto* memory = GuestMemory();
   if (!memory || !dwords) return false;
   address &= 0x1FFFFFFF;
-  const std::uint64_t end = std::uint64_t(address) + std::uint64_t(dwords) * 4;
-  if (end > 0x20000000) return false;
-  auto* heap = memory->GetPhysicalHeap();
-  if (!heap || heap->QueryRangeAccess(address, static_cast<std::uint32_t>(end - 1)) ==
-                   rex::memory::PageAccess::kNoAccess) {
-    return false;
+  const std::uint64_t bytes = std::uint64_t(dwords) * 4;
+  const bool known = std::any_of(t_committed.begin(), t_committed.end(), [&](const auto& range) {
+    return address >= range.first && address + bytes <= range.second;
+  });
+  if (!known) {
+    // Committed pages only: an address read from a command stream the parser misread must not fault the host.
+    std::uint64_t committed_end = 0;
+    if (!monitor::PhysicalReadable(address, bytes, &committed_end)) return false;
+    if (t_committed.size() < 64) t_committed.emplace_back(address & ~0xFFFull, committed_end);
   }
   const auto* p = memory->TranslatePhysical<const std::uint8_t*>(address);
   out.resize(dwords);
@@ -59,14 +66,9 @@ bool ReadPhysical(std::uint32_t address, std::uint32_t dwords, std::vector<std::
   return true;
 }
 
-/// True when [address, address + bytes) is allocated guest virtual memory.
+/// True when [address, address + bytes) is committed guest virtual memory.
 bool VirtualReadable(std::uint32_t address, std::uint64_t bytes) {
-  auto* memory = GuestMemory();
-  if (!memory || !bytes || std::uint64_t(address) + bytes > 0x100000000ull) return false;
-  const auto last = static_cast<std::uint32_t>(address + bytes - 1);
-  auto* heap = memory->LookupHeap(address);
-  if (!heap || memory->LookupHeap(last) != heap) return false;
-  return heap->QueryRangeAccess(address, last) != rex::memory::PageAccess::kNoAccess;
+  return monitor::GuestReadable(address, bytes);
 }
 
 std::string FormatName(std::uint32_t format) {
@@ -214,6 +216,7 @@ void NoteSwap(const Swap& swap) {
   const std::uint32_t offset = (physical & 0x1FFFFFFF) - s.ring_base;
 
   if (!s.parser) s.parser = std::make_unique<pm4::Parser>(&ReadPhysical);
+  t_committed.clear();  // memory can be freed between frames
   pm4::FrameStats stats;
   s.words.clear();
   for (const auto& span : pm4::RingSpans(s.ring_bytes, s.next_offset, offset)) {

@@ -38,15 +38,9 @@ std::uint32_t LoadU32(std::uint32_t address) {
   return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) | (std::uint32_t(p[2]) << 8) | p[3];
 }
 
-/// The u32 at a guest address the game passed, or 0 when the address is not allocated memory.
+/// The u32 at a guest address the game passed, or 0 when the address is not committed memory.
 std::uint32_t LoadU32Checked(std::uint32_t address) {
-  auto* memory = rex::system::kernel_memory();
-  if (!memory || !address) return 0;
-  auto* heap = memory->LookupHeap(address);
-  if (!heap || memory->LookupHeap(address + 3) != heap ||
-      heap->QueryRangeAccess(address, address + 3) == rex::memory::PageAccess::kNoAccess) {
-    return 0;
-  }
+  if (!address || !ttt2::monitor::GuestReadable(address, 4)) return 0;
   return LoadU32(address);
 }
 

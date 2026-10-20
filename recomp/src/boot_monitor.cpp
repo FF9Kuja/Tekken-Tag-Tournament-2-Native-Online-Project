@@ -94,12 +94,31 @@ rex::memory::Memory* GuestMemory() {
   return kernel ? kernel->memory() : nullptr;
 }
 
+/// Every page of [address, address + size) in `heap` committed and readable; `covered_end` receives the end of the
+/// last region checked (at or past the end of the range).
+bool HeapRangeCommitted(rex::memory::BaseHeap* heap, std::uint32_t address, std::uint64_t size,
+                        std::uint64_t* covered_end = nullptr) {
+  if (!heap || !size) return false;
+  const std::uint64_t base = heap->heap_base();
+  const std::uint64_t end = std::uint64_t(address) + size;
+  const std::uint64_t page = heap->page_size();
+  if (address < base || end > base + heap->heap_size() || !page) return false;
+  std::uint64_t at = address - (address - base) % page;  // the start of the page holding `address`
+  while (at < end) {
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(static_cast<std::uint32_t>(at), &info)) return false;
+    if (!(info.state & rex::memory::kMemoryAllocationCommit) || !(info.protect & rex::memory::kMemoryProtectRead) ||
+        !info.region_size) {
+      return false;
+    }
+    at += info.region_size;  // the region of pages with the same attributes, from `at`
+  }
+  if (covered_end) *covered_end = at;
+  return true;
+}
+
 bool Readable(std::uint32_t address, std::uint32_t size) {
-  auto* memory = GuestMemory();
-  if (!memory || size == 0 || address + (size - 1) < address) return false;
-  auto* heap = memory->LookupHeap(address);
-  if (!heap || memory->LookupHeap(address + size - 1) != heap) return false;
-  return heap->QueryRangeAccess(address, address + size - 1) != rex::memory::PageAccess::kNoAccess;
+  return GuestReadable(address, size);
 }
 
 std::uint32_t LoadU32(std::uint32_t address) {
@@ -392,6 +411,20 @@ std::string FormatStatus(std::uint32_t status) {
   const auto name = StatusName(status);
   if (name.empty()) return fmt::format("0x{:08X}", status);
   return fmt::format("0x{:08X} ({})", status, name);
+}
+
+bool GuestReadable(std::uint32_t address, std::uint64_t size) {
+  auto* memory = GuestMemory();
+  if (!memory || !size || std::uint64_t(address) + size > 0x100000000ull) return false;
+  auto* heap = memory->LookupHeap(address);
+  if (!heap || memory->LookupHeap(static_cast<std::uint32_t>(address + size - 1)) != heap) return false;
+  return HeapRangeCommitted(heap, address, size);
+}
+
+bool PhysicalReadable(std::uint32_t address, std::uint64_t size, std::uint64_t* committed_end) {
+  auto* memory = GuestMemory();
+  if (!memory || !size || std::uint64_t(address) + size > 0x20000000ull) return false;
+  return HeapRangeCommitted(memory->GetPhysicalHeap(), address, size, committed_end);
 }
 
 std::string CurrentThreadLabel() {

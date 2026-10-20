@@ -216,8 +216,9 @@ else
             "frame 1's draws, resolve, clear, indirect buffer and skipped packet were counted"
         check "ttt2: gpu: first frame with draws: frame 1:" "the first frame with draws was reported"
         check "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute" "the packet the GPU emulation skips was reported"
-        check "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 2 packets (4 words of commands)" "frame 2's non-rendering draw was told apart"
-        check "ttt2: gpu: frame 3: 2 draws, 4 packets (872 words of commands)" "frame 3 was read across the end of the ring"
+        check "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 1 unreadable buffer, 3 packets (7 words of commands)" \
+            "frame 2's non-rendering draw was told apart and its indirect buffer without memory left unread"
+        check "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "frame 3 was read across the end of the ring"
         check "frames presented 3 (2 with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)" \
             "the activity line summarised the frames"
     fi

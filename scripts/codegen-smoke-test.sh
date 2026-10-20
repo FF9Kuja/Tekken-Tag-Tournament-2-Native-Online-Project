@@ -683,9 +683,9 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             && grep -q "ttt2: gpu: frame 1: 3 draws, 1 resolve (1 clearing), 1 render target change, 1 indirect buffer, 1 packet the GPU emulation skips (opcode 0x25), 10 packets (26 words of commands)" "$dir/exec.log" \
             && grep -q "ttt2: gpu: first frame with draws: frame 1:" "$dir/exec.log" \
             && grep -q "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute" "$dir/exec.log" \
-            && grep -q "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 2 packets (4 words of commands)" "$dir/exec.log" \
-            && grep -q "ttt2: gpu: frame 3: 2 draws, 4 packets (872 words of commands)" "$dir/exec.log"; then
-            echo "ok   exec: the frame monitor counted each frame's draws, resolves, clears and skipped packets, across the end of the ring"
+            && grep -q "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 1 unreadable buffer, 3 packets (7 words of commands)" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "$dir/exec.log"; then
+            echo "ok   exec: the frame monitor counted each frame's draws, resolves, clears and skipped packets, across the end of the ring, and left an indirect buffer without memory unread"
         else
             echo "FAIL exec: native run of the GPU-frames program (exit $rc, see $dir/exec.log)"
             tail -20 "$dir/exec.log"

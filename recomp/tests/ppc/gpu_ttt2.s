@@ -10,9 +10,11 @@
 #            DRAW_INDX (a resolve that clears), and a SET_STATE packet the GPU emulation does not execute;
 #            the host must count "3 draws, 1 resolve (1 clearing), 1 render target change, 1 indirect buffer,
 #            1 packet the GPU emulation skips (opcode 0x25), 10 packets (26 words of commands)"
-#   frame 2: RB_MODECONTROL = no operation and a DRAW_INDX_2: "1 draw with EDRAM mode off, 2 packets"
+#   frame 2: RB_MODECONTROL = no operation, a DRAW_INDX_2, and an INDIRECT_BUFFER naming a GPU address with no
+#            memory behind it, which the host must count rather than read: "1 draw with EDRAM mode off, 1
+#            unreadable buffer, 3 packets (7 words of commands)"
 #   frame 3: a NOP up to the end of the ring, RB_MODECONTROL = color+depth and two DRAW_INDX_2 of which the
-#            second wraps to the start of the ring: "2 draws, 4 packets (872 words of commands)"
+#            second wraps to the start of the ring: "2 draws, 4 packets (869 words of commands)"
 # 192 of the front buffer's 256 pixels hold 0x11223344, for the pixel check (TTT2_PIXEL_CHECK=1).
 #
 #   expected results: 1 1 (the ring's and the block's physical addresses are not 0)
@@ -43,10 +45,11 @@ frame1_end:
 # The indirect buffer (4 words): two more draws.
 ib:
 	.long 0xC0003600, 0x00030004, 0xC0003600, 0x00030004
-# Frame 2 (4 words).
+# Frame 2 (7 words).
 frame2:
 	.long 0x00002208, 0			# RB_MODECONTROL = no operation
 	.long 0xC0003600, 0x00030004		# DRAW_INDX_2: does nothing in this mode
+	.long 0xC0013F00, 0x0BAD0000, 4		# INDIRECT_BUFFER: no memory is allocated at that GPU address
 # Frame 3's last 6 words, written at ring word 1020: the last two wrap to words 0 and 1.
 frame3:
 	.long 0x00002208, 4			# RB_MODECONTROL = color + depth
@@ -65,8 +68,8 @@ VdSwap_slot:				.long 0x0000025B
 	.globl results
 results:	.long 0, 0
 
-# Ring layout in words: frame 1 at 0..21, its swap at 22..85; frame 2 at 86..89, its swap at 90..153;
-# frame 3 from 154 (a NOP whose 865 words run to 1019), 1020..1023 and 0..1, its swap at 2..65.
+# Ring layout in words: frame 1 at 0..21, its swap at 22..85; frame 2 at 86..92, its swap at 93..156;
+# frame 3 from 157 (a NOP whose 862 words run to 1019), 1020..1023 and 0..1, its swap at 2..65.
 	.text
 	.globl _start
 	.type _start,@function
@@ -170,19 +173,19 @@ _start:
 	addi r3, r31, 22 * 4
 	bl swap
 
-	# Frame 2 at word 86, its swap at 90.
+	# Frame 2 at word 86, its swap at 93.
 	addi r3, r31, 86 * 4
 	lis r4, frame2@ha
 	addi r4, r4, frame2@l
-	li r5, 4
+	li r5, 7
 	bl copy_words
-	addi r3, r31, 90 * 4
+	addi r3, r31, 93 * 4
 	bl swap
 
-	# Frame 3: a NOP at word 154 over the 865 words up to 1019, then 4 words at 1020 and 2 at 0; its swap at 2.
-	lis r0, 0xC360
+	# Frame 3: a NOP at word 157 over the 862 words up to 1019, then 4 words at 1020 and 2 at 0; its swap at 2.
+	lis r0, 0xC35D
 	ori r0, r0, 0x1000
-	stw r0, 154 * 4(r31)
+	stw r0, 157 * 4(r31)
 	addi r3, r31, 1020 * 4
 	lis r4, frame3@ha
 	addi r4, r4, frame3@l

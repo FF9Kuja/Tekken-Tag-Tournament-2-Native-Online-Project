@@ -779,8 +779,11 @@ leaves its loop; with `TTT2_KERNEL_CLOCK=runtime` they stay 0 and the loop runs 
 the I/O status block back, and opens a missing file with `NtOpenFile`: 15 values, checked in both modes. `gpu_ttt2.s`
 writes three frames of PM4 packets into a 4 KB ring and presents each; the host's counts match exactly (frame 1: 3
 draws, 1 clearing resolve, 1 render-target change, 1 indirect buffer, 1 skipped packet, 10 packets, 26 words; frame
-2: 1 draw with the EDRAM mode off; frame 3, across the end of the ring: 2 draws in 872 words); the pixel check reads
-its 16x16 front buffer (75% `0x11223344`). `wait_ttt2.s` gained a third thread that spins like `sub_82ABFDE8`: the
+2: 1 draw with the EDRAM mode off and an indirect buffer at an address with no memory, counted as unreadable and not
+read; frame 3, across the end of the ring: 2 draws in 869 words); the pixel check reads its 16x16 front buffer (75%
+`0x11223344`). The host reads guest memory it does not own only where every page is committed: the page table also
+reports a protection for pages that are merely reserved, with no memory behind them, so the commit state is checked
+too (`ttt2::monitor::GuestReadable`, `PhysicalReadable`; the wait-object and front-buffer reads use them as well). `wait_ttt2.s` gained a third thread that spins like `sub_82ABFDE8`: the
 dump flags it at about 5 million calls a second with `NtSignalAndWaitForSingleObjectEx` as its call, and the triage
 names it.
 

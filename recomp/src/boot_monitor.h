@@ -151,6 +151,15 @@ std::string_view StatusName(std::uint32_t status);
 /// "0xC000000F (STATUS_NO_SUCH_FILE)" or "0x00001234".
 std::string FormatStatus(std::uint32_t status);
 
+/// True when the host can read [address, address + size) of guest virtual memory without faulting: every page
+/// committed and readable. (A page that is only reserved reports the protection it was reserved with, but no
+/// memory is behind it, so the page table's protection alone is not enough.)
+bool GuestReadable(std::uint32_t address, std::uint64_t size);
+
+/// The same for guest physical memory (addresses below 512 MB, as the GPU sees them). `committed_end`, when given,
+/// receives the end of the committed run of pages that holds the range (for callers that cache it).
+bool PhysicalReadable(std::uint32_t address, std::uint64_t size, std::uint64_t* committed_end = nullptr);
+
 /// Name of the calling guest thread ("nuscMain (id 7)", "thread id 9", "host thread").
 std::string CurrentThreadLabel();
 
