@@ -46,9 +46,21 @@ made about 339.5 million traced kernel calls. Closed by the 180 s timeout.
   for the PM4 parser; 3 new triage tests (the owner's old-host log shape, the new formats); `host-boot-test.sh
   --expect-gpu-frames`, clock checks in every normal boot, the new I/O and busy checks; both workflows boot the
   GPU-frames program and check that the triage names the spinner.
+* **Reading guest memory safely.** The page table reports a protection for pages that are only reserved (no memory
+  behind them), so the host's reads of guest memory it does not own (indirect buffers named by a command stream,
+  wait objects, the front buffer) now also require committed pages (`ttt2::monitor::GuestReadable`,
+  `PhysicalReadable`); `gpu_ttt2.s` names an indirect buffer with no memory, which is counted, not read.
 * **Local runs (Linux, pinned SDK):** the smoke test with `--exec` (63 checks); the real host on `imports_ttt2`,
   `io_ttt2` (`--expect-io`), `gpu_ttt2` (`--expect-gpu-frames`) and `wait_ttt2` (`--expect-stall --expect-waits`); the
-  triage on that log (wait chain, spinning thread); 95 Python tests; the unit tests.
+  triage on that log (wait chain, spinning thread); 95 Python tests; the unit tests with Clang and GCC 13.
+* **CI and workflows on PR #17 (`92e09e3`):** CI green (push 39487724425, PR 39487732479); SDK validation on Linux
+  39487729416: the smoke test with native execution (`clock_ttt2`, `gpu_ttt2`, `io_ttt2` in all their modes), the real
+  host on the deadlock with the spinning thread (flagged busy, its busiest call named; the boot step's triage names it),
+  on the file-system program (`\Device\Image` and the missing file answered as missing names) and on the GPU-frames
+  program (every frame's counts, the unreadable indirect buffer, the frame across the ring's end), the kernel clock
+  checked in every normal boot; the Windows workflow with `build_host` and `native_run` 39487733212: the same on
+  Windows, and the owner pipeline end to end. (A first round on `ee387c0` was cancelled after its CI passed, for the
+  committed-page change.)
 
 **Not verified yet:** the owner's copy: whether the loader reads its data with the clock running, whether thread 19
 calms down, and whether frames get draws.
