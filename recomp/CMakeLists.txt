@@ -16,6 +16,11 @@ set(TTT2_SOURCES
     src/ttt2_app.cpp
     src/stub_counter.cpp
     src/kernel_overrides.cpp
+    src/runtime_exports.cpp
+    src/boot_monitor.cpp
+    src/io_overrides.cpp
+    src/wait_overrides.cpp
+    src/milestone_overrides.cpp
     src/input/input_core.cpp
 )
 
@@ -29,6 +34,10 @@ endif()
 # folder (the SDK's loader looks nowhere else), so stage it there; Ttt2App::OnPreSetup selects it
 # unless --gpu_plugin says otherwise.
 rexglue_setup_target(ttt2 GPU_PLUGINS xenos)
+
+# The host's export wrappers (src/runtime_exports.cpp) find the runtime's own functions with
+# dlsym(RTLD_NEXT) on Linux and macOS.
+target_link_libraries(ttt2 PRIVATE ${CMAKE_DL_LIBS})
 
 # The SDK stages its runtime DLL next to the host on Windows and macOS only; do the same on Linux
 # so the $ORIGIN rpath it sets resolves and the build folder runs as is (CI boots it headless).

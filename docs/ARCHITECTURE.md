@@ -132,6 +132,19 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   through a real XEX import table). Planned: data patches, hook registration, `OnCreateDialogs`
   (overlay). A headless harness (`recomp/tests/host`) runs recompiled programs through the same runtime without
   a window, which is how recompiled code was executed natively for the first time (session 3).
+* Export wrappers and the boot monitor **[implemented, session 8]** (`docs/RESEARCH.md` 8e). A host definition of an
+  `__imp__` export that still needs the runtime's own function finds it by name (`recomp/src/runtime_exports.cpp`:
+  `dlsym(RTLD_NEXT)`, or `GetProcAddress` over the loaded modules other than the executable on Windows; the runtime
+  library exports every `__imp__` symbol), and `Ttt2App::OnPostSetup` checks that every wrapper's original exists.
+  `io_overrides.cpp` answers the disc sector query (`FileSectorInformation`) as unsupported, as TTT2 Web does
+  (`TTT2_SECTOR_QUERY=runtime` restores the runtime's made-up sector), and traces opens, reads, attribute queries
+  and device controls; `wait_overrides.cpp` records each guest thread's blocking call (objects, timeout, caller);
+  `milestone_overrides.cpp` the GPU set-up, frames presented (`VdSwap`), audio, input polls, system dialogs and
+  thread creation. `boot_monitor.cpp` holds the per-thread records (relaxed atomics, no locks or clock reads in the
+  hot path), the counters, the recent file events and the guest stack walk (link register, then the return address
+  the Xbox 360 ABI saves at -8 from each caller's frame, inside the thread's own stack only), and formats the
+  watchdog's activity line and the per-thread dumps (stall, still stalled, window close) that
+  `recomp/tools/triage_boot_log.py` turns into progress tables, deadlock cycles and wait chains.
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing
   handled through SDK mechanisms plus game-specific hooks (as T6 NO does for its 1024x576 targets).
 * Audio: SDK XMA decoder + SDL3 audio driver; a deterministic stepping mode for netplay (D).

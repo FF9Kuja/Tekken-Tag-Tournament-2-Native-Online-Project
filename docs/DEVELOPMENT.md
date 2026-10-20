@@ -165,15 +165,29 @@ use to put a license-free program into the retail form) round-tripped. All input
   host load the staged Xenos plugin instead of running without GPU emulation (expects "graphics backend xenos" and
   no load or presentation-setup failure); the Windows workflow runs it as a non-blocking, informative step on the
   runner's software D3D12 adapter. On a Linux box without a Vulkan device the plugin loads but the instance
-  creation fails ("ErrorIncompatibleDriver"), which the form reports.
+  creation fails ("ErrorIncompatibleDriver"), which the form reports. `--expect-waits` (with `--expect-stall`; image:
+  `recomp/tests/ppc/wait_ttt2.s`, two threads deadlocked on a critical section and an event nobody sets) also checks
+  the boot monitor's dump: the worker's creation with its start address, both waits with their objects (the
+  critical section's owner, the unsignaled event), guest call sites and stacks, and the dump written on window close.
+  `--expect-io` (image: `recomp/tests/ppc/io_ttt2.s`; the script writes the `io_data.bin` it reads into the game root)
+  checks the file-system trace: the disc sector query answered as unsupported, the bare device `\Device\Cdrom0`
+  failing with the runtime's "ResolvePath(\Device)" line and the host's explanation, the open file, the activity
+  counters. Every normal-form run also checks that the host's export wrappers found the runtime's originals.
 * `scripts/run-host.ps1 [-GameRoot work\game] [-Exe ttt2.exe] [-Work work] [-TimeoutSeconds N] [-NoGpu]` - the
   owner's boot step as one command: runs the host on the game data root, waits for its exit (with a timeout it
   sends the close request a player's X button sends: `taskkill`, SIGTERM on Linux, and kills a host that ignores
   it for 20 s), runs the triage tool on the log session, copies the log to `<work>\boot-logs\` and writes
   `boot-triage.md`/`.json` and `boot-report.txt` (how the host ended, exit code, duration, outcome); its exit code
   is the host's. `owner-pipeline.ps1 -Boot [-BootTimeout N]` chains it after the build and the extraction. Both
-  workflows run it under pwsh on the kernel-import image (clean exit) and on the stall image (timeout close: the
-  triage reports the stall and the close).
+  workflows run it under pwsh on the kernel-import image (clean exit), on the stall image (timeout close: the
+  triage reports the stall and the close) and on the deadlock image (the triage reports the wait chain and reads
+  the window-close dump).
+* Host export wrappers and the boot monitor (`recomp/src/runtime_exports.*`, `boot_monitor.*`, `io_overrides.cpp`,
+  `wait_overrides.cpp`, `milestone_overrides.cpp`; `docs/RESEARCH.md` 8e). `TTT2_WRAPPED_EXPORT(Name) { ... }`
+  defines the host's `__imp__Name` and registers it; `TTT2_RUNTIME_ORIGINAL(Name)(ctx, base)` calls the runtime's
+  own function; `ttt2::monitor::NoteCall` / `WaitScope` record the call for the watchdog. The harness compiles the
+  same files, so `scripts/codegen-smoke-test.sh --exec` runs `io_ttt2.s` through them and checks its ten values
+  (with and without `TTT2_SECTOR_QUERY=runtime`). `TTT2_WATCHDOG_MS` sets the watchdog period (default 5000).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

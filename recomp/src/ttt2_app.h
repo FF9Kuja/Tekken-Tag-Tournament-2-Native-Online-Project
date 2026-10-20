@@ -15,8 +15,11 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <thread>
 
+#include "boot_monitor.h"
 #include "stub_counter.h"
 
 /// Layout of the recompiled image, defined by the generated ttt2_init.cpp.
@@ -56,6 +59,11 @@ class Ttt2App : public rex::ReXApp {
   void StartWatchdog();
   void StopWatchdog();
   void WatchdogTick();
+  /// Every guest thread's state (census line, traced wait, kernel calls, guest stack) and the
+  /// process-wide trace (busiest calls, recent file activity), under `header`; `warn` logs at warning level.
+  void LogThreadDump(const std::string& header, bool warn);
+  /// What the host can read of the guest GPU emulation (vblank counter, ring write pointer).
+  ttt2::monitor::GpuState ReadGpuState();
   void LogStubReport(const char* when);
   /// Last-chance host exception handler (rex::arch::ExceptionHandler): logs what is known about the
   /// crash (kind, host PC, fault address, guest thread, recent stub calls), flushes the log, and
@@ -74,10 +82,16 @@ class Ttt2App : public rex::ReXApp {
   std::thread watchdog_;
   std::atomic<bool> watchdog_stop_{false};
   std::uint32_t watchdog_period_ms_ = 5000;
-  // Stall detection: the census (threads, running threads) and the stub-call total seen last tick,
-  // and how many consecutive ticks they stayed identical while the main thread was running.
+  // Stall detection: the census (threads, running threads), the stub-call total and the boot monitor's
+  // progress counters (files opened, bytes read, frames presented, threads created) seen last tick, and
+  // how many consecutive ticks they stayed identical while the main thread was running.
   std::size_t last_thread_count_ = 0;
   std::size_t last_running_count_ = 0;
   std::uint64_t last_stub_total_ = 0;
+  std::uint64_t last_progress_ = 0;
   unsigned unchanged_ticks_ = 0;
+  // The GPU plugin the runtime was set up with ("xenos" is the one whose state the host can read).
+  std::string gpu_plugin_;
+  // One dump at a time (the watchdog, the window-close path and a guest-thread exit can overlap).
+  std::mutex dump_mutex_;
 };

@@ -2,6 +2,60 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-20 - Session 8: the black screen - the one error explained, the sector query answered like TTT2 Web, a boot monitor
+
+**The owner's report (2026-10-20, checkout `0d1d012`).** Native execution again, with everything before it working
+(583 switch tables, 348 verified entries of which 327 ahead of time, codegen without unresolved calls, `ttt2.exe`, 78
+files extracted). The game created 28 guest threads and reached no kernel stub; the window stayed black (no Bandai
+Namco logo) until the pipeline closed it after about 180 s; the watchdog reported a possible stall after 15 s; one
+error in the log, `ResolvePath(\Device) failed - device not found`; exit code 0 from the close request; the boot loop
+stopped after one run (no unregistered function called). The report files were described, not attached.
+
+**Completed**
+* **The one error, explained and reproduced (`docs/RESEARCH.md` 8e).** The SDK's `OpenFile` resolves the parent of
+  a path first, and nothing is mounted at `\Device`, so the error is exactly what an open of a bare device path
+  (`\Device\<name>`) prints; ReXGlue has no disc device. `recomp/tests/ppc/io_ttt2.s` opens `\Device\Cdrom0` and the
+  runtime prints the identical line.
+* **The likely cause and the change.** ReXGlue answers the disc sector query (`FileSectorInformation`, class 26)
+  with success and a made-up sector; TTT2 Web answers it as unsupported, noting that TTT2's loader then reads files
+  by name instead of raw sectors through the disc device. The host now answers it the same way
+  (`recomp/src/io_overrides.cpp`); `TTT2_SECTOR_QUERY=runtime` restores the runtime's answer. Not yet confirmed on
+  the real game; the diagnostics below show either way.
+* **Host wrappers of runtime exports (`recomp/src/runtime_exports.*`).** A host `__imp__` definition can call the
+  runtime's own function (`dlsym(RTLD_NEXT)` / `GetProcAddress` over the modules other than the executable);
+  `Ttt2App` checks every wrapper's original at start-up. 47 exports are wrapped; nothing else changes what they return.
+* **Boot monitor (`recomp/src/boot_monitor.*`, `wait_overrides.cpp`, `milestone_overrides.cpp`).** File access
+  (each path opened, each failure with status, thread and guest call site, the bare-device explanation, read
+  failures, device controls); GPU set-up with arguments, the vblank counter and ring write pointer, frames presented;
+  audio clients and frames; controller polls; system dialogs; thread creation with start addresses; an activity line
+  every watchdog tick, whose progress counters now feed the stall detector. Every stall dump (15 s, again at 60 s)
+  and a new dump at window close give each thread its blocking call, objects (event/semaphore state, the owner of a
+  mutant or critical section), timeout, duration and call site, its traced calls, and its guest call stack read
+  from its own stack; plus the busiest calls of the last tick and the last 12 file events. No locks or clock reads
+  in the hot path; logs are bounded (64 paths per kind, 16 read failures, 8 calls per dialog).
+* **Triage (`recomp/tools/triage_boot_log.py`).** Reads all of it: boot-progress table, file access, milestones,
+  threads created, per-thread details of every dump; recommends from it (no frame presented and where the boot
+  stopped; a bare device opened with or without the sector query answered; deadlock cycles and wait chains through
+  lock owners; waits without a timeout on objects nobody signals). Old logs still parse.
+* **Tests.** `recomp/tests/ppc/io_ttt2.s` (ten values checked in the harness, with and without
+  `TTT2_SECTOR_QUERY=runtime`; the real host with `host-boot-test.sh --expect-io`) and `wait_ttt2.s` (a deadlock:
+  `--expect-stall --expect-waits`, and the boot step's triage must report the wait chain); both added to the smoke
+  test and to both workflows (Linux SDK validation and the Windows `build_host` job); 4 new triage tests.
+* **Local runs (Linux, pinned SDK):** the smoke test with `--exec` (all checks, the new ones included); the real host
+  on `imports_ttt2`, `io_ttt2` (`--expect-io`), `stall_ttt2`, `wait_ttt2` (`--expect-stall --expect-waits`) and
+  `crash_ttt2`; `run-host.ps1` under PowerShell 7 on `wait_ttt2` (the triage reports the wait chain and the
+  window-close dump); 92 Python tests; actionlint; hygiene.
+
+* **CI and workflows on PR #16 (`55e35ec`):** CI green (push 39470736185, PR 39470791472); SDK validation on Linux
+  39470797065: the smoke test with native execution (the new `io_ttt2` harness runs in both modes), the real host on
+  the deadlock (`--expect-stall --expect-waits`, then the boot step's triage with the wait chain) and on the
+  file-system program (`--expect-io`); the Windows workflow with `build_host` and `native_run` 39470801417: the same
+  on Windows, every boot logging that the export wrappers found the runtime's originals (through `GetProcAddress`
+  in `rexruntime.dll`), and the owner pipeline end to end under Windows PowerShell 5.1 unchanged.
+
+**Not verified yet:** the owner's copy: whether the sector query was the cause, and what the boot monitor shows if
+the window stays black.
+
 ## 2026-10-20 - Session 7: the boot repair runs by itself; functions only a pointer reaches registered ahead of time
 
 **The owner's report (2026-10-20).** The latest real-game run compiled the whole game, built `ttt2.exe` and reached

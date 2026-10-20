@@ -7,6 +7,7 @@
 #
 #   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds]
 #                             [--expect-crash | --expect-stall | --expect-fatal] [--gpu] [--no-imports]
+#                             [--expect-waits] [--expect-io]
 #
 # Runs without GPU emulation (--gpu_plugin=none) and with SDL's dummy audio driver; on Linux without a
 # display it starts an Xvfb of its own. With --gpu the host is left to load the staged Xenos plugin
@@ -27,7 +28,15 @@
 # the program calls a function no recompiled code starts at: the runtime's REX_FATAL line and the host's
 # own abort line must be logged and the host must exit with code 4 (Ttt2App::kExitCodeFatal) instead of
 # hanging in the C runtime's abort dialog. --no-imports drops the two kernel-override checks of the
-# normal expectations, for programs other than imports_ttt2.s. No game content is involved.
+# normal expectations, for programs other than imports_ttt2.s. --expect-waits (with --expect-stall; image:
+# recomp/tests/ppc/wait_ttt2.s, two threads deadlocked on a critical section and an event) also checks
+# what the host's boot monitor says about the stall: the worker's creation with its start address, the
+# main thread's wait on the critical section naming the worker as its owner, the worker's wait on the
+# unsignaled event, the guest call sites and stacks, and the thread dump the host writes on window
+# close. --expect-io (image: recomp/tests/ppc/io_ttt2.s; writes the 16-byte io_data.bin it reads into
+# the game root) checks the host's file-system trace: the sector query answered as unsupported, the
+# bare device \Device\Cdrom0 failing to open with the runtime's "ResolvePath(\Device)" line and the host's
+# explanation, the file opened, and the watchdog's activity counters. No game content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
 game="${2:?game data root}"
@@ -37,12 +46,16 @@ expect_stall=0
 expect_fatal=0
 gpu=0
 imports=1
+expect_waits=0
+expect_io=0
 for a in "$@"; do
     [ "$a" = "--expect-crash" ] && expect_crash=1
     [ "$a" = "--expect-stall" ] && expect_stall=1
     [ "$a" = "--expect-fatal" ] && expect_fatal=1
     [ "$a" = "--gpu" ] && gpu=1
     [ "$a" = "--no-imports" ] && imports=0
+    [ "$a" = "--expect-waits" ] && expect_waits=1
+    [ "$a" = "--expect-io" ] && expect_io=1
 done
 gpu_arg="--gpu_plugin=none"
 [ "$gpu" = 0 ] || gpu_arg="--gpu_plugin=xenos"
@@ -52,6 +65,8 @@ case "$limit" in ""|--*) limit=60; [ "$expect_stall" = 0 ] || limit=12 ;; esac
 exe="$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")"
 game="$(cd "$game" && pwd)"
 [ -f "$game/default.xex" ] || { echo "host-boot-test: $game/default.xex not found"; exit 2; }
+# io_ttt2.s reads this file of the game root (16 bytes, the first word "TTT2").
+[ "$expect_io" = 0 ] || printf 'TTT2-IO-TEST-OK!' > "$game/io_data.bin"
 logs="$(dirname "$exe")/logs"
 stdout_log="$(dirname "$exe")/boot-stdout.log"
 rm -rf "$logs"
@@ -120,12 +135,23 @@ if [ "$expect_stall" = 1 ]; then
     [ "$rc" = 0 ] && echo "ok   boot: exit code 0 after the close request" || { echo "FAIL boot: exit code $rc, expected 0 after the close request"; status=1; }
     check "ttt2: main guest thread created" "the module was launched"
     check "ttt2: watchdog: .* main thread running" "the watchdog saw the main thread running"
-    check "ttt2: possible stall: thread census and stub calls unchanged" "the stall detector fired"
+    check "ttt2: possible stall: thread census, stub calls and boot progress .* unchanged" "the stall detector fired"
     check "ttt2:   .* id [0-9]* .* priority .* wait_result" "the per-thread dump was logged"
     check "ttt2: kernel stub report at window close" "the stub report was written when the window closed"
     check "Window closing" "the host took the close request"
     absent "ttt2: HOST CRASH" "no host crash"
     absent "ttt2: guest program ended" "the program did not end on its own"
+    if [ "$expect_waits" = 1 ]; then
+        check "ttt2: thread created: id [0-9]*, start 0x[0-9A-F]* (sub_[0-9A-F]*)" "the worker's creation was traced with its start address"
+        check "wait: RtlEnterCriticalSection on critical section 0x[0-9A-F]* (owned by thread id [0-9]*, recursion 1), no timeout, for at least" \
+            "the main thread's wait names the critical section and its owner"
+        check "wait: KeWaitForSingleObject on 0x[0-9A-F]* (synchronization event, not signaled), no timeout, for at least" \
+            "the worker's wait names the unsignaled event"
+        check "called from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*)" "the waits name their guest call sites"
+        check "guest stack: 0x[0-9A-F]* (sub_" "the guest call stacks were read"
+        check "kernel calls: 0 in the last tick, none for at least" "the quiet threads were named as such"
+        check "ttt2: thread state at window close:" "the thread dump was written on window close"
+    fi
 elif [ "$expect_fatal" = 1 ]; then
     [ "$rc" = 4 ] && echo "ok   boot: exit code 4 after the runtime aborted" || { echo "FAIL boot: exit code $rc, expected 4 (runtime abort)"; status=1; }
     check "\[FATAL\] Call to invalid or unregistered function at guest address" "the runtime's trap named the called address"
@@ -155,6 +181,17 @@ else
     fi
     check "ttt2: main guest thread exited" "the program returned from its entry point"
     check "ttt2: guest program ended; exiting" "the host ended after the guest exit"
+    check "ttt2: [0-9]* kernel exports traced by the host" "the host's export wrappers found the runtime's originals"
+    if [ "$expect_io" = 1 ]; then
+        check "ttt2: file opened: 'game:.io_data.bin'" "the file open was traced"
+        check "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "the sector query was answered as unsupported"
+        check "ResolvePath(.Device) failed - device not found" "the bare device open produced the runtime's line from the owner's log"
+        check "ttt2: the game opened '.Device.Cdrom0', a device itself" "the host explained the device open"
+        check "ttt2: file open failed: '.Device.Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE)" "the failed open was traced with its status and caller"
+        check "ttt2: file attributes missing: 'game:.missing.bin'" "the missing file's attribute query was traced"
+        check "ttt2: activity: files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1;" \
+            "the watchdog's activity line counted them"
+    fi
     absent "ttt2: HOST CRASH" "no host crash"
     absent "STUB" "no runtime stub was reached"
 fi

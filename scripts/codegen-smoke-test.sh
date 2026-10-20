@@ -69,7 +69,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
 rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2 \
-    "$work"/pointer_ttt2
+    "$work"/pointer_ttt2 "$work"/io_ttt2 "$work"/wait_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -269,6 +269,12 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     # Kernel imports through a real XEX import table (imports_ttt2.imports): the codegen must resolve
     # all three ordinals to __imp__ calls; one function (the entry point), no jump tables.
     run_case imports_ttt2 "$root/recomp/tests/ppc/imports_ttt2.s" 4 0 0 "--expect-imports 3"
+
+    # The file-system calls behind the owner's black screen (io_ttt2.s) and a deliberate deadlock between
+    # two threads (wait_ttt2.s, booted by the host's stall test in the workflows): every ordinal must
+    # resolve to an __imp__ call; the entry point (and wait_ttt2's worker) plus one function per thunk.
+    run_case io_ttt2 "$root/recomp/tests/ppc/io_ttt2.s" 6 0 0 "--expect-imports 5"
+    run_case wait_ttt2 "$root/recomp/tests/ppc/wait_ttt2.s" 8 0 0 "--expect-imports 6"
 
     # Function boundaries (tailcall_ttt2.s): the two shapes behind the 14 "target not in any function"
     # errors on the owner's executable. Pass 1, codegen alone: exactly those two errors (measured with
@@ -563,9 +569,47 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             tail -20 "$dir/exec.log"
             status=1
         fi
+
+        # File system (io_ttt2.s, recomp/src/io_overrides.cpp): the sector query (class 26) answered as
+        # unsupported by the host, everything else by the runtime through the host's wrappers (the file
+        # opens, its size, 8 bytes read, the close), the bare device \Device\Cdrom0 failing to open as on
+        # the owner's first boot (the runtime's "ResolvePath(\Device) failed" line), a missing file's
+        # attributes; the host's trace lines must name each. With TTT2_SECTOR_QUERY=runtime the runtime's
+        # own answer (success) comes back instead.
+        dir="$work/io_ttt2"
+        printf 'TTT2-IO-TEST-OK!' > "$dir/io_data.bin"
+        io_results="$(results_of "$dir/io_ttt2.xex.syms"):10"
+        rc=0
+        run_host io_ttt2 "$dir/generated/default" "$io_results" \
+            "0,0xC0000003,0,16,0,0x54545432,8,0,0xC000000F,0xC000000F" info > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
+            && grep -q "ttt2: file opened: 'game:.io_data.bin'" "$dir/exec.log" \
+            && grep -q "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "$dir/exec.log" \
+            && grep -q "ResolvePath(.Device) failed - device not found" "$dir/exec.log" \
+            && grep -q "ttt2: the game opened '.Device.Cdrom0', a device itself" "$dir/exec.log" \
+            && grep -q "ttt2: file open failed: '.Device.Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE)" "$dir/exec.log" \
+            && grep -q "ttt2: file attributes missing: 'game:.missing.bin' -> 0xC000000F" "$dir/exec.log"; then
+            echo "ok   exec: file system through the host's wrappers: sector query unsupported, open/size/read/close by the runtime, the bare disc device and a missing file traced"
+        else
+            echo "FAIL exec: native run of the file-system program (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
+        rc=0
+        (TTT2_SECTOR_QUERY=runtime; export TTT2_SECTOR_QUERY; run_host io_ttt2 "$dir/generated/default" "$io_results" \
+            "0,0,0,16,0,0x54545432,8,0,0xC000000F,0xC000000F" info) > "$dir/exec-runtime.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-runtime.log" \
+            && ! grep -q "ttt2: sector query:" "$dir/exec-runtime.log"; then
+            echo "ok   exec: with TTT2_SECTOR_QUERY=runtime the runtime's own sector answer (success) comes back"
+        else
+            echo "FAIL exec: the file-system program with TTT2_SECTOR_QUERY=runtime (exit $rc, see $dir/exec-runtime.log)"
+            tail -20 "$dir/exec-runtime.log"
+            status=1
+        fi
     fi
 else
-    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / io_ttt2 / wait_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

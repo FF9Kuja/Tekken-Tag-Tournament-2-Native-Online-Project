@@ -33,8 +33,40 @@ RE_MAIN_EXITED = re.compile(r"ttt2: main guest thread exited \(id (\d+)\)")
 RE_ENDED = re.compile(r"ttt2: guest program ended; exiting with code (\d+)")
 RE_OVERRIDE = re.compile(r"ttt2: kernel override (\w+) -> (.*) \(first call\)")
 RE_WATCHDOG = re.compile(r"ttt2: watchdog: (\d+) guest threads \((\d+) running\); main thread (running|not running): (.*); kernel stubs: (.*)")
-RE_STALL = re.compile(r"ttt2: possible stall: thread census and stub calls unchanged for (\d+) ms")
+# Both forms: "thread census and stub calls unchanged" (hosts before the boot monitor) and "thread census,
+# stub calls and boot progress (files, reads, frames) unchanged".
+RE_STALL = re.compile(r"ttt2: possible stall: thread census.*? unchanged for (\d+) ms")
+RE_STILL_STALLED = re.compile(r"ttt2: still stalled after (\d+) ms")
+RE_DUMP_HEADER = re.compile(r"ttt2: thread state at (.+):$")
 RE_STALL_THREAD = re.compile(r"ttt2:\s+(\S.*?)\s+id (\d+)\s+(running|stopped) priority (-?\d+) suspend (\d+) wait_result (0x[0-9a-fA-F]+)")
+# The boot monitor's lines (recomp/src/boot_monitor.cpp and the export wrappers).
+RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack): (.*)$")
+RE_DUMP_BUSIEST = re.compile(r"ttt2:\s+traced kernel calls in the last tick: (.*)$")
+RE_DUMP_FILES = re.compile(r"ttt2:\s+recent file activity")
+RE_DUMP_FILE_EVENT = re.compile(r"ttt2:\s+t\+([\d.]+) s (\w+) '(.*)' -> (.*)$")
+RE_TRACED = re.compile(r"ttt2: (\d+) kernel exports traced by the host")
+RE_ACTIVITY = re.compile(r"ttt2: activity: (.*)$")
+RE_FILE_OPENED = re.compile(r"ttt2: file opened: '(.*)' \((\w+), (.*)\)$")
+RE_FILE_FAILED = re.compile(r"ttt2: file open failed: '(.*)' -> (0x[0-9A-Fa-f]+)(?: \((\w+)\))? \((\w+), (.*), from (.*)\)$")
+RE_DEVICE_OPEN = re.compile(r"ttt2: the game opened '(.*)', a device itself")
+RE_SECTOR = re.compile(r"ttt2: sector query: FileSectorInformation for '(.*)' answered as unsupported")
+RE_ATTR_MISSING = re.compile(r"ttt2: file attributes missing: '(.*)' -> (0x[0-9A-Fa-f]+)")
+RE_READ_FAILED = re.compile(r"ttt2: file read failed: '(.*)' at (\S+) length (\d+) -> (0x[0-9A-Fa-f]+)")
+RE_DEVICE_CONTROL = re.compile(r"ttt2: device control (0x[0-9A-Fa-f]+) on '(.*)' -> (0x[0-9A-Fa-f]+)")
+RE_MILESTONE = re.compile(r"ttt2: (gpu|audio|input|xam): (.*)$")
+RE_THREAD_CREATED = re.compile(r"ttt2: thread created: id (\d+), start (0x[0-9A-Fa-f]+)(?: \((sub_[0-9A-Fa-f]+)\))?(.*)$")
+RE_OWNER_ID = re.compile(r"owned by (?:.*?\(id (\d+)\)|thread id (\d+))")
+# The activity line's fields, read one by one (the GPU part depends on the backend).
+ACTIVITY_FIELDS = {
+    "files_opened": r"files (\d+) opened", "open_failures": r"opened, (\d+) failed", "device_failures": r"\((\d+) device paths\)",
+    "mb_read": r"read ([\d.]+) MB", "reads": r"in (\d+) reads", "read_failures": r"reads \((\d+) failed\)",
+    "sector_queries": r"sector queries (\d+)", "threads_created": r"threads created (\d+)",
+    "engines": r"engines (initialized|not initialized)", "ring_buffer": r"ring buffer (0x[0-9A-Fa-f]+|not set up)",
+    "interrupt_callback": r"interrupt callback (0x[0-9A-Fa-f]+|none)", "vblanks": r"vblanks (\d+)",
+    "ring_write_pointer": r"ring write pointer (0x[0-9A-Fa-f]+)", "frames_presented": r"frames presented (\d+)",
+    "audio_clients": r"audio clients (\d+)", "audio_frames": r"audio frames (\d+)", "input_polls": r"input polls (\d+)",
+    "traced_calls": r"traced kernel calls (\d+)",
+}
 RE_REPORT = re.compile(r"ttt2: kernel stub report at (.*): (\d+) calls to (\d+) distinct stubs")
 RE_REPORT_LINE = re.compile(r"ttt2:\s+(\S+)\s+(\d+) calls \(first seen as stub call #(\d+)\)")
 RE_CRASH = re.compile(r"ttt2: HOST CRASH: (.*) at host pc (0x[0-9a-fA-F]+)")
@@ -117,6 +149,51 @@ def region_of(guest_addr):
     return "low virtual memory (below 0x40000000)"
 
 
+def parse_activity(text):
+    """The watchdog's activity line as a dict of its fields (numbers as int/float, the rest as text)."""
+    out = {}
+    for key, pattern in ACTIVITY_FIELDS.items():
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        value = m.group(1)
+        if key == "mb_read":
+            out[key] = float(value)
+        elif value.isdigit():
+            out[key] = int(value)
+        else:
+            out[key] = value
+    out["gpu_emulation"] = "no GPU emulation" not in text
+    return out
+
+
+def owner_ids(wait_text):
+    """Thread ids named as owners in a wait line ("owned by nuscMain (id 7)", "owned by thread id 9")."""
+    return [int(a or b) for a, b in RE_OWNER_ID.findall(wait_text or "")]
+
+
+def find_deadlocks(threads):
+    """Cycles in the wait-for graph of one dump: thread -> the owner of what it waits on."""
+    edges = {}
+    for th in threads:
+        owners = owner_ids(th.get("wait"))
+        if owners:
+            edges[th["id"]] = owners[0]
+    cycles, seen = [], set()
+    for start in edges:
+        path, node = [], start
+        while node in edges and node not in path:
+            path.append(node)
+            node = edges[node]
+        if node in path:
+            cycle = path[path.index(node):]
+            key = frozenset(cycle)
+            if key not in seen:
+                seen.add(key)
+                cycles.append(cycle)
+    return cycles
+
+
 def triage(lines, ttt2web=None):
     """Returns the structured triage of the given log lines (dicts and lists only)."""
     ttt2web = ttt2web or {}
@@ -141,6 +218,14 @@ def triage(lines, ttt2web=None):
     main_created = main_exited = ended = closed = None
     too_few_cores = False
     current_stall = None
+    current_dump = None  # the dump whose per-thread lines are being read (a stall dump or the close dump)
+    close_dump = None
+    activity = None
+    traced_exports = None
+    files = {"opened": [], "failed": [], "device_opens": [], "sector_first": None, "attributes_missing": [],
+             "read_failures": [], "device_controls": []}
+    milestones = []
+    threads_created = []
     unparsed = 0
 
     for raw in lines:
@@ -193,15 +278,66 @@ def triage(lines, ttt2web=None):
         elif (mm := RE_WATCHDOG.search(msg)):
             ticks.append({"time": ts, "threads": int(mm.group(1)), "running": int(mm.group(2)),
                           "main_running": mm.group(3) == "running", "names": mm.group(4), "stubs": mm.group(5)})
-            current_stall = None
+            current_stall = current_dump = None
+        elif (mm := RE_ACTIVITY.search(msg)):
+            activity = {"time": ts, **parse_activity(mm.group(1))}
+            current_dump = None
         elif (mm := RE_STALL.search(msg)):
-            current_stall = {"time": ts, "unchanged_ms": int(mm.group(1)), "threads": []}
+            current_stall = {"time": ts, "unchanged_ms": int(mm.group(1)), "still": False, "threads": [],
+                             "busiest": None, "files": []}
+            current_dump = current_stall
             stalls.append(current_stall)
             events.append((ts, f"possible stall: nothing changed for {mm.group(1)} ms"))
-        elif current_stall is not None and (mm := RE_STALL_THREAD.search(msg)):
-            current_stall["threads"].append({"name": mm.group(1), "id": int(mm.group(2)), "state": mm.group(3),
-                                             "priority": int(mm.group(4)), "suspend": int(mm.group(5)),
-                                             "wait_result": mm.group(6)})
+        elif (mm := RE_STILL_STALLED.search(msg)):
+            current_stall = {"time": ts, "unchanged_ms": int(mm.group(1)), "still": True, "threads": [],
+                             "busiest": None, "files": []}
+            current_dump = current_stall
+            stalls.append(current_stall)
+            events.append((ts, f"still stalled after {mm.group(1)} ms"))
+        elif (mm := RE_DUMP_HEADER.search(msg)):
+            close_dump = {"time": ts, "when": mm.group(1), "threads": [], "busiest": None, "files": []}
+            current_dump = close_dump
+        elif current_dump is not None and (mm := RE_STALL_THREAD.search(msg)):
+            current_dump["threads"].append({"name": mm.group(1), "id": int(mm.group(2)), "state": mm.group(3),
+                                            "priority": int(mm.group(4)), "suspend": int(mm.group(5)),
+                                            "wait_result": mm.group(6), "wait": None, "calls": None, "stack": None})
+        elif current_dump is not None and current_dump["threads"] and (mm := RE_THREAD_DETAIL.search(msg)):
+            key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack"}[mm.group(1)]
+            current_dump["threads"][-1][key] = mm.group(2)
+        elif current_dump is not None and (mm := RE_DUMP_BUSIEST.search(msg)):
+            current_dump["busiest"] = mm.group(1)
+        elif current_dump is not None and RE_DUMP_FILES.search(msg):
+            pass
+        elif current_dump is not None and (mm := RE_DUMP_FILE_EVENT.search(msg)):
+            current_dump["files"].append(f"t+{mm.group(1)} s {mm.group(2)} '{mm.group(3)}' -> {mm.group(4)}")
+        elif (mm := RE_TRACED.search(msg)):
+            traced_exports = int(mm.group(1))
+        elif (mm := RE_FILE_OPENED.search(msg)):
+            files["opened"].append({"time": ts, "path": mm.group(1), "api": mm.group(2), "thread": mm.group(3)})
+        elif (mm := RE_FILE_FAILED.search(msg)):
+            files["failed"].append({"time": ts, "path": mm.group(1), "status": mm.group(2).upper().replace("0X", "0x"),
+                                    "status_name": mm.group(3), "api": mm.group(4), "thread": mm.group(5),
+                                    "caller": mm.group(6)})
+        elif (mm := RE_DEVICE_OPEN.search(msg)):
+            files["device_opens"].append({"time": ts, "path": mm.group(1)})
+            events.append((ts, f"the game opened the bare device {mm.group(1)} (the open failed)"))
+        elif (mm := RE_SECTOR.search(msg)):
+            files["sector_first"] = {"time": ts, "path": mm.group(1)}
+            events.append((ts, "first disc sector query, answered as unsupported by the host"))
+        elif (mm := RE_ATTR_MISSING.search(msg)):
+            files["attributes_missing"].append({"path": mm.group(1), "status": mm.group(2)})
+        elif (mm := RE_READ_FAILED.search(msg)):
+            files["read_failures"].append({"path": mm.group(1), "offset": mm.group(2), "length": int(mm.group(3)),
+                                           "status": mm.group(4)})
+        elif (mm := RE_DEVICE_CONTROL.search(msg)):
+            files["device_controls"].append({"code": mm.group(1), "path": mm.group(2), "status": mm.group(3)})
+        elif (mm := RE_THREAD_CREATED.search(msg)):
+            threads_created.append({"time": ts, "id": int(mm.group(1)), "start": mm.group(2),
+                                    "function": mm.group(3), "details": mm.group(4).strip()})
+        elif (mm := RE_MILESTONE.search(msg)):
+            milestones.append({"time": ts, "area": mm.group(1), "text": mm.group(2)})
+            if mm.group(1) == "gpu" and mm.group(2).startswith("first frame presented"):
+                events.append((ts, "first frame presented (VdSwap)"))
         elif (mm := RE_REPORT.search(msg)):
             report = {"when": mm.group(1), "calls": int(mm.group(2)), "distinct": int(mm.group(3)), "stubs": []}
         elif report is not None and (mm := RE_REPORT_LINE.search(msg)):
@@ -241,7 +377,7 @@ def triage(lines, ttt2web=None):
         outcome = "clean exit: the program returned from its entry point and the host ended"
     elif stalls:
         # The owner's most likely first boot: a black or frozen window, the stall dump, then the X button.
-        outcome = "stall: the thread census and stub calls stopped changing while the main thread ran"
+        outcome = "stall: the thread census, stub calls and boot progress stopped changing while the main thread ran"
         if closed:
             outcome += "; the window was closed afterwards"
     elif closed:
@@ -322,10 +458,83 @@ def triage(lines, ttt2web=None):
         recommendations.append(f"Variable import {v['name']} ({v['library']} ordinal {v['ordinal']}) is not implemented by "
                                "the runtime, which wrote a poison value into its slot: any use of it is a crash candidate.")
     for st in stalls:
+        if st.get("still"):
+            continue
         waiting = [t for t in st["threads"] if t["state"] != "running"]
         recommendations.append(f"Stall after {st['unchanged_ms']} ms without change: {len(st['threads'])} guest threads, "
                                f"{len(waiting)} not running. Look at what the running threads wait on (events, vblank, a "
                                "stubbed call that never signals) in the per-thread dump.")
+    # The boot monitor's view (hosts with recomp/src/boot_monitor.cpp).
+    last_dump = close_dump or (stalls[-1] if stalls else None)
+    if files["device_opens"]:
+        paths = sorted({d["path"] for d in files["device_opens"]})
+        if files["sector_first"]:
+            recommendations.append(
+                f"The game opened the bare device {', '.join(paths)} although the host answered its disc sector query as "
+                "unsupported: it wants the device itself, not raw sectors behind a successful sector query. That open is "
+                "the runtime's \"ResolvePath(\\Device) failed\" error. Report this log: the next step is a device at that "
+                "path (the game folder, as TTT2 Web maps \\Device\\Cdrom0), not another sector answer.")
+        else:
+            recommendations.append(
+                f"The game opened the bare device {', '.join(paths)} (the runtime's \"ResolvePath(\\Device) failed\" "
+                "error) without asking for a disc sector first: it wants the device itself. Report this log: the next "
+                "step is a device at that path (the game folder, as TTT2 Web maps \\Device\\Cdrom0).")
+    if files["failed"]:
+        other = [f for f in files["failed"] if f["path"] not in {d["path"] for d in files["device_opens"]}]
+        if other:
+            shown = ", ".join(f"{f['path']} ({f['status_name'] or f['status']})" for f in other[:5])
+            recommendations.append(f"{len(other)} other path(s) failed to open, first: {shown}. A file of the game data "
+                                   "that fails to open is missing from the extracted folder or mapped to the wrong place "
+                                   "(game:, d:, update:, cache:).")
+    if files["read_failures"]:
+        r = files["read_failures"][0]
+        recommendations.append(f"File reads failed ({len(files['read_failures'])} logged), first: {r['path']} at {r['offset']} "
+                               f"length {r['length']} -> {r['status']}.")
+    if activity:
+        if activity.get("frames_presented", 0) == 0:
+            where = "before graphics initialisation (the GPU ring buffer was never set up)" \
+                if activity.get("ring_buffer") == "not set up" else "after the GPU set-up but before its first frame"
+            recommendations.append(
+                f"No frame was presented (VdSwap was never called): the black window is the absence of any frame, not "
+                f"black frames, and the game stopped {where}. The per-thread dump below says where each thread waits.")
+        else:
+            recommendations.append(
+                f"{activity['frames_presented']} frame(s) were presented (VdSwap): the game renders. If the window still "
+                "showed nothing, the frames themselves are black: a rendering (GPU emulation) problem, not a boot stall.")
+        if activity.get("gpu_emulation") and activity.get("vblanks") == 0:
+            recommendations.append("The GPU emulation's vblank counter never moved: its vsync thread is not running.")
+    if last_dump:
+        names = {t["id"]: t["name"] for t in last_dump["threads"]}
+        cycles = find_deadlocks(last_dump["threads"])
+        for cycle in cycles:
+            chain = " -> ".join(f"{names.get(i, '?')} (id {i})" for i in cycle + cycle[:1])
+            recommendations.append(f"Deadlock: each thread waits for a lock the next one owns: {chain}.")
+        in_cycle = {i for c in cycles for i in c}
+        by_id = {t["id"]: t for t in last_dump["threads"]}
+        for th in last_dump["threads"]:
+            # A chain that ends in a thread waiting on something without an owner (an event, a semaphore).
+            if th["id"] in in_cycle or not owner_ids(th.get("wait")):
+                continue
+            path, node = [th["id"]], owner_ids(th.get("wait"))[0]
+            while node in by_id and node not in path and owner_ids(by_id[node].get("wait")):
+                path.append(node)
+                node = owner_ids(by_id[node].get("wait"))[0]
+            if node in path or node in in_cycle:
+                continue
+            path.append(node)
+            end = by_id.get(node)
+            chain = f"{names.get(path[0], '?')} (id {path[0]})" + "".join(
+                f" waits for a lock held by {names.get(i, '?')} (id {i}), which" for i in path[1:])
+            what = f" waits: {end['wait']}" if end and end.get("wait") else " is not in a traced wait"
+            recommendations.append(f"Wait chain: {chain}{what}.")
+        blocked = [t for t in last_dump["threads"] if t.get("wait") and "no timeout" in t["wait"]
+                   and ("not signaled" in t["wait"] or "count 0 of" in t["wait"])]
+        if blocked:
+            first = blocked[0]
+            recommendations.append(
+                f"{len(blocked)} thread(s) wait without a timeout on an event or semaphore nobody signals, e.g. "
+                f"{first['name']} (id {first['id']}): {first['wait']}. Find what should signal it: the guest stacks name the "
+                "functions; a missing interrupt (vblank), an I/O completion or a stubbed call are the usual causes.")
     if outcome.startswith("incomplete"):
         recommendations.append("The log has no end marker: if the host was still running, it was not frozen for 15 s "
                                "(no stall dump) and not crashed; attach the console output and what the window showed.")
@@ -343,6 +552,12 @@ def triage(lines, ttt2web=None):
         "overrides": overrides,
         "watchdog": {"ticks": len(ticks), "last": ticks[-1] if ticks else None},
         "stalls": stalls,
+        "close_dump": close_dump,
+        "activity": activity,
+        "traced_exports": traced_exports,
+        "files": files,
+        "milestones": milestones,
+        "threads_created": threads_created,
         "stubs": {"source": stub_source, "total_calls": report["calls"] if report else sum(stub_warnings.values()),
                   "list": stubs},
         "crash": crash,
@@ -392,12 +607,84 @@ def render_markdown(t, source):
         if c["exit_code"] is not None:
             lines.append(f"* exit code: {c['exit_code']}")
         lines.append("")
-    for st in t["stalls"]:
-        lines += [f"## Possible stall at `{st['time']}` ({st['unchanged_ms']} ms unchanged)", "",
-                  "| Thread | id | state | priority | suspend | wait_result |", "|---|---|---|---|---|---|"]
-        for th in st["threads"]:
-            lines.append(f"| {th['name']} | {th['id']} | {th['state']} | {th['priority']} | {th['suspend']} | {th['wait_result']} |")
+    a = t.get("activity")
+    if a:
+        lines += [f"## Boot progress (watchdog activity at `{a['time']}`)", "", "| Item | Value |", "|---|---|",
+                  f"| Files opened / failed (bare devices) | {a.get('files_opened', '?')} / {a.get('open_failures', '?')} "
+                  f"({a.get('device_failures', '?')}) |",
+                  f"| Read | {a.get('mb_read', '?')} MB in {a.get('reads', '?')} reads ({a.get('read_failures', '?')} failed) |",
+                  f"| Disc sector queries answered unsupported | {a.get('sector_queries', '?')} |",
+                  f"| Threads created | {a.get('threads_created', '?')} |",
+                  f"| GPU | engines {a.get('engines', '?')}, ring buffer {a.get('ring_buffer', '?')}, interrupt callback "
+                  f"{a.get('interrupt_callback', '?')}"
+                  + (f", vblanks {a['vblanks']}, ring write pointer {a.get('ring_write_pointer', '?')}" if "vblanks" in a
+                     else ", no GPU emulation") + " |",
+                  f"| Frames presented (VdSwap) | {a.get('frames_presented', '?')} |",
+                  f"| Audio | {a.get('audio_clients', '?')} client(s), {a.get('audio_frames', '?')} frames |",
+                  f"| Input polls | {a.get('input_polls', '?')} |",
+                  f"| Traced kernel calls | {a.get('traced_calls', '?')}"
+                  + (f" (through {t['traced_exports']} wrapped exports)" if t.get("traced_exports") else "") + " |", ""]
+    fs = t.get("files") or {}
+    if fs.get("failed") or fs.get("device_opens") or fs.get("opened") or fs.get("sector_first"):
+        lines += ["## File access", ""]
+        if fs.get("sector_first"):
+            lines.append(f"* Disc sector queries answered as unsupported, first for `{fs['sector_first']['path']}` "
+                         f"at `{fs['sector_first']['time']}`")
+        for d in fs.get("device_opens", []):
+            lines.append(f"* **Bare device opened**: `{d['path']}` at `{d['time']}` (failed)")
+        for f in fs.get("failed", [])[:32]:
+            lines.append(f"* open failed: `{f['path']}` -> {f['status']} {f['status_name'] or ''} ({f['api']}, {f['thread']}, "
+                         f"from {f['caller']})")
+        for f in fs.get("read_failures", [])[:16]:
+            lines.append(f"* read failed: `{f['path']}` at {f['offset']} length {f['length']} -> {f['status']}")
+        for f in fs.get("device_controls", [])[:16]:
+            lines.append(f"* device control {f['code']} on `{f['path']}` -> {f['status']}")
+        missing = fs.get("attributes_missing", [])
+        if missing:
+            lines.append(f"* {len(missing)} attribute queries for missing paths, first: "
+                         + ", ".join(f"`{m['path']}`" for m in missing[:8]))
+        if fs.get("opened"):
+            lines.append(f"* {len(fs['opened'])} distinct paths opened (logged), first: "
+                         + ", ".join(f"`{o['path']}`" for o in fs["opened"][:8]))
         lines.append("")
+    if t.get("milestones"):
+        lines += ["## Milestones (GPU, audio, input, system dialogs)", ""]
+        for m in t["milestones"][:60]:
+            lines.append(f"* `{m['time']}` {m['area']}: {m['text']}")
+        lines.append("")
+    if t.get("threads_created"):
+        lines += ["## Threads created", ""]
+        for c in t["threads_created"]:
+            details = c["details"]
+            lines.append(f"* `{c['time']}` id {c['id']}: start {c['start']}" + (f" ({c['function']})" if c["function"] else "")
+                         + ((details if details.startswith(",") else " " + details) if details else ""))
+        lines.append("")
+
+    def dump_section(title, dump):
+        out = [title, "", "| Thread | id | state | priority | suspend | wait_result |", "|---|---|---|---|---|---|"]
+        for th in dump["threads"]:
+            out.append(f"| {th['name']} | {th['id']} | {th['state']} | {th['priority']} | {th['suspend']} | {th['wait_result']} |")
+        out.append("")
+        detailed = [th for th in dump["threads"] if th.get("wait") or th.get("stack")]
+        for th in detailed:
+            out.append(f"* **{th['name']} (id {th['id']})**")
+            for key, label in (("wait", "wait"), ("calls", "kernel calls"), ("stack", "guest stack")):
+                if th.get(key):
+                    out.append(f"  * {label}: {th[key]}")
+        if dump.get("busiest"):
+            out.append(f"* traced kernel calls in the last tick: {dump['busiest']}")
+        for f in dump.get("files", []):
+            out.append(f"* recent file activity: {f}")
+        if detailed or dump.get("busiest") or dump.get("files"):
+            out.append("")
+        return out
+
+    for st in t["stalls"]:
+        title = (f"## Still stalled at `{st['time']}` ({st['unchanged_ms']} ms unchanged)" if st.get("still")
+                 else f"## Possible stall at `{st['time']}` ({st['unchanged_ms']} ms unchanged)")
+        lines += dump_section(title, st)
+    if t.get("close_dump"):
+        lines += dump_section(f"## Thread state at {t['close_dump']['when']} (`{t['close_dump']['time']}`)", t["close_dump"])
     lines += [f"## Kernel stubs reached ({t['stubs']['source']}; {t['stubs']['total_calls']} calls)", ""]
     if t["stubs"]["list"]:
         lines += ["| Stub | Calls | First seen as call # | TTT2 Web (CC0) reference |", "|---|---|---|---|"]
