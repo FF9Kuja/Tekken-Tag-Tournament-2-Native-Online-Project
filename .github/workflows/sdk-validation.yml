@@ -100,7 +100,26 @@ jobs:
           # dump; the host must exit 0 and the triage report the stall and the close.
           DISPLAY=:97 SDL_AUDIO_DRIVER=dummy TTT2_WATCHDOG_MS=1000 pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host-stall -TimeoutSeconds 8 -NoGpu
           grep -q '^\*\*stall: .*closed afterwards\*\*' out/run-host-stall/boot-triage.md
+          # The same host rebuilt on a deliberate deadlock (recomp/tests/ppc/wait_ttt2.s): the boot monitor's stall dump
+          # must name both waits (a critical section with its owner, an unsignaled event), their guest call sites and
+          # stacks, and the worker's creation; the boot step's triage must then report the wait chain.
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/wait_ttt2.s recomp/game/default.xex
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-wait.json
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-wait.log --report out/host-resolve-wait.md --ignore-stamp
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game --expect-stall --expect-waits
+          DISPLAY=:97 SDL_AUDIO_DRIVER=dummy TTT2_WATCHDOG_MS=1000 pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host-wait -TimeoutSeconds 8 -NoGpu
+          grep -q '^[0-9]*\. Wait chain: .* waits for a lock held by .*, which waits: KeWaitForSingleObject' out/run-host-wait/boot-triage.md
+          grep -q '^## Thread state at window close' out/run-host-wait/boot-triage.md
           kill "$xvfb_pid"
+          # And on the file-system program (recomp/tests/ppc/io_ttt2.s): the disc sector query answered as unsupported,
+          # the bare device \Device\Cdrom0 failing with the runtime's "ResolvePath(\Device)" line from the owner's boot,
+          # each traced by the host, and the program running to its end.
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/io_ttt2.s recomp/game/default.xex
+          python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-io.json
+          python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-io.log --report out/host-resolve-io.md --ignore-stamp
+          cmake --build out/host-linux --parallel
+          scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 60 --no-imports --expect-io
           # And on a program that writes to the null page: the crash report must be logged and the host exit 3.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/crash_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-crash.json
@@ -136,6 +155,7 @@ jobs:
             out/host-linux/logs/
             out/run-host/
             out/run-host-stall/
+            out/run-host-wait/
             out/host-resolve*.md
           if-no-files-found: ignore
       - name: "Instruction coverage of the TTT2 instruction list (2 known gaps: macchwu, maclhwu)"

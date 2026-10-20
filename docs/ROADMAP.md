@@ -117,6 +117,12 @@ therefore mandatory for TTT2 and are the path the pipeline uses.
    to a function only a pointer reaches. [x] Those are registered ahead of time from pointers in the image's data
    (`resolve_functions.py codegen --indirect`), and the pipeline's boot loop repairs the rest by itself with stop
    conditions (no progress, repeated trap, run limit, time, disk space, failed rebuild; `docs/RESEARCH.md` 8d).
+   [x] With those in place the game starts 28 threads and stays on a black window; its one error is the open of the
+   bare disc device `\Device\Cdrom0`, which the runtime does not provide (`docs/RESEARCH.md` 8e). The host answers
+   the disc sector query as unsupported, as TTT2 Web does, so the loader reads files by name. [x] Boot monitor: file
+   access, GPU/audio/input/dialog milestones, frames presented, and per-thread waits (objects, owners, call sites)
+   and guest call stacks in every stall dump and at window close; the triage reports deadlocks and wait chains.
+   [ ] Confirm on the owner's copy; if the disc device is still opened, give it a device (an SDK file-system change).
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.
 5. Measurable milestone: boot to the title screen; then to the main menu.
 

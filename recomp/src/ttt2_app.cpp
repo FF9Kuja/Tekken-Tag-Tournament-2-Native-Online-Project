@@ -2,6 +2,8 @@
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/graphics/command_processor.h>
+#include <rex/graphics/graphics_system.h>
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
@@ -15,6 +17,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+
+#include "runtime_exports.h"
 
 namespace {
 
@@ -80,6 +84,7 @@ void Ttt2App::OnPreSetup(rex::RuntimeConfig& config) {
   REXLOG_INFO("ttt2: graphics backend {}", config.graphics             ? "provided by the host"
                                            : config.gpu_plugin.empty() ? "none"
                                                                        : config.gpu_plugin);
+  if (!config.graphics) gpu_plugin_ = config.gpu_plugin;
   if (const char* period = std::getenv("TTT2_WATCHDOG_MS")) {
     watchdog_period_ms_ = static_cast<std::uint32_t>(std::strtoul(period, nullptr, 10));
   }
@@ -104,6 +109,21 @@ void Ttt2App::OnPostSetup() {
   _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
 #endif
   std::signal(SIGABRT, &Ttt2App::OnAbort);
+
+  // The host's export wrappers (io_overrides.cpp, wait_overrides.cpp, milestone_overrides.cpp) call the
+  // runtime's own functions; check now that every one of them is there, rather than at the game's first
+  // file access.
+  const auto missing = ttt2::MissingRuntimeExports();
+  if (!missing.empty()) {
+    std::string names;
+    for (const auto& name : missing) names += (names.empty() ? "" : ", ") + name;
+    REXLOG_CRITICAL("ttt2: the runtime library lacks {} of the exports the host wraps: {}", missing.size(), names);
+    rex::FlushLogging();
+    std::abort();
+  }
+  REXLOG_INFO("ttt2: {} kernel exports traced by the host (file access, waits, GPU, audio, input, dialogs, threads)",
+              ttt2::WrappedExportCount());
+  ttt2::monitor::SetImage(PPCImageConfig);
 }
 
 void Ttt2App::OnAbort(int /*signal*/) {
@@ -239,8 +259,13 @@ void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
 bool Ttt2App::OnWindowCloseRequested() {
   // Closing the window (the X button, or a quit signal, which SDL turns into the same request) is
   // how the owner's first boots will end: a black or frozen window. ReXApp's close path terminates
-  // the title and hard-exits the process without OnShutdown, so the full kernel stub report is
-  // written here, while the counts are still there; the watchdog ticks only carry the top five.
+  // the title and hard-exits the process without OnShutdown, so the full kernel stub report and the
+  // state of every guest thread at that moment are written here, while they are still there.
+  if (runtime() && runtime()->kernel_state()) {
+    ttt2::monitor::Observe(ttt2::monitor::NowMs());
+    REXLOG_INFO("ttt2: {}", ttt2::monitor::ActivityLine(ReadGpuState()));
+    LogThreadDump("thread state at window close", false);
+  }
   LogStubReport("window close");
   rex::FlushLogging();
   return true;
@@ -312,25 +337,68 @@ void Ttt2App::WatchdogTick() {
   REXLOG_INFO("ttt2: watchdog: {} guest threads ({} running); main thread {}: {}; kernel stubs: {}",
               threads.size(), running, main_running ? "running" : "not running", names,
               stubs_ ? stubs_->Summary(5) : std::string("not counted"));
+  ttt2::monitor::Observe(ttt2::monitor::NowMs());
+  REXLOG_INFO("ttt2: {}", ttt2::monitor::ActivityLine(ReadGpuState()));
 
-  // Stall heuristic: nothing changed for three ticks while the game is supposedly running. A boot
-  // that waits forever on an event, a vblank or a stubbed call looks exactly like this; the
-  // per-thread dump says who is waiting on what.
+  // Stall heuristic: nothing changed for three ticks while the game is supposedly running: no thread
+  // came or went, no stub was called, no file opened or read, no frame presented. A boot that waits
+  // forever on an event, a vblank or a stubbed call looks exactly like this; the per-thread dump says
+  // who is waiting on what. A second dump after twelve ticks shows whether anything moved since.
+  const std::uint64_t progress = ttt2::monitor::ProgressFingerprint();
   const bool unchanged = threads.size() == last_thread_count_ && running == last_running_count_ &&
-                         stub_total == last_stub_total_;
+                         stub_total == last_stub_total_ && progress == last_progress_;
   unchanged_ticks_ = unchanged ? unchanged_ticks_ + 1 : 0;
   last_thread_count_ = threads.size();
   last_running_count_ = running;
   last_stub_total_ = stub_total;
+  last_progress_ = progress;
   if (main_running && unchanged_ticks_ == 3) {
-    REXLOG_WARN("ttt2: possible stall: thread census and stub calls unchanged for {} ms; per-thread state:",
-                3u * watchdog_period_ms_);
-    for (const auto& t : threads) {
-      const auto* k = t->guest_object<rex::system::X_KTHREAD>();
-      REXLOG_WARN("ttt2:   {:<32} id {:<6} {} priority {} suspend {} wait_result {:#x}",
-                  t->name().empty() ? "(unnamed)" : t->name(), t->thread_id(),
-                  t->is_running() ? "running" : "stopped", t->priority(), t->suspend_count(),
-                  k ? static_cast<std::uint32_t>(k->wait_result) : 0u);
-    }
+    REXLOG_WARN(
+        "ttt2: possible stall: thread census, stub calls and boot progress (files, reads, frames) unchanged for "
+        "{} ms; per-thread state:",
+        3u * watchdog_period_ms_);
+    LogThreadDump("", true);
+  } else if (main_running && unchanged_ticks_ == 12) {
+    REXLOG_WARN("ttt2: still stalled after {} ms; per-thread state:", 12u * watchdog_period_ms_);
+    LogThreadDump("", true);
   }
+}
+
+void Ttt2App::LogThreadDump(const std::string& header, bool warn) {
+  std::lock_guard<std::mutex> lock(dump_mutex_);
+  auto* rt = runtime();
+  if (!rt || !rt->kernel_state()) return;
+  const auto log = [warn](const std::string& line) {
+    if (warn) {
+      REXLOG_WARN("ttt2: {}", line);
+    } else {
+      REXLOG_INFO("ttt2: {}", line);
+    }
+  };
+  if (!header.empty()) log(header + ":");
+  const std::uint64_t now = ttt2::monitor::NowMs();
+  auto threads = rt->kernel_state()->object_table()->GetObjectsByType<rex::system::XThread>();
+  for (const auto& t : threads) {
+    const auto* k = t->guest_object<rex::system::X_KTHREAD>();
+    log(fmt::format("  {:<32} id {:<6} {} priority {} suspend {} wait_result {:#x}",
+                    t->name().empty() ? "(unnamed)" : t->name(), t->thread_id(), t->is_running() ? "running" : "stopped",
+                    t->priority(), t->suspend_count(), k ? static_cast<std::uint32_t>(k->wait_result) : 0u));
+    for (const auto& line : ttt2::monitor::DescribeThread(*t, now)) log(line);
+  }
+  for (const auto& line : ttt2::monitor::DescribeProcess(now)) log(line);
+}
+
+ttt2::monitor::GpuState Ttt2App::ReadGpuState() {
+  ttt2::monitor::GpuState state;
+  // Only the Xenos plugin's graphics system is a rex::graphics::GraphicsSystem whose state the host can
+  // read (through the SDK's inline accessors: no plugin symbols are needed).
+  auto* rt = runtime();
+  if (gpu_plugin_ != "xenos" || !rt || !rt->graphics_system()) return state;
+  auto* graphics = static_cast<rex::graphics::GraphicsSystem*>(rt->graphics_system());
+  if (auto* processor = graphics->command_processor()) {
+    state.available = true;
+    state.vblanks = processor->counter();
+    state.ring_write_pointer = graphics->register_file()->values[0x01C5];  // CP_RB_WPTR
+  }
+  return state;
 }

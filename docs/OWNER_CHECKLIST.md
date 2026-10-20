@@ -69,12 +69,30 @@ saved, the last run stopped at the old limit of three runs right after adding `0
    or a failed rebuild. Step 9c of the report lists every run and why the loop stopped.
 
 Your 21 entries are kept (the file is tied to your executable's SHA-1), and a rerun after any stop continues from
-them. If something new breaks with the ahead-of-time entries, `-NoIndirect` runs without them for comparison. Next
-command (`git pull` first; `-BootRounds 20` lets the loop go further before it stops):
+them. If something new breaks with the ahead-of-time entries, `-NoIndirect` runs without them for comparison.
+
+Your next run (2026-10-20, checkout `0d1d012`) got all the way: 348 verified entries (327 ahead of time), codegen
+without unresolved calls, `ttt2.exe` built, 78 files extracted, and the game started 28 threads without reaching a
+single kernel stub. The window then stayed black until the pipeline closed it; the watchdog saw nothing change after
+15 s, and the log held one error, `ResolvePath(\Device) failed - device not found`. What that error is
+(`docs/RESEARCH.md` 8e): the game opened the disc drive device itself (`\Device\Cdrom0`); ReXGlue mounts your
+extracted folder as the hard-disk partition and has no disc device, so that open fails. A game does that to read its
+archives by raw disc sector, and TTT2's loader takes that path when the system tells it which sector a file starts
+at: ReXGlue answers that question with a made-up number, TTT2 Web (which runs the game to its menus) answers "not
+supported", and the loader then reads files by name. **The host now answers like TTT2 Web.** That is the likely cause,
+not yet proven on your copy, so the host also records much more about a boot (the boot monitor below): which files
+the game opens and which fail, whether it set up the GPU and presented any frame, and for every thread what it waits
+on, who holds it and where in the game's code it was called. Next command (`git pull` first; it rebuilds `ttt2.exe`
+with the change and boots it, closing the window after 180 s):
 
 ```powershell
-scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot -BootTimeout 300 -BootRounds 20
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot -BootTimeout 180
 ```
+
+Send `work\report.txt`, `work\boot-triage.md`, `work\boot-report.txt` and the log in `work\boot-logs\`. Watch the
+window: whether anything appears (a logo, a loading screen, any colour other than black), and after how many seconds;
+whether a dialog box appears; whether the window still responds. `$env:TTT2_SECTOR_QUERY = "runtime"` before the
+command brings back the runtime's old answer, if we ever need to compare the two (only when asked).
 
 ## No Title Update 3 yet? Use the base-image path
 
@@ -345,13 +363,18 @@ Expect the first boot to fail somewhere: the point is the log. The host writes i
 `ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`; the window itself shows nothing useful before the game
 draws): `ttt2: executable title
 4E4D0859 version 0.0.3.2 ...`, `ttt2: graphics backend xenos`, an import summary, a guest-thread census every few
-seconds, a **possible stall** dump when nothing changes for 15 seconds (every guest thread with its state), a
-**kernel stub report** when the main thread exits or you close the window (every system call the game reached
-that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses, the
-guest thread, the most recent stub calls). `run-host.ps1` copies that file to `work\boot-logs\` and writes the
-triage report `work\boot-triage.md` (outcome, crash block, stubs reached with where TTT2 Web implements them,
-stalls) and the run summary `work\boot-report.txt` (how the host ended, exit code, duration). **Send those three
-files.** By hand, the triage is:
+seconds with an **activity** line (files opened and failed, data read, the GPU set-up, frames presented, audio
+frames, controller polls), every file the game opens and every open that fails (with its status and where in the
+game's code it was called), the GPU, audio, input and dialog milestones, every thread the game creates, a **possible
+stall** dump when nothing moves for 15 seconds and again after 60 (every guest thread with the call it waits in, the
+objects it waits on and who owns them, and its call stack in the game's code), the same dump when you close the
+window, a **kernel stub report** when the main thread exits or you close the window (every system call the game
+reached that the runtime only stubs, with counts), and on a crash a **HOST CRASH** block (fault kind and addresses,
+the guest thread, the most recent stub calls). `run-host.ps1` copies that file to `work\boot-logs\` and writes the
+triage report `work\boot-triage.md` (outcome, boot progress, file access, milestones, crash block, stubs reached
+with where TTT2 Web implements them, stalls with every thread's wait and stack, deadlocks and wait chains) and the
+run summary `work\boot-report.txt` (how the host ended, exit code, duration). **Send those three files and the log
+itself.** By hand, the triage is:
 
 ```powershell
 python -I recomp\tools\triage_boot_log.py recomp\out\build\win-amd64-release\logs --md work\boot-triage.md --quiet

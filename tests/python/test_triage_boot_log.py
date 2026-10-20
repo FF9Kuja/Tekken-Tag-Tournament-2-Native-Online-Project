@@ -72,6 +72,64 @@ STALL_THEN_CLOSED = STALL + [
 TTT2WEB = {"XamShowKeyboardUI": ("runtime/kernel/xam_ui.cpp:200", "implemented")}
 
 
+def W(ms, text, level="info", tid=7001, category="core"):
+    return P.format(ms=ms, level=level, tid=tid).replace("[core]", f"[{category}]") + text
+
+
+# A boot the way the boot monitor (recomp/src/boot_monitor.cpp and the export wrappers) logs it: the disc sector
+# query answered as unsupported, the bare disc device opened anyway, the GPU set up but no frame presented, then
+# a deadlock of two threads over critical sections and a third thread on an event nobody sets.
+ACTIVITY = ("ttt2: activity: files 14 opened, 3 failed (1 device paths); read 4.1 MB in 96 reads (0 failed); sector "
+            "queries 5; threads created 27; gpu: engines initialized, ring buffer 0x1FF00000, interrupt callback "
+            "0x82A3B4C0, vblanks 600, ring write pointer 0x40; frames presented 0; audio clients 1, audio frames 0; "
+            "input polls 0; traced kernel calls 104532")
+DUMP_THREADS = [
+    "ttt2:   nuscMain                         id 4      running priority 0 suspend 0 wait_result 0x0",
+    "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40001000 (owned by nuscLoader (id 9), recursion 1), "
+    "no timeout, for at least 10.0 s, called from 0x8234ABCC (sub_8234AB00+0xCC)",
+    "ttt2:     kernel calls: 0 in the last tick, none for at least 10.0 s, 1534 in total; last RtlEnterCriticalSection "
+    "from 0x8234ABCC (sub_8234AB00+0xCC)",
+    "ttt2:     guest stack: 0x8234ABCC (sub_8234AB00+0xCC) <- 0x82301230 (sub_82301000+0x230)",
+    "ttt2:   nuscLoader                       id 9      running priority 0 suspend 0 wait_result 0x0",
+    "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40002000 (owned by nuscMain (id 4), recursion 2), "
+    "no timeout, for at least 10.0 s, called from 0x82400010 (sub_82400000+0x10)",
+    "ttt2:     guest stack: 0x82400010 (sub_82400000+0x10)",
+    "ttt2:   nuscAudio                        id 11     running priority 0 suspend 0 wait_result 0x0",
+    "ttt2:     wait: KeWaitForSingleObject on 0x40003000 (synchronization event, not signaled), no timeout, for at "
+    "least 10.0 s, called from 0x82500020 (sub_82500000+0x20)",
+    "ttt2:   (unnamed)                        id 1      running priority 0 suspend 0 wait_result 0x0",
+    "ttt2:     wait: not traced (this thread has made no traced kernel call)",
+    "ttt2:   traced kernel calls in the last tick: KeWaitForSingleObject 3",
+    "ttt2:   recent file activity (last 1, newest last):",
+    "ttt2:     t+2.1 s NtCreateFile '\\Device\\Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE), nuscLoader (id 9), from 0x82400100 (sub_82400000+0x100)",
+]
+MONITOR = head(backend="xenos", title="4E4D0859", version="0.0.0.2") + [
+    W(955, "ttt2: 47 kernel exports traced by the host (file access, waits, GPU, audio, input, dialogs, threads)"),
+    W(956, "ttt2: thread created: id 9, start 0x82400000 (sub_82400000), context 0x40000000 (nuscMain (id 4), from 0x82300100 (sub_82300000+0x100))"),
+    W(957, "ttt2: gpu: VdInitializeEngines -> 1 (nuscMain (id 4), from 0x82300200 (sub_82300000+0x200))"),
+    W(957, "ttt2: gpu: ring buffer at 0x1FF00000, size 2^12 (nuscMain (id 4), from 0x82300210 (sub_82300000+0x210))"),
+    W(958, "ttt2: file opened: 'game:\\data\\boot.bin' (NtCreateFile, nuscLoader (id 9))"),
+    W(958, "ttt2: sector query: FileSectorInformation for '\\Device\\Harddisk0\\Partition1\\data\\boot.bin' answered as unsupported (0xC0000003 (STATUS_INVALID_INFO_CLASS)), as TTT2 Web answers it"),
+    W(959, "ResolvePath(\\Device) failed - device not found", level="error", category="fs"),
+    W(959, "ttt2: the game opened '\\Device\\Cdrom0', a device itself rather than a file on it; ReXGlue mounts the game folder", level="warning"),
+    W(959, "ttt2: file open failed: '\\Device\\Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE) (NtCreateFile, nuscLoader (id 9), from 0x82400100 (sub_82400000+0x100))"),
+    W(959, "ttt2: file open failed: 'cache:\\shader.bin' -> 0xC000000F (STATUS_NO_SUCH_FILE) (NtCreateFile, nuscMain (id 4), from 0x82300300 (sub_82300000+0x300))"),
+    W(960, "ttt2: watchdog: 28 guest threads (28 running); main thread running: nuscMain, nuscLoader; kernel stubs: 0 calls to 0 stubs"),
+    W(960, ACTIVITY),
+    W(961, "ttt2: possible stall: thread census, stub calls and boot progress (files, reads, frames) unchanged for 15000 ms; per-thread state:", level="warning"),
+] + [W(961, line, level="warning") for line in DUMP_THREADS] + [
+    W(962, "ttt2: watchdog: 28 guest threads (28 running); main thread running: nuscMain, nuscLoader; kernel stubs: 0 calls to 0 stubs"),
+    W(962, ACTIVITY),
+    W(963, "ttt2: still stalled after 60000 ms; per-thread state:", level="warning"),
+] + [W(963, line, level="warning") for line in DUMP_THREADS] + [
+    W(970, "Window closing, shutting down...", category="app"),
+    W(970, ACTIVITY),
+    W(970, "ttt2: thread state at window close:"),
+] + [W(970, line) for line in DUMP_THREADS] + [
+    W(971, "ttt2: kernel stub report at window close: 0 calls to 0 distinct stubs"),
+]
+
+
 class Triage(unittest.TestCase):
     def test_clean_exit(self):
         t = MOD.triage(CLEAN, TTT2WEB)
@@ -149,6 +207,88 @@ class Triage(unittest.TestCase):
         md = MOD.render_markdown(t, "x.log")
         self.assertIn("## Calls to unregistered functions (runtime trap)", md)
         self.assertIn("indirect call to 0x82B10A28", md)
+
+    def test_boot_monitor_stall(self):
+        t = MOD.triage(MONITOR, {})
+        self.assertTrue(t["outcome"].startswith("stall"))
+        self.assertIn("closed afterwards", t["outcome"])
+        self.assertEqual(t["traced_exports"], 47)
+        # Two stall dumps (the second a "still stalled" one) and the dump written on window close.
+        self.assertEqual([st["still"] for st in t["stalls"]], [False, True])
+        self.assertEqual(t["close_dump"]["when"], "window close")
+        main = t["close_dump"]["threads"][0]
+        self.assertEqual((main["name"], main["id"]), ("nuscMain", 4))
+        self.assertIn("owned by nuscLoader (id 9)", main["wait"])
+        self.assertIn("1534 in total", main["calls"])
+        self.assertIn("sub_82301000", main["stack"])
+        self.assertEqual(t["close_dump"]["busiest"], "KeWaitForSingleObject 3")
+        self.assertEqual(len(t["close_dump"]["files"]), 1)
+        # The activity line, field by field.
+        a = t["activity"]
+        self.assertEqual((a["files_opened"], a["open_failures"], a["device_failures"]), (14, 3, 1))
+        self.assertEqual((a["mb_read"], a["reads"], a["sector_queries"]), (4.1, 96, 5))
+        self.assertEqual((a["ring_buffer"], a["interrupt_callback"], a["vblanks"]), ("0x1FF00000", "0x82A3B4C0", 600))
+        self.assertEqual((a["frames_presented"], a["audio_clients"], a["traced_calls"]), (0, 1, 104532))
+        self.assertTrue(a["gpu_emulation"])
+        # File access.
+        self.assertEqual([d["path"] for d in t["files"]["device_opens"]], ["\\Device\\Cdrom0"])
+        self.assertEqual(t["files"]["failed"][0]["status"], "0xC000000F")
+        self.assertEqual(t["files"]["failed"][0]["status_name"], "STATUS_NO_SUCH_FILE")
+        self.assertIn("boot.bin", t["files"]["sector_first"]["path"])
+        self.assertEqual(t["threads_created"][0]["function"], "sub_82400000")
+        self.assertEqual([m["area"] for m in t["milestones"]], ["gpu", "gpu"])
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("Deadlock:") and "nuscMain (id 4)" in r and "nuscLoader (id 9)" in r for r in recs))
+        self.assertTrue(any("although the host answered its disc sector query as unsupported" in r for r in recs))
+        self.assertTrue(any("cache:\\shader.bin" in r for r in recs))
+        self.assertTrue(any(r.startswith("No frame was presented") and "after the GPU set-up" in r for r in recs))
+        self.assertTrue(any("wait without a timeout" in r and "nuscAudio" in r for r in recs))
+        # The deadlocked pair is a cycle, not a chain.
+        self.assertFalse(any(r.startswith("Wait chain") for r in recs))
+        md = MOD.render_markdown(t, "x.log")
+        for heading in ("## Boot progress", "## File access", "## Milestones", "## Threads created",
+                        "## Possible stall", "## Still stalled", "## Thread state at window close"):
+            self.assertIn(heading, md)
+        self.assertIn("**Bare device opened**", md)
+        self.assertIn("guest stack: 0x8234ABCC", md)
+
+    def test_wait_chain_and_frames(self):
+        lines = head(backend="xenos", title="4E4D0859", version="0.0.0.2") + [
+            W(960, ACTIVITY.replace("frames presented 0", "frames presented 120")),
+            W(970, "ttt2: thread state at window close:"),
+            W(970, "ttt2:   nuscMain                         id 4      running priority 0 suspend 0 wait_result 0x0"),
+            W(970, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40001000 (owned by thread id 9, recursion 1), no timeout"),
+            W(970, "ttt2:   (unnamed)                        id 9      running priority 0 suspend 0 wait_result 0x0"),
+            W(970, "ttt2:     wait: KeWaitForSingleObject on 0x40003000 (synchronization event, not signaled), no timeout"),
+        ]
+        t = MOD.triage(lines, {})
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("120 frame(s) were presented") for r in recs))
+        chain = [r for r in recs if r.startswith("Wait chain")]
+        self.assertEqual(len(chain), 1)
+        self.assertIn("nuscMain (id 4) waits for a lock held by (unnamed) (id 9), which waits: KeWaitForSingleObject", chain[0])
+        self.assertFalse(any(r.startswith("Deadlock") for r in recs))
+
+    def test_device_open_without_sector_query(self):
+        lines = head(backend="xenos", title="4E4D0859", version="0.0.0.2") + [
+            W(959, "ttt2: the game opened '\\Device\\Cdrom0', a device itself rather than a file on it", level="warning"),
+            W(959, "ttt2: file open failed: '\\Device\\Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE) (NtOpenFile, nuscMain (id 4), from 0x82400100 (sub_82400000+0x100))"),
+        ]
+        t = MOD.triage(lines, {})
+        recs = t["recommendations"]
+        self.assertTrue(any("without asking for a disc sector first" in r for r in recs))
+        # The device's own failure is not repeated among the other failed paths.
+        self.assertFalse(any("other path(s) failed to open" in r for r in recs))
+
+    def test_parse_activity_without_gpu(self):
+        a = MOD.parse_activity(
+            "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "
+            "created 0; gpu: engines not initialized, ring buffer not set up, interrupt callback none, no GPU emulation; "
+            "frames presented 0; audio clients 0, audio frames 0; input polls 0; traced kernel calls 6")
+        self.assertFalse(a["gpu_emulation"])
+        self.assertNotIn("vblanks", a)
+        self.assertEqual((a["engines"], a["ring_buffer"], a["interrupt_callback"]), ("not initialized", "not set up", "none"))
+        self.assertEqual(a["traced_calls"], 6)
 
     def test_address_helpers(self):
         arena = (0x100000000, 0x200000000)

@@ -594,6 +594,104 @@ and Windows PowerShell 5.1); the Windows workflow runs the whole pipeline on a t
 **Not yet measured:** the owner's image. The resolve report's ahead-of-time section will say how many of the pool have
 a pointer in data, how many each check refuses, and whether codegen accepts the batch.
 
+## 8e. The black screen: the one error, the disc sector query, and a boot monitor (session 8)
+
+**What the owner's run showed (2026-10-20, checkout `0d1d012`).** Everything up to native execution worked: the
+disc identified, the executable prepared, 583 switch tables, 348 verified function entries (327 ahead of time),
+codegen with no unresolved call, `ttt2.exe` built, all 78 game files extracted. The game created 28 guest threads,
+reached no kernel stub, and showed a black window (no Bandai Namco logo) until the pipeline closed it after about
+180 s. The watchdog reported a possible stall after 15 s. The log held one error, `ResolvePath(\Device) failed -
+device not found`; the host exited 0 on the close request (not a natural exit). The boot loop stopped after one run
+because no unregistered function was called.
+
+**What the error means (read from the pinned SDK, then reproduced).** `VirtualFileSystem::OpenFile` resolves the
+parent of the path it opens first; `ResolvePath` logs this error when no mount matches. ReXGlue mounts the game folder
+at `\Device\Harddisk0\Partition1` (behind `game:` and `d:`), `update:` at `\Device\Harddisk0\PartitionUpdate` and a
+null device at `\Device\Harddisk0` for the raw partitions; nothing is mounted at `\Device` itself and there is no disc
+device (`\Device\Cdrom0`). So the error is printed exactly when the game opens a bare device path `\Device\<name>`
+(nothing after the device name): the parent `\Device` does not resolve, and `NtCreateFile` fails with
+`STATUS_NO_SUCH_FILE`. `recomp/tests/ppc/io_ttt2.s` opens `\Device\Cdrom0` through a real import table and produces
+the identical line. The path itself is in the owner's log as the runtime's
+`[NtCreateFile] FAILED: path='...' -> 0xc000000f` warning, which the triage did not list.
+
+**Why a game opens its disc device.** `NtQueryInformationFile` with `FileSectorInformation` asks for the disc sector a
+file starts at. ReXGlue 0.10.0 answers it with success and a made-up number (a hash of the path; Xenia's note: some
+titles only use it to tell files apart), logged at debug level only. TTT2 Web (CC0), which runs this game to menus
+and fights, answers it as unsupported (`STATUS_INVALID_INFO_CLASS`) with the comment that TTT2's loader reads its
+archives by raw sector through the disc device when the query works and falls back to ordinary file reads when it
+does not; its `TTT2_FAKE_SECTORS=1` switch, which returns a hash instead, exists to try the other path. Two
+numbering notes: TTT2 Web names class 27 the sector class, while the Xbox 360 numbering ReXGlue (and Xenia) use
+puts `XFileSectorInformation` at 26 and `XFileXctdCompressionInformation` at 27 (`FileNetworkOpenInformation` is 34
+in both). TTT2 Web fails both 26 (its default case, `STATUS_NOT_IMPLEMENTED`) and 27; ReXGlue succeeds 26 and fails 27
+with an error line ("XFileXctdCompressionInformation unimplemented") that the owner's log does not contain, so the
+game did not ask for class 27 before it stopped.
+
+**The working hypothesis (not yet confirmed on the real game).** ReXGlue's made-up sector for class 26 sends TTT2's
+loader down the raw-sector path; the loader opens `\Device\Cdrom0`, the open fails (the one error), and loading never
+completes, so no frame is ever presented. It explains every fact of the report, and TTT2 Web's working configuration
+is the same with the one difference this changes. What would contradict it: the device opened although the sector
+query is answered as unsupported, or opened before any sector query.
+
+**The change (`recomp/src/io_overrides.cpp`).** The host answers `FileSectorInformation` (class 26) on a file handle as
+unsupported, `STATUS_INVALID_INFO_CLASS`, as TTT2 Web does, and logs the first query with its file. Every other class
+goes to the runtime. `TTT2_SECTOR_QUERY=runtime` restores the runtime's answer for comparison. The host does not map
+a device at `\Device\Cdrom0` yet: with the SDK's `OpenFile`, a bare device path never opens (its parent `\Device`
+has no mount), so a disc device needs a change in the runtime's file system rather than another symbolic link, and
+nothing shows the game needs the device once the sector query fails. If the next run still opens it, that is the
+next step (TTT2 Web maps `\Device\Cdrom0` to the game folder).
+
+**How the host changes one case of a runtime export.** The recompiled code calls each import as the C symbol
+`__imp__<Name>`, bound at link time, so a definition in the host replaces the runtime's (as for the five XAM
+overrides of `kernel_overrides.cpp`). A wrapper still needs the runtime's own function for everything else:
+`recomp/src/runtime_exports.cpp` finds it by name, with `dlsym(RTLD_NEXT)` on Linux and `GetProcAddress` over the
+loaded modules other than the executable on Windows. That works because the runtime library exports every
+`__imp__` symbol (2,866 in the pinned build: the generated code links against them). `Ttt2App` checks at start-up
+that the original of every wrapper is found, and the harness, the Linux host and the Windows host tests exercise it.
+
+**Upstream.** The faithful fix belongs in ReXGlue: answer `FileSectorInformation` from the device a file is on - the
+real sector for a file of a mounted disc image (`DiscImageDevice` knows it), unsupported for a host folder - and let
+`OpenFile` open a device root, so a disc device at `\Device\Cdrom0` is possible. Until the SDK has that, the host's
+answer is the compatible one; it is one `case` to drop when the pin moves.
+
+**The boot monitor (`recomp/src/boot_monitor.cpp`, `wait_overrides.cpp`, `milestone_overrides.cpp`).** 47 wrapped
+exports record what each guest thread asks the kernel for. A wrapper costs a thread-local lookup and a few relaxed
+atomic stores; nothing in the hot path takes a lock or reads a clock. The watchdog (every 5 s) and the dumps report:
+
+* *Boot progress* (one `ttt2: activity:` line per tick): files opened and failed (bare device paths counted apart),
+  bytes and reads, sector queries, threads created, GPU set-up (engines, ring buffer, graphics interrupt callback),
+  the GPU emulation's vblank counter and ring write pointer (read from the Xenos plugin's graphics system), frames
+  presented (`VdSwap` calls: none means nothing was ever presented, not black frames), audio clients and frames,
+  controller polls, traced calls. Files opened, bytes read, frames and threads created now count as progress for
+  the stall detector, alongside the thread census and stub calls.
+* *File access*: each distinct path opened, each distinct failure with its status, API, thread and guest call site
+  (the first 64 of each), missing-file attribute queries, read failures, device controls, and an explanation the
+  first time a bare device path fails.
+* *Milestones*: the first call of each GPU set-up export and every interrupt callback, ring buffer and write-back
+  registration with its arguments; the first frame; audio client registration and the first audio frame; the first
+  controller poll; system dialogs (sign-in, message box, keyboard, device selector) and content creation with their
+  results; every thread the game creates with its start address.
+* *Per thread, in each stall dump* (after 15 s without progress, again after 60 s, and when the window closes): the
+  blocking call it is in (`KeWaitForSingleObject`, `KeWaitForMultipleObjects`, the `Nt*` waits,
+  `NtSignalAndWaitForSingleObjectEx`, `KeDelayExecutionThread`, `RtlEnterCriticalSection`) with the objects named
+  from guest memory (event or semaphore state, the owning thread of a mutant or critical section), its timeout, how
+  long it has been seen in it and the guest address it was called from; its traced calls (in the last tick, in
+  total, how long it has been quiet, the last one); and its guest call stack, read from its own stack (the link
+  register, then the return address the Xbox 360 ABI saves at -8 from each caller's frame), each address named by
+  the recompiled function holding it. Process-wide: the busiest traced calls of the last tick and the last 12 file
+  events.
+
+`recomp/tools/triage_boot_log.py` reads all of it: a boot-progress table, file access, milestones, threads created,
+per-thread details of every dump, and recommendations (no frame presented and where the boot stopped; a bare device
+opened with or without the sector query answered; deadlock cycles and wait chains through lock owners; threads
+waiting without a timeout on objects nobody signals).
+
+**Measured with license-free programs.** `io_ttt2.s` through the harness and both hosts: the sector query returns
+`0xC0000003` (the runtime's success with `TTT2_SECTOR_QUERY=runtime`), open, size, read and close by the runtime
+through the wrappers, `\Device\Cdrom0` fails with `0xC000000F` and the runtime's "ResolvePath(\Device)" line, a
+missing file's attributes fail; all ten values checked. `wait_ttt2.s` (the main thread waits on a critical section
+a worker holds; the worker waits on an event nobody sets): the dump names the critical section with its owner, the
+unsignaled event, both call sites and stacks and the worker's start address, and the triage reports the wait chain.
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source
