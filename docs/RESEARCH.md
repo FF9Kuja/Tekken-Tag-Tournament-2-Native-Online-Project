@@ -787,6 +787,115 @@ too (`ttt2::monitor::GuestReadable`, `PhysicalReadable`; the wait-object and fro
 dump flags it at about 5 million calls a second with `NtSignalAndWaitForSingleObjectEx` as its call, and the triage
 names it.
 
+## 8g. The black screen, third run: the heap lock, thread 19's loop, frames that could not be followed (session 10)
+
+**What the owner's run showed (2026-10-20, `main` at `8cadd71`, the PR #17 host).** The kernel clock ran (180.1 s in
+the activity line), so the fix of 8f works. 10,674 frames presented, 10,676 controller polls, no sound, black
+throughout. The frame monitor counted 0 draws, 0 resolves and 0 clears, but every `VdSwap` buffer (`0xABDE07F0`,
+physical `0x0BDE07F0`) lay outside the 32 KB primary ring at `0x0BFE8000`. Two file reads; `\Device\Image` answered
+`0xC0000034` as the console answers it; no kernel stub reached. Thread 19 made 329,085,374 traced calls (about 1.85
+million a second) with the guest stack `sub_82BCA698+0x44` <- `sub_82ABFDE8+0x44` <- `sub_82AAE518+0x9C` <-
+`sub_82AC2A30+0x3C`. Critical section `0x40000618` was owned by thread 6, the main thread, at recursion 390 - as in the
+previous run - while threads 12 and 26 waited for it in `sub_82BD67E0+0xA8` and thread 14 waited on a section thread 12
+held. The triage called the boot step's 180 s timeout "closed by the user".
+
+**Thread 19 runs the loop TTT2 Web documents, and the loop is not what stops the boot.** `sub_82ABFDE8` sets its own
+auto-reset event and waits on it with `NtSignalAndWaitForSingleObjectEx` until a 64-bit counter changes (TTT2 Web,
+`docs/ROADMAP.md`; its commit `05b4bf3` measured about 160 million kernel calls per 20 s on that thread in a port that
+runs the game, and only made such a wait block up to 1 ms, for speed). The owner's last watchdog tick (75 frames) holds
+1,157,843 signal-and-waits and 1,157,993 plain waits on thread 19: one of each per round, plus 150 waits outside the
+loop - two per frame, exactly the 150 per tick of thread 18, which starts at the same `sub_82AC2A30` and waits for its
+work in `sub_82AAD1C8`. Thread 19 leaves the loop and takes its work twice per frame, so the counter it waits for
+advances. The loop costs a host core; it does not hold the boot. No sleep, no signal and no change to the loop were
+added.
+
+The kernel semantics were checked against the console's and the reference ports'. `NtSignalAndWaitForSingleObjectEx`
+takes (signal handle r3, wait handle r4, WaitMode r5, Alertable r6, Timeout r7). The pinned SDK's entry
+(`src/kernel/xboxkrnl/xboxkrnl_threading.cpp`) declares r5 as the alertable flag and ignores r6, so a user-mode wait
+(WaitMode 1) is alertable in the runtime: a queued user APC would end it with `STATUS_USER_APC` where the console keeps
+waiting - and the runtime queues one to the reading thread for every `NtReadFile` with a completion routine. The host
+now hands the runtime the real flag (r6 into r5; `TTT2_SIGNAL_AND_WAIT_ALERTABLE=runtime` keeps the runtime's reading)
+and logs both values once per call site. The rest agrees with the console: the signal and the wait are one step
+(`XObject::SignalAndWait`), an auto-reset event releases one waiter and resets, a wait returns `STATUS_SUCCESS` or
+`STATUS_TIMEOUT`. One reporting error was found: the dumps called thread 19's synchronization event "notification event,
+not signaled", because the runtime zeroes the guest header of an object created by handle (`XObject::CreateNative`) and
+never writes it (`XEvent::Initialize` keeps the state host-side). The host now records each object's kind and initial
+state from its create call and every signal - who, from where, how often, from how many threads
+(`recomp/src/object_tracker.*`) - and the dumps describe objects from that.
+
+**The heap lock: 390 enters that are never left.** Threads 12 and 26 wait in the game's heap allocator
+(`sub_82BD67E0`): thread 26 is the loader (`sub_82A67BB0+0x80` ... `sub_82BC3CE8+0x70`), allocating for what it reads;
+thread 12 and thread 14 behind it are the audio engine's. The main thread holds the lock and keeps running its frame
+loop. The SDK's critical sections count correctly (8f), and the same 390 in two runs means the count is reached the same
+way during start-up, not by a loop that keeps entering. One class of mechanism produces exactly that, and the pinned SDK
+has it. ReXGlue ends a generated C++ function at the function's recorded extent (its `.pdata` length, a `[functions]`
+size, a gap-fill run); when the code goes on past that point, the generated function returns to its caller instead,
+silently, and whatever followed - a `RtlLeaveCriticalSection`, an epilogue - never runs. MSVC places code exactly there:
+the C runtime's heap functions take the heap lock inside `__try` and leave it in `__finally`, and a funclet's shared
+epilogue can sit behind a function boundary. TTT2 Web hit this in this game and fixed it in its recompiler (its
+XenonRecomp patch 0002: "A function boundary can split code that falls through: e.g. an SEH funclet whose shared
+epilogue ... Continue into the function that starts at the boundary instead of silently returning").
+`recomp/tests/ppc/falloff_ttt2.s` measures it on the pinned SDK: a function whose `.pdata` length ends right after it
+enters a critical section, called 5 times, leaves the section at recursion 5 with its owner set and the code after the
+boundary never run (results `5, 5, 1, 0`).
+
+`third_party/rexglue-patches/0001-fall-through.patch` continues where the CPU does: a jump to the label when the code
+that follows belongs to the same function, otherwise a call of the function that starts there followed by a return (a
+tail call: LR untouched, so that function returns to the original caller). An instruction falls through unless it is
+an unconditional branch without link, an unconditional `blr`/`bctr` or an unconditional trap - TTT2 Web's rule, except
+that a conditional trap here falls through, as it does on the CPU when its condition is false. With the patch,
+`falloff_ttt2.s` gives `5, 0, 0, 5` (the section free, all five rounds after the boundary run); the SDK's 1,458
+instruction tests generate identically. Every site is logged and marked in the generated code;
+`recomp/tools/codegen_report.py` counts them by the instruction before the boundary, and the owner pipeline stops when
+`rexglue` lacks a project patch (`-AllowUnpatchedSdk` to compare). A trailing call of a function that never returns on
+the console (a C++ throw, a bug check) also counts as a fall-through, because the runtime's `RtlRaiseException` for C++
+exceptions and `KeBugCheckEx` return; TTT2 Web's rule treats it the same, and the host now logs every such call (below).
+
+Whether the 390 come from such sites is not confirmed: the owner's image cannot be generated here. The next run shows
+it either way. The host records every enter and leave per thread (`recomp/src/lock_tracker.*`): the depth, the enters
+and leaves since the hold began, the call sites of the enters still open (with counts) and the guest stack at depths 1,
+2, 4, ... 1024; a dump prints them as `holds:` lines, and the triage names the holder, the threads waiting and the open
+enter sites. With the patch either no section stays held (the codegen report then lists the sites that were fixed) or
+the open enter sites name the functions to look at.
+
+**The frames: unknown draws, not zero draws.** D3D on the console writes each frame into its own command buffer and
+kicks its segments with `INDIRECT_BUFFER` packets placed in the primary ring; `VdSwap` gets a pointer into that buffer,
+not into the ring. The monitor read only the ring between swaps and found nothing there, and the triage turned that into
+"not one frame asked the GPU to draw". It now follows the command stream the way the GPU reads it (`07cc937`):
+`pm4::RingFollower` reads the ring from its last position up to the write pointer the game gave the GPU (`CP_RB_WPTR`,
+register `0x01C5` of the Xenos plugin's register file), follows the indirect buffers, and ends a frame at each
+`XE_SWAP` packet; a frame kicked in several stretches continues across samples. Without a GPU emulation (the test
+harness) the ring is read between swaps as before, and a frame that neither way can read is counted as not followed,
+with a warning naming the buffer. The activity line says how many frames were followed and how; the triage never
+concludes zero draws from frames it could not read.
+
+**Initialization and file loading.** The two reads came before the loader blocked on the heap lock; the main thread
+went on presenting frames. So the loader waits for memory, not for a file, an event or the GPU. The file trace now
+also logs the first 32 reads one by one (file, offset, length, bytes, the completion event or routine, call site,
+thread), the first writes and directory queries, and each distinct information class the game queries or sets with the
+runtime's answer; the triage names the last read and what its thread is doing in the last dump. The information
+classes differ between the runtime and the ports: the runtime's `NtQueryInformationFile` answers internal, position,
+sector, network-open and alignment information and refuses the rest - basic, standard (5), EA and mode among them -
+while TTT2Recomp, which runs the game to its menus, answers 4, 5, 6, 7, 14, 27 and 34 and any other class with success.
+Class 27 is the sector class for TTT2 Web, the mode class for TTT2Recomp and XCTD compression for the runtime, which
+refuses it with an error line the owner's logs never had: the game has not asked for it so far. Nothing is changed
+there until the log shows which classes the game uses.
+
+**The game's own calls that can end a boot quietly** are now logged with their call sites
+(`recomp/src/diag_overrides.cpp`): thread names (`SetThreadName` through `RtlRaiseException`, and whether a thread with
+that id exists), C++ throws with their type (the runtime cannot unwind, so the code after the throw runs next), other
+exceptions, debug breaks, bug checks, failed memory calls and queued APCs. Busy loops are shown by call site and objects
+("calls by site": export, call site, objects, count, failures, last status). The boot step now tells the triage that it
+closed the window on its timeout.
+
+**Measured with license-free programs.** `falloff_ttt2.s` (above); `wait_ttt2.s` now also checks the worker's hold with
+the call site of its open enter, the spinner's calls by site and object, its event described from the create call
+(millions of signals in a few seconds, all from its own thread), and the logged wait mode and alertable flag; `gpu_ttt2.s` has a fourth
+frame whose swap lies outside the ring (counted as not followed, its draws unknown), and the ring follower has three
+unit tests (indirect buffers, swaps, the ring's end, a frame over several samples, unreadable memory, register state
+across samples); `io_ttt2.s` checks the logged information class and read; 3 lock and object tracker unit tests (a
+390-deep leak with its open sites, balanced holds, object kinds and signals).
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source

@@ -2,6 +2,51 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-20 - Session 10: the third black-screen run - the heap lock, a codegen fall-through fix, frames followed by the GPU's write pointer
+
+**The owner's report (2026-10-20, `main` at `8cadd71`, the PR #17 host).** 180 s, the kernel clock running (180.1 s),
+10,674 frames and 10,676 controller polls, black and silent. 0 draws, resolves and clears counted, with every `VdSwap`
+buffer (`0xABDE07F0`) outside the 32 KB ring at `0x0BFE8000`; 2 file reads; `\Device\Image` answered `0xC0000034`; no
+stubs. Thread 19: about 329 million traced calls. Critical section `0x40000618` owned by the main thread at recursion
+390 (as before) with threads 12 and 26 waiting, 14 behind 12. The triage called the boot step's timeout a user close.
+
+**Completed** (`docs/RESEARCH.md` 8g)
+* **Thread 19 (diagnosed; nothing to fix in the loop).** `sub_82ABFDE8` signals its own auto-reset event and waits on it
+  until a 64-bit counter changes, as TTT2 Web documents (its port runs the game with the same loop). The owner's tick:
+  1,157,843 signal-and-waits, 1,157,993 waits - 150 waits outside the loop, two per frame, as thread 18: the loop ends
+  every frame. The SDK reads `NtSignalAndWaitForSingleObjectEx`'s WaitMode (r5) as its alertable flag (r6); the host
+  passes the real flag (`TTT2_SIGNAL_AND_WAIT_ALERTABLE=runtime` keeps the runtime's reading). No sleep or signal added.
+* **Codegen fall-through (`third_party/rexglue-patches/0001-fall-through.patch`).** ReXGlue ends a generated function at
+  its recorded extent and returns there when the code runs on; `recomp/tests/ppc/falloff_ttt2.s` shows a critical
+  section left held that way (recursion 5 after 5 calls). The patch continues into the code that follows (a goto, or a
+  tail call of the function there), TTT2 Web's recompiler fix for the same game. The codegen log names the patch, the
+  report counts the sites, and the owner pipeline stops on an SDK package without it. The most likely mechanism for
+  the 390-deep heap lock; not confirmed on the game yet.
+* **Frames followed as the GPU reads them (`recomp/src/pm4_stats.*`, `frame_monitor.cpp`).** D3D's frames live in its
+  own command buffer, kicked by indirect buffers in the ring; the monitor now follows the ring up to `CP_RB_WPTR` and
+  its indirect buffers, splits frames at `XE_SWAP`, and counts frames it cannot follow apart. The triage no longer
+  reports zero draws for frames it could not read.
+* **Lock and object diagnostics (`lock_tracker.*`, `object_tracker.*`, `wait_overrides.cpp`).** Per thread, every
+  critical section held: depth, enters and leaves since, the call sites of the open enters, the guest stack at depths
+  1, 2, 4, ... 1024 (`holds:` lines). Each object's real kind and initial state from its create call and its signals
+  (the runtime zeroes the guest header of handle-created objects). Busy loops by call site and object.
+* **The game's own calls (`diag_overrides.cpp`).** Thread names, C++ throws with their type, other exceptions, debug
+  breaks, bug checks, failed memory calls and queued APCs, each with its call site and thread.
+* **File loading (`io_overrides.cpp`).** The first 32 reads one by one (file, offset, length, bytes, completion event or
+  routine, call site, thread), the first writes and directory queries, and each information class queried or set with
+  the runtime's answer; the triage names the last read and what its thread does in the last dump.
+* **Triage.** All of the above; the held-lock recommendation names holder, waiters and open enter sites; `--closed-by`
+  (passed by `run-host.ps1`) reports a timeout close as such.
+* **Tests.** `falloff_ttt2.s` (`5, 0, 0, 5` patched, `5, 5, 1, 0` stock) in the smoke test; `gpu_ttt2.s` has a fourth frame
+  outside the ring; 3 ring-follower and 3 lock/object tracker doctest cases; 5 triage tests; the boot test checks the
+  hold, call-site, object and alertable lines (`--expect-waits`), the read and information-class lines
+  (`--expect-io`), the followed/not-followed frame summary (`--expect-gpu-frames`) and the new activity counters;
+  both workflows check that the boot step's triage names its timeout as the closer.
+* **Local runs (Linux, pinned SDK with patch 0001):** the smoke test with `--exec` (68 checks); the real host on
+  `imports_ttt2`, `io_ttt2`, `gpu_ttt2` and `wait_ttt2`; 100 Python tests; 86 doctest cases with Clang and GCC.
+
+**Not verified yet:** the owner's copy - whether the patched codegen frees the heap lock, and what the frames draw.
+
 ## 2026-10-20 - Session 9: the second black-screen run - a frozen kernel clock, missing names, frame and thread diagnostics
 
 **The owner's report (2026-10-20, `main` at `33f43c8`, the PR #16 host).** Codegen and the build as before (348
