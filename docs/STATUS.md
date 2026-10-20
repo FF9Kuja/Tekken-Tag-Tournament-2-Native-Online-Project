@@ -44,6 +44,17 @@ restart the pipeline every three rebuilds.
 * **Local runs:** the smoke test with `--exec` (39 checks, 5 new), 88 Python tests, 26 ctests on both Linux presets
   with warnings as errors, the loop test under PowerShell 7.4 (19 cases; 4 mutations of the loop each caught),
   hygiene.
+* **CI and workflows on the PR:** CI green on `8ecf61d` (push 39360683588, PR 39360688743: the loop test under
+  PowerShell 7 and Windows PowerShell 5.1, the new ctests on Linux and Windows); SDK validation on Linux 39359070186
+  (`eb9a439`; no code changed since): all 39 smoke checks with native execution; the Windows workflow with
+  `build_host` and `native_run` 39360689124: the smoke test with native execution on Windows, part 4 of the
+  boundary cycle (`tailcall_ttt2` from scratch with `--indirect`: no trap), and the owner pipeline end to end under
+  Windows PowerShell 5.1 on a test disc carrying `pointer_ttt2`. With `-NoIndirect`, run 1 trapped at
+  `cond_target`, run 2 at `over_target` after the loop's own rebuild, and run 3 ended cleanly (3 runs, 2 automatic
+  rebuilds); by default, step 6 registered both functions and the first run ended cleanly. The first Windows run
+  (39359073181) passed every report check of the `-NoIndirect` run and then failed its last one: a case-insensitive
+  `CRITICAL` match that the triage's `critical` log level satisfied; the check now looks for the pipeline's own
+  `CRITICAL:` line.
 
 **Not verified yet:** the owner's image: how many of the 695 carry a pointer in data, whether codegen accepts the
 batch, and how far the next boots get.
