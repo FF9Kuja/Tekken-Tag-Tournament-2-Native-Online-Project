@@ -530,6 +530,63 @@ class Triage(unittest.TestCase):
         self.assertIn("* thread name 'nuscMain' for thread id 6: thread id 6 is named so now", md)
         self.assertIn("  * holds: critical section 0x40000618 at depth 390", md)
 
+    def test_file_information_reads_writes_and_directory_queries(self):
+        # The loader's first calls with the new host: the information classes it asks for (one the runtime refuses),
+        # each of its two reads, a write and a directory query; the window closed by the boot step while it ran.
+        activity = ("ttt2: activity: files 2 opened, 0 failed (0 device paths); read 0.0 MB in 2 reads (0 failed); sector "
+                    "queries 0; missing names 0; threads created 27; gpu: engines initialized, ring buffer 0x0BFE8000, "
+                    "interrupt callback 0x82A3B4C0, vblanks 600; frames presented 300; audio clients 1, audio frames 0; "
+                    "input polls 300; traced kernel calls 104532")
+        lines = head(backend="xenos") + [
+            W(955, "ttt2: file opened: 'game:\\data\\pack.bin' (NtCreateFile, thread id 26)"),
+            W(955, "ttt2: file information: query class 34 (network open) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD100 (sub_82BCD0C0+0x40) on thread id 26"),
+            W(955, "ttt2: file information: query class 5 (standard) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0xC0000003 (STATUS_INVALID_INFO_CLASS) from 0x82BCD180 (sub_82BCD0C0+0xC0) on thread id 26"),
+            W(955, "ttt2: file information: set class 14 (position) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD200 (sub_82BCD0C0+0x140) on thread id 26"),
+            W(956, "ttt2: file read 1: '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' at 0x0 length 2048 -> 0x00000000 (STATUS_SUCCESS), 2048 bytes from 0x82BCD300 (sub_82BCD0C0+0x240) on thread id 26"),
+            W(956, "ttt2: file read 2: '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' at the current position length 4096 -> 0x00000103 (STATUS_PENDING), 4096 bytes; event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000) from 0x82BCD3A0 (sub_82BCD0C0+0x2E0) on nuscFile (id 27)"),
+            W(956, "ttt2: file write 1: '\\Device\\Harddisk0\\Partition1\\cache\\x.bin' at 0x0 length 16 -> 0x00000000 (STATUS_SUCCESS), 16 bytes from 0x82BCD400 (sub_82BCD0C0+0x340) on thread id 26"),
+            W(956, "ttt2: directory query 1: '\\Device\\Harddisk0\\Partition1\\data' for '*.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD500 (sub_82BCD0C0+0x440) on thread id 26"),
+            W(960, activity),
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, "ttt2: thread state at window close:"),
+            W(965, "ttt2:   nuscFile                         id 27     running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40000618 (owned by nuscMain (id 6), recursion 390), no timeout, for at least 170.0 s, called from 0x82BD6888 (sub_82BD67E0+0xA8)"),
+            W(965, "ttt2:     guest stack: 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BCD3C0 (sub_82BCD0C0+0x300)"),
+            W(966, "ttt2: main guest thread ended by the window close (id 6)"),
+        ]
+        t = MOD.triage(lines, {}, closed_by="the boot step's 180 s timeout")
+        fs = t["files"]
+        self.assertEqual([(i["what"], i["class"], i["status"]) for i in fs["info"]],
+                         [("query", 34, "0x00000000"), ("query", 5, "0xC0000003"), ("set", 14, "0x00000000")])
+        self.assertEqual([(r["n"], r["offset"], r["bytes"], r["thread"]) for r in fs["reads"]],
+                         [(1, "0x0", 2048, "thread id 26"), (2, "the current position", 4096, "nuscFile (id 27)")])
+        self.assertEqual(fs["reads"][1]["completion"],
+                         "event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000)")
+        self.assertEqual(fs["reads"][1]["caller"], "0x82BCD3A0 (sub_82BCD0C0+0x2E0)")
+        self.assertEqual((fs["writes"][0]["failed"], fs["writes"][0]["bytes"]), (False, 16))
+        self.assertEqual((fs["dir_queries"][0]["pattern"], fs["dir_queries"][0]["status"]), ("*.bin", "0x00000000"))
+        recs = t["recommendations"]
+        refused = [r for r in recs if r.startswith("The runtime refused 1 kind(s) of file information")]
+        self.assertEqual(len(refused), 1)
+        self.assertIn("query class 5 (standard) for \\Device\\Harddisk0\\Partition1\\data\\pack.bin -> 0xC0000003 "
+                      "STATUS_INVALID_INFO_CLASS from 0x82BCD180 (sub_82BCD0C0+0xC0) on thread id 26", refused[0])
+        self.assertIn("TTT2Recomp, which runs the game to its menus, answers class(es) 5", refused[0])
+        last = [r for r in recs if r.startswith("The game read 2 time(s) in all and every read is logged")]
+        self.assertEqual(len(last), 1)
+        self.assertIn("came from 0x82BCD3A0 (sub_82BCD0C0+0x2E0) on nuscFile (id 27)", last[0])
+        self.assertIn("; that thread, in the last dump: RtlEnterCriticalSection on critical section 0x40000618 (owned by "
+                      "nuscMain (id 6), recursion 390)", last[0])
+        self.assertIn("(guest stack 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BCD3C0 (sub_82BCD0C0+0x300)).", last[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("* information query class 5 (standard) for", md)
+        self.assertIn("4096 bytes; event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000) from", md)
+        self.assertIn("* directory query `\\Device\\Harddisk0\\Partition1\\data` for `*.bin` -> 0x00000000", md)
+        # A run that ended on its own does not get the "loader stopped" advice.
+        ended = [line for line in lines if "Window closing" not in line and "ended by the window close" not in line]
+        ended += [W(967, "ttt2: main guest thread exited (id 4)"), W(967, "ttt2: guest program ended; exiting with code 0")]
+        recs = MOD.triage(ended, {})["recommendations"]
+        self.assertFalse(any(r.startswith("The game read 2 time(s)") for r in recs))
+
     def test_parse_activity_without_gpu(self):
         a = MOD.parse_activity(
             "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "

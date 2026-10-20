@@ -68,6 +68,19 @@ RE_SECTOR = re.compile(r"ttt2: sector query: FileSectorInformation for '(.*)' an
 RE_ATTR_MISSING = re.compile(r"ttt2: file attributes missing: '(.*)' -> (0x[0-9A-Fa-f]+)")
 RE_READ_FAILED = re.compile(r"ttt2: file read failed: '(.*)' at (\S+) length (\d+) -> (0x[0-9A-Fa-f]+)")
 RE_DEVICE_CONTROL = re.compile(r"ttt2: device control (0x[0-9A-Fa-f]+) on '(.*)' -> (0x[0-9A-Fa-f]+)")
+RE_SITE = r"(0x[0-9A-Fa-f]{8}(?: \([^)]*\))?)"
+RE_FILE_INFO = re.compile(r"ttt2: file information: (query|set|volume query) class (\d+) \((.*?)\) for '(.*)' -> "
+                          r"(0x[0-9A-Fa-f]{8})(?: \(([A-Z_]+)\))? from " + RE_SITE + r" on (.*)$")
+RE_FILE_READ = re.compile(r"ttt2: file read (\d+): '(.*)' at (.+?) length (\d+) -> (0x[0-9A-Fa-f]{8})(?: \([A-Z_]+\))?, "
+                          r"(\d+) bytes(.*?) from " + RE_SITE + r" on ([^;]*)")
+RE_FILE_WRITE = re.compile(r"ttt2: file write (failure )?(\d+): '(.*)' at (.+?) length (\d+) -> (0x[0-9A-Fa-f]{8})"
+                           r"(?: \([A-Z_]+\))?, (\d+) bytes from " + RE_SITE + r" on (.*)$")
+RE_DIR_QUERY = re.compile(r"ttt2: directory query (\d+): '(.*)' for '(.*)' -> (0x[0-9A-Fa-f]{8})(?: \(([A-Z_]+)\))? from "
+                          + RE_SITE + r" on ([^;]*)")
+# Information classes the reference ports answer (recomp/src/io_overrides.cpp): TTT2Recomp answers these and any other
+# class with success; TTT2 Web answers 5, 14 and 34 and refuses 27, which it takes for the sector query.
+TTT2RECOMP_FILE_CLASSES = (4, 5, 6, 7, 14, 27, 34)
+REFUSED_STATUSES = {"0xC0000002", "0xC0000003", "0xC000000D"}  # not implemented, invalid class, invalid parameter
 RE_MILESTONE = re.compile(r"ttt2: (gpu|audio|input|xam): (.*)$")
 RE_THREAD_CREATED = re.compile(r"ttt2: thread created: id (\d+), start (0x[0-9A-Fa-f]+)(?: \((sub_[0-9A-Fa-f]+)\))?(.*)$")
 RE_OWNER_ID = re.compile(r"owned by (?:.*?\(id (\d+)\)|thread id (\d+))")
@@ -168,6 +181,11 @@ def parse_time(ts):
 def norm_hex(text):
     """0xABC form: the digits upper-case, the prefix lower-case (as the host prints guest addresses)."""
     return "0x" + text[2:].upper() if text.lower().startswith("0x") else text
+
+
+def norm_status(text):
+    """0xc0000003 -> 0xC0000003."""
+    return "0x" + text[2:].upper()
 
 
 def normalise(message):
@@ -290,7 +308,7 @@ def triage(lines, ttt2web=None, closed_by=None):
     activity = None
     traced_exports = None
     files = {"opened": [], "failed": [], "device_opens": [], "sector_first": None, "attributes_missing": [],
-             "read_failures": [], "device_controls": []}
+             "read_failures": [], "device_controls": [], "info": [], "reads": [], "writes": [], "dir_queries": []}
     milestones = []
     threads_created = []
     kernel_clock = None
@@ -417,6 +435,23 @@ def triage(lines, ttt2web=None, closed_by=None):
                                            "status": mm.group(4)})
         elif (mm := RE_DEVICE_CONTROL.search(msg)):
             files["device_controls"].append({"code": mm.group(1), "path": mm.group(2), "status": mm.group(3)})
+        elif (mm := RE_FILE_INFO.search(msg)):
+            files["info"].append({"time": ts, "what": mm.group(1), "class": int(mm.group(2)), "name": mm.group(3),
+                                  "path": mm.group(4), "status": norm_status(mm.group(5)), "status_name": mm.group(6),
+                                  "caller": mm.group(7), "thread": mm.group(8)})
+        elif (mm := RE_FILE_READ.search(msg)):
+            files["reads"].append({"time": ts, "n": int(mm.group(1)), "path": mm.group(2), "offset": mm.group(3),
+                                   "length": int(mm.group(4)), "status": norm_status(mm.group(5)),
+                                   "bytes": int(mm.group(6)), "completion": mm.group(7).lstrip("; "),
+                                   "caller": mm.group(8), "thread": mm.group(9).strip()})
+        elif (mm := RE_FILE_WRITE.search(msg)):
+            files["writes"].append({"time": ts, "failed": bool(mm.group(1)), "path": mm.group(3), "offset": mm.group(4),
+                                    "length": int(mm.group(5)), "status": norm_status(mm.group(6)),
+                                    "bytes": int(mm.group(7)), "caller": mm.group(8), "thread": mm.group(9)})
+        elif (mm := RE_DIR_QUERY.search(msg)):
+            files["dir_queries"].append({"time": ts, "path": mm.group(2), "pattern": mm.group(3),
+                                         "status": norm_status(mm.group(4)), "status_name": mm.group(5),
+                                         "caller": mm.group(6), "thread": mm.group(7).strip()})
         elif (mm := RE_THREAD_CREATED.search(msg)):
             threads_created.append({"time": ts, "id": int(mm.group(1)), "start": mm.group(2),
                                     "function": mm.group(3), "details": mm.group(4).strip()})
@@ -623,6 +658,34 @@ def triage(lines, ttt2web=None, closed_by=None):
         r = files["read_failures"][0]
         recommendations.append(f"File reads failed ({len(files['read_failures'])} logged), first: {r['path']} at {r['offset']} "
                                f"length {r['length']} -> {r['status']}.")
+    refused = [i for i in files["info"] if i["status"] in REFUSED_STATUSES]
+    if refused:
+        shown = "; ".join(f"{i['what']} class {i['class']} ({i['name']}) for {i['path']} -> {i['status']}"
+                          f"{' ' + i['status_name'] if i['status_name'] else ''} from {i['caller']} on {i['thread']}"
+                          for i in refused[:6])
+        answered = sorted({i["class"] for i in refused if i["what"] == "query" and i["class"] in TTT2RECOMP_FILE_CLASSES})
+        text = (f"The runtime refused {len(refused)} kind(s) of file information the game asked for or set: {shown}.")
+        if answered:
+            text += (f" TTT2Recomp, which runs the game to its menus, answers class(es) {', '.join(map(str, answered))} "
+                     "(and any other class with success): a refused class the loader depends on can stop it before it "
+                     "reads; compare with the reads logged after it.")
+        recommendations.append(text)
+    if (activity and files["reads"] and activity.get("reads", 0) <= len(files["reads"])
+            and (stalls or ended_by_close)):
+        last = files["reads"][-1]
+        text = (f"The game read {activity.get('reads')} time(s) in all and every read is logged: the last one, "
+                f"{last['path']} at {last['offset']} length {last['length']} ({last['bytes']} bytes, {last['status']}), "
+                f"came from {last['caller']} on {last['thread']} at {last['time']}. The loader stopped after it")
+        reader = re.search(r"id (\d+)\)?$", last["thread"])
+        now = next((th for th in (last_dump or {}).get("threads", []) if reader and th["id"] == int(reader.group(1))), None)
+        if now and now.get("wait"):
+            text += f"; that thread, in the last dump: {now['wait']}"
+            if now.get("stack"):
+                text += f" (guest stack {now['stack']})"
+            text += "."
+        else:
+            text += ": see what that thread waits on in the per-thread dump."
+        recommendations.append(text)
     if activity:
         presented = activity.get("frames_presented", 0)
         if presented == 0:
@@ -938,7 +1001,8 @@ def render_markdown(t, source):
                   f"| Traced kernel calls | {a.get('traced_calls', '?')}"
                   + (f" (through {t['traced_exports']} wrapped exports)" if t.get("traced_exports") else "") + " |", ""]
     fs = t.get("files") or {}
-    if fs.get("failed") or fs.get("device_opens") or fs.get("opened") or fs.get("sector_first"):
+    if (fs.get("failed") or fs.get("device_opens") or fs.get("opened") or fs.get("sector_first") or fs.get("reads")
+            or fs.get("info") or fs.get("writes") or fs.get("dir_queries")):
         lines += ["## File access", ""]
         if fs.get("sector_first"):
             lines.append(f"* Disc sector queries answered as unsupported, first for `{fs['sector_first']['path']}` "
@@ -959,6 +1023,19 @@ def render_markdown(t, source):
         if fs.get("opened"):
             lines.append(f"* {len(fs['opened'])} distinct paths opened (logged), first: "
                          + ", ".join(f"`{o['path']}`" for o in fs["opened"][:8]))
+        for i in fs.get("info", [])[:48]:
+            lines.append(f"* information {i['what']} class {i['class']} ({i['name']}) for `{i['path']}` -> {i['status']}"
+                         f"{' ' + i['status_name'] if i['status_name'] else ''} from {i['caller']} on {i['thread']}")
+        for r in fs.get("reads", [])[:32]:
+            lines.append(f"* read {r['n']} at `{r['time']}`: `{r['path']}` at {r['offset']} length {r['length']} -> "
+                         f"{r['status']}, {r['bytes']} bytes{'; ' + r['completion'] if r['completion'] else ''} "
+                         f"from {r['caller']} on {r['thread']}")
+        for w in fs.get("writes", [])[:16]:
+            lines.append(f"* write{' failed' if w['failed'] else ''}: `{w['path']}` at {w['offset']} length {w['length']} "
+                         f"-> {w['status']}, {w['bytes']} bytes from {w['caller']} on {w['thread']}")
+        for d in fs.get("dir_queries", [])[:16]:
+            lines.append(f"* directory query `{d['path']}` for `{d['pattern']}` -> {d['status']}"
+                         f"{' ' + d['status_name'] if d['status_name'] else ''} from {d['caller']} on {d['thread']}")
         lines.append("")
     if t.get("milestones"):
         lines += ["## Milestones (GPU, audio, input, system dialogs)", ""]

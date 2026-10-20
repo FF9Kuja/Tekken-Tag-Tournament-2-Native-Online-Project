@@ -100,6 +100,8 @@ jobs:
           # dump; the host must exit 0 and the triage report the stall and the close.
           DISPLAY=:97 SDL_AUDIO_DRIVER=dummy TTT2_WATCHDOG_MS=1000 pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host-stall -TimeoutSeconds 8 -NoGpu
           grep -q '^\*\*stall: .*closed afterwards\*\*' out/run-host-stall/boot-triage.md
+          # The boot step closed the window on its timeout, not a person: the triage must say so.
+          grep -q "window closed by the boot step's 8 s timeout" out/run-host-stall/boot-triage.md
           # The same host rebuilt on a deliberate deadlock (recomp/tests/ppc/wait_ttt2.s): the boot monitor's stall dump
           # must name both waits (a critical section with its owner, an unsignaled event), their guest call sites and
           # stacks, and the worker's creation; the boot step's triage must then report the wait chain.

@@ -232,6 +232,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
           $md = Get-Content out\run-host-stall\boot-triage.md -Raw
           if ($md -notmatch "\*\*stall: .*closed afterwards\*\*") { throw "the triage did not report the stall and the close" }
+          # The boot step closed the window on its timeout, not a person: the triage must say so.
+          if ($md -notmatch "window closed by the boot step's 8 s timeout") { throw "the triage did not name the timeout as the closer: $md" }
           Get-Content out\run-host-stall\boot-report.txt
       - name: Boot ttt2.exe on a deliberate deadlock (the boot monitor's stall dump)
         # The same host rebuilt on recomp/tests/ppc/wait_ttt2.s: two threads deadlocked on a critical section and an

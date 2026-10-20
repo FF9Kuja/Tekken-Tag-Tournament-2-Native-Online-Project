@@ -211,6 +211,10 @@ else
         "the activity line counts the game's exceptions, APCs, memory call failures and debug breaks"
     if [ "$expect_io" = 1 ]; then
         check "ttt2: file opened: 'game:.io_data.bin'" "the file open was traced"
+        check "ttt2: file information: query class 34 (network open) for '.*io_data.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) on " \
+            "the information class the program queried was logged with the runtime's answer"
+        check "ttt2: file read 1: '.*io_data.bin' at 0x0 length 8 -> 0x00000000 (STATUS_SUCCESS), 8 bytes from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) on " \
+            "the first read was logged with its file, offset, length, bytes and call site"
         check "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "the sector query was answered as unsupported"
         check "ResolvePath(.Device) failed - device not found" "the bare device open produced the runtime's line from the owner's log"
         check "ttt2: the game opened '.Device.Image', a device itself" "the host explained the device open"

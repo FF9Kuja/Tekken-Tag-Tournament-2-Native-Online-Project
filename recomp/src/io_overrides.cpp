@@ -27,6 +27,15 @@
 // \Device is not a mount. Every open and read now feeds the boot monitor (counts, the recent events
 // for the stall dump) and the log: each distinct path that opens, each distinct failure with its
 // NTSTATUS, caller and thread (the first 64 of each), the first read failures and device controls.
+//
+// What the loader does next. The owner's runs read twice in 180 s, so the first reads are logged one by
+// one (path, offset, length, bytes, the completion event or routine, call site and thread), with the first
+// writes and directory queries. The information classes the game queries or sets are logged once per
+// class and status: the runtime implements only some (NtQueryInformationFile: internal, position, sector,
+// network open and alignment answer; basic, mode, name, allocation and I/O priority fail with
+// STATUS_INVALID_PARAMETER, every other class with STATUS_INVALID_INFO_CLASS, standard (5) among them),
+// while TTT2Recomp, which runs the game to its menus, answers 4, 5, 6, 7, 14, 27 and 34 and any other
+// class with success. The log shows which of them the game relies on before anything is changed.
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
@@ -41,6 +50,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <iterator>
 #include <set>
 #include <string>
 #include <string_view>
@@ -64,6 +74,11 @@ constexpr std::uint32_t kObDosDevices = 0xFFFFFFFD;  // OBJECT_ATTRIBUTES.RootDi
 constexpr std::size_t kMaxLoggedPaths = 64;
 constexpr std::uint64_t kMaxLoggedReadFailures = 16;
 constexpr std::uint64_t kMaxLoggedDeviceControls = 16;
+constexpr std::uint64_t kMaxLoggedReads = 32;
+constexpr std::uint64_t kMaxLoggedWrites = 8;
+constexpr std::uint64_t kMaxLoggedWriteFailures = 16;
+constexpr std::uint64_t kMaxLoggedDirectoryQueries = 16;
+constexpr std::size_t kMaxLoggedClassAnswers = 48;
 
 bool Succeeded(std::uint32_t status) {
   return (status & 0x80000000u) == 0;
@@ -236,6 +251,79 @@ void NoteOpen(const char* api, const std::string& path, std::uint32_t status, st
   }
 }
 
+// The runtime's names of the file information classes (X_FILE_INFORMATION_CLASS, its numbering; TTT2 Web
+// calls 27 the sector class and TTT2Recomp the mode class, so the log gives the number first).
+const char* FileInfoClassName(std::uint32_t info_class) {
+  static constexpr const char* kNames[] = {
+      "",          "directory",        "full directory",  "both directory",  "basic",          "standard",
+      "internal",  "EA",               "access",          "name",            "rename",         "link",
+      "names",     "disposition",      "position",        "full EA",         "mode",           "alignment",
+      "all",       "allocation",       "end of file",     "alternate name",  "stream",         "mount partition",
+      "mount partitions", "pipe remote", "sector",        "XCTD compression", "compression",   "object id",
+      "completion", "move cluster",    "I/O priority",    "reparse point",   "network open",   "attribute tag",
+      "tracking"};
+  return info_class < std::size(kNames) && *kNames[info_class] ? kNames[info_class] : "unknown";
+}
+
+// X_FILE_FS_INFORMATION_CLASS.
+const char* VolumeInfoClassName(std::uint32_t info_class) {
+  switch (info_class) {
+    case 1: return "volume";
+    case 2: return "label";
+    case 3: return "size";
+    case 4: return "device";
+    case 5: return "attribute";
+    case 6: return "control";
+    case 7: return "full size";
+    case 8: return "object id";
+    default: return "unknown";
+  }
+}
+
+/// Logs the first answer of each (call, class, status): which information the game asks for or sets and
+/// whether the runtime gives it (at most kMaxLoggedClassAnswers lines in all).
+void NoteClassAnswer(const char* what, std::uint32_t info_class, const char* class_name, const std::string& path,
+                     std::uint32_t status, std::uint32_t lr) {
+  static std::mutex mutex;
+  static std::set<std::string> seen;
+  static bool full_noted = false;
+  const std::string key = fmt::format("{}|{}|{:08X}", what, info_class, status);
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (seen.count(key)) return;
+    if (seen.size() >= kMaxLoggedClassAnswers) {
+      if (!full_noted) {
+        full_noted = true;
+        REXLOG_INFO("ttt2: file information: {} distinct answers logged; further ones are not", kMaxLoggedClassAnswers);
+      }
+      return;
+    }
+    seen.insert(key);
+  }
+  REXLOG_INFO("ttt2: file information: {} class {} ({}) for '{}' -> {} from {} on {}", what, info_class, class_name,
+              path, FormatStatus(status), ttt2::monitor::DescribeGuestAddress(lr),
+              ttt2::monitor::CurrentThreadLabel());
+}
+
+std::string FormatOffset(std::uint32_t offset_ptr) {
+  if (!offset_ptr) return "the current position";
+  const std::uint64_t offset = (std::uint64_t(LoadU32(offset_ptr)) << 32) | LoadU32(offset_ptr + 4);
+  // -2 (FILE_USE_FILE_POINTER_POSITION) and -1 (FILE_WRITE_TO_END_OF_FILE) are not offsets.
+  if (offset == 0xFFFFFFFFFFFFFFFEull) return "the current position";
+  if (offset == 0xFFFFFFFFFFFFFFFFull) return "the end of the file";
+  return fmt::format("0x{:X}", offset);
+}
+
+/// "; event 0x..., completion routine 0x... (context 0x...)" for an I/O call that names them, else "".
+std::string FormatCompletion(std::uint32_t event, std::uint32_t apc_routine, std::uint32_t apc_context) {
+  std::string out;
+  if (event) out += fmt::format("; event 0x{:08X}", event);
+  if (apc_routine & ~1u) {
+    out += fmt::format("; completion routine 0x{:08X} (context 0x{:08X})", apc_routine & ~1u, apc_context);
+  }
+  return out;
+}
+
 }  // namespace
 
 // NtQueryInformationFile(handle r3, io_status_block r4, info r5, length r6, class r7).
@@ -260,6 +348,7 @@ TTT2_WRAPPED_EXPORT(NtQueryInformationFile) {
     }
   }
   TTT2_RUNTIME_ORIGINAL(NtQueryInformationFile)(ctx, base);
+  NoteClassAnswer("query", info_class, FileInfoClassName(info_class), HandlePath(handle), ctx.r3.u32, lr);
 }
 
 namespace {
@@ -323,28 +412,97 @@ TTT2_WRAPPED_EXPORT(NtReadFile) {
   const auto lr = static_cast<std::uint32_t>(ctx.lr);
   ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtReadFile), lr);
   const std::uint32_t handle = ctx.r3.u32;
+  const std::uint32_t event = ctx.r4.u32;
+  const std::uint32_t apc_routine = ctx.r5.u32;
+  const std::uint32_t apc_context = ctx.r6.u32;
   const std::uint32_t io_status_block = ctx.r7.u32;
   const std::uint32_t length = ctx.r9.u32;
   const std::uint32_t offset_ptr = ctx.r10.u32;
+  const std::string offset = FormatOffset(offset_ptr);  // before the call: the runtime may move the position
   TTT2_RUNTIME_ORIGINAL(NtReadFile)(ctx, base);
   const std::uint32_t status = ctx.r3.u32;
   auto& c = counters();
   if (Succeeded(status) || status == kStatusEndOfFile) {
-    c.reads.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t reads = c.reads.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uint32_t bytes = 0;
     if (io_status_block && (status == 0 || status == kStatusPending)) {
-      c.bytes_read.fetch_add(LoadU32(io_status_block + 4), std::memory_order_relaxed);
+      bytes = LoadU32(io_status_block + 4);
+      c.bytes_read.fetch_add(bytes, std::memory_order_relaxed);
+    }
+    if (reads <= kMaxLoggedReads) {
+      REXLOG_INFO("ttt2: file read {}: '{}' at {} length {} -> {}, {} bytes{} from {} on {}{}", reads, HandlePath(handle),
+                  offset, length, FormatStatus(status), bytes, FormatCompletion(event, apc_routine, apc_context),
+                  ttt2::monitor::DescribeGuestAddress(lr), ttt2::monitor::CurrentThreadLabel(),
+                  reads == kMaxLoggedReads ? "; further reads are only counted" : "");
     }
     return;
   }
   const std::uint64_t failures = c.read_failures.fetch_add(1, std::memory_order_relaxed) + 1;
   if (failures <= kMaxLoggedReadFailures) {
-    const std::string offset =
-        offset_ptr ? fmt::format("0x{:X}", (std::uint64_t(LoadU32(offset_ptr)) << 32) | LoadU32(offset_ptr + 4))
-                   : std::string("current position");
     REXLOG_INFO("ttt2: file read failed: '{}' at {} length {} -> {} ({}, from {}){}", HandlePath(handle), offset,
                 length, FormatStatus(status), ttt2::monitor::CurrentThreadLabel(),
                 ttt2::monitor::DescribeGuestAddress(lr),
                 failures == kMaxLoggedReadFailures ? "; further read failures are only counted" : "");
+  }
+}
+
+// NtWriteFile(handle r3, event r4, apc routine r5, apc context r6, io_status_block r7, buffer r8,
+//             length r9, byte offset pointer r10).
+TTT2_WRAPPED_EXPORT(NtWriteFile) {
+  const auto lr = static_cast<std::uint32_t>(ctx.lr);
+  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtWriteFile), lr);
+  const std::uint32_t handle = ctx.r3.u32;
+  const std::uint32_t io_status_block = ctx.r7.u32;
+  const std::uint32_t length = ctx.r9.u32;
+  const std::string offset = FormatOffset(ctx.r10.u32);
+  TTT2_RUNTIME_ORIGINAL(NtWriteFile)(ctx, base);
+  const std::uint32_t status = ctx.r3.u32;
+  static std::atomic<std::uint64_t> writes{0};
+  static std::atomic<std::uint64_t> failures{0};
+  const bool ok = Succeeded(status);
+  const std::uint64_t n = (ok ? writes : failures).fetch_add(1, std::memory_order_relaxed) + 1;
+  if (n > (ok ? kMaxLoggedWrites : kMaxLoggedWriteFailures)) return;
+  const std::uint32_t bytes = ok && io_status_block ? LoadU32(io_status_block + 4) : 0;
+  REXLOG_INFO("ttt2: file write {}{}: '{}' at {} length {} -> {}, {} bytes from {} on {}", ok ? "" : "failure ", n,
+              HandlePath(handle), offset, length, FormatStatus(status), bytes, ttt2::monitor::DescribeGuestAddress(lr),
+              ttt2::monitor::CurrentThreadLabel());
+}
+
+// NtSetInformationFile(handle r3, io_status_block r4, info r5, length r6, class r7).
+TTT2_WRAPPED_EXPORT(NtSetInformationFile) {
+  const auto lr = static_cast<std::uint32_t>(ctx.lr);
+  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtSetInformationFile), lr);
+  const std::uint32_t handle = ctx.r3.u32;
+  const std::uint32_t info_class = ctx.r7.u32;
+  TTT2_RUNTIME_ORIGINAL(NtSetInformationFile)(ctx, base);
+  NoteClassAnswer("set", info_class, FileInfoClassName(info_class), HandlePath(handle), ctx.r3.u32, lr);
+}
+
+// NtQueryVolumeInformationFile(handle r3, io_status_block r4, info r5, length r6, class r7).
+TTT2_WRAPPED_EXPORT(NtQueryVolumeInformationFile) {
+  const auto lr = static_cast<std::uint32_t>(ctx.lr);
+  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtQueryVolumeInformationFile), lr);
+  const std::uint32_t handle = ctx.r3.u32;
+  const std::uint32_t info_class = ctx.r7.u32;
+  TTT2_RUNTIME_ORIGINAL(NtQueryVolumeInformationFile)(ctx, base);
+  NoteClassAnswer("volume query", info_class, VolumeInfoClassName(info_class), HandlePath(handle), ctx.r3.u32, lr);
+}
+
+// NtQueryDirectoryFile(handle r3, event r4, apc routine r5, apc context r6, io_status_block r7, info r8,
+//                      length r9, file name pattern (ANSI_STRING) r10, restart scan on the stack).
+TTT2_WRAPPED_EXPORT(NtQueryDirectoryFile) {
+  const auto lr = static_cast<std::uint32_t>(ctx.lr);
+  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtQueryDirectoryFile), lr);
+  const std::uint32_t handle = ctx.r3.u32;
+  const std::string pattern = ctx.r10.u32 ? ReadAnsiString(ctx.r10.u32) : std::string();
+  TTT2_RUNTIME_ORIGINAL(NtQueryDirectoryFile)(ctx, base);
+  static std::atomic<std::uint64_t> logged{0};
+  const std::uint64_t n = logged.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (n <= kMaxLoggedDirectoryQueries) {
+    REXLOG_INFO("ttt2: directory query {}: '{}' for '{}' -> {} from {} on {}{}", n, HandlePath(handle),
+                pattern.empty() ? std::string("*") : pattern, FormatStatus(ctx.r3.u32),
+                ttt2::monitor::DescribeGuestAddress(lr), ttt2::monitor::CurrentThreadLabel(),
+                n == kMaxLoggedDirectoryQueries ? "; further directory queries are not logged" : "");
   }
 }
 
