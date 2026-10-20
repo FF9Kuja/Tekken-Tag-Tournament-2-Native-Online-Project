@@ -176,6 +176,23 @@ if(TARGET ttt2-validate)
             "-DEXPECT_FILES=${_fx}/extracted/default.xex|${_fx}/extracted/readme.txt|${_fx}/extracted/data/table.bin"
             -P "${_run_expect}")
         set_tests_properties(iso_extract_all_synthetic PROPERTIES FIXTURES_REQUIRED validate_inputs)
+
+        # The disc writer the SDK workflow packs a test program with, to run the owner's whole pipeline on it
+        # (scripts/owner-pipeline.ps1 with -ExtractGame -Boot); the disc it writes must read back with ttt2-iso.
+        add_executable(ttt2_make_test_iso tools/make_test_iso.cpp)
+        target_link_libraries(ttt2_make_test_iso PRIVATE ttt2::core)
+        target_include_directories(ttt2_make_test_iso PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        ttt2_apply_warnings(ttt2_make_test_iso)
+        add_test(NAME test_iso_write COMMAND ttt2_make_test_iso "${_fx}/made.iso"
+            "default.xex=${_fx}/retail.xex" "data/notes.txt=${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt")
+        set_tests_properties(test_iso_write PROPERTIES FIXTURES_REQUIRED validate_inputs FIXTURES_SETUP made_iso)
+        add_test(NAME test_iso_reads_back COMMAND "${CMAKE_COMMAND}"
+            "-DCMD=$<TARGET_FILE:ttt2-iso>|extract-all|${_fx}/made.iso|${_fx}/made-extracted"
+            -DEXPECT_RC=0
+            "-DEXPECT_RE=extracted 2 files \\([0-9]+ bytes\\) in 1 directories"
+            "-DEXPECT_FILES=${_fx}/made-extracted/default.xex|${_fx}/made-extracted/data/notes.txt"
+            -P "${_run_expect}")
+        set_tests_properties(test_iso_reads_back PROPERTIES FIXTURES_REQUIRED made_iso)
     endif()
     # The title update's files extracted with their folders: the host's update: root (owner pipeline step 8).
     if(TARGET ttt2-stfs)

@@ -37,10 +37,28 @@ host's logs becomes an entry when the image has code there and the reference lis
 starting at X; an X inside a reference function is an indirect jump into a function's middle (a jump
 table the finder did not recognise, for instance) and is reported, never turned into an entry.
 
+`codegen --indirect` finds those functions before the game calls them, so a boot does not have to trap
+on each one (one rebuild per trap). After a successful codegen it reads the functions ReXGlue
+registered (the generated *_register.cpp) and considers every reference function missing there. One is
+registered ahead of time only with evidence from the image itself: a 4-aligned word in one of its data
+sections (not code, .pdata or .reloc) holds its address, the rule TTT2 Web's table was derived with for
+vtables and callbacks; and the code checks pass: the image has code there, the instruction before it
+cannot fall through into it, it lies inside no .pdata function (exception-handler labels) and is no
+switch case label (--switch-json, the finder's report), its reference extent is plain code ending in a
+branch or return, and ReXGlue registered nothing inside that extent. A reference function no data word
+points at is never registered this way. The verified ones go in as one batch of entries (marked "ahead
+of time") and codegen runs again. If it then fails in a way the error resolution cannot fix, the batch
+entries the errors point into are taken out, listed in the output file so later runs skip them, and
+codegen reruns; if that does not help, the whole batch is rolled back to the entries that compiled
+before, and codegen reruns on those. After the final successful round every entry of the output file
+must be registered in the generated code; the report names any that is not. `--drop-indirect` removes
+the ahead-of-time entries and keeps every other one.
+
     python -I recomp/tools/resolve_functions.py codegen --rexglue <rexglue> --manifest recomp/ttt2_manifest.toml
         --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml
         [--reference recomp/ttt2_functions.ttt2web.toml] [--log codegen.log] [--report REPORT.md]
         [--json report.json] [--rounds 8] [--ignore-stamp] [--log-level debug]
+        [--indirect --switch-json switch_tables.json | --drop-indirect]
     python -I recomp/tools/resolve_functions.py verify --image <plain.xex> --log <codegen.log>
         [--reference ...] [--out ...] [--report ...] [--json ...]
     python -I recomp/tools/resolve_functions.py boot --image <plain.xex> --boot-log <host log> [--boot-log ...]
@@ -52,6 +70,9 @@ Exit codes: 0 codegen succeeded (`codegen`) / every unresolved call or called ad
 (unverified, no progress or round limit); 2 bad input.
 """
 import argparse
+import array
+import bisect
+import glob
 import hashlib
 import importlib.util
 import json
@@ -305,6 +326,10 @@ def hx(v):
     return f"0x{v:08X}"
 
 
+def plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
 def decide(err, image, ref):
     """Verified entry for one UnresolvedCall error, or the reason it cannot be verified."""
     t, s = err["target"], err["site"]
@@ -429,16 +454,175 @@ def build_reference(image, reference_path, log_helpers):
     return (ref if (status["applies"] or pdata) else None), status
 
 
+# ---------------------------------------------------------------------------- ahead of time: functions a pointer reaches
+
+POINTER_SKIP = (".pdata", ".reloc")       # exception directory and relocations: no function pointers
+_WORD = next(t for t in "IL" if array.array(t).itemsize == 4)
+RE_OUT_DIR = re.compile(r'^\s*out_directory_path\s*=\s*"([^"]*)"', re.M)
+RE_SET_FUNCTION = re.compile(r"SetFunction\(0x([0-9A-Fa-f]+),")
+INDIRECT_REASONS = {     # reason key -> heading in the report, in the order the checks run
+    "excluded": "taken out in an earlier run (codegen failed with it)",
+    "no-pointer": "no pointer to it in the image's data: no evidence, not registered",
+    "not-code": "no code at the address",
+    "extent": "its reference extent is not plain code ending in a branch or return",
+    "fallthrough": "the instruction before it falls through into it",
+    "pdata": "inside a .pdata function (exception-handler label or other code of that function)",
+    "switch-label": "a switch case label",
+    "overlap": "ReXGlue registered a function inside its reference extent",
+    "conflict": "conflicts with an entry of the output file",
+}
+
+
+def manifest_out_dir(manifest):
+    """The directory a ReXGlue manifest's codegen writes to (its out_directory_path, relative to it)."""
+    with open(manifest, encoding="utf-8", errors="replace") as f:
+        m = RE_OUT_DIR.search(f.read())
+    rel = m.group(1) if m else "generated/default"
+    return os.path.join(os.path.dirname(os.path.abspath(manifest)), *rel.replace("\\", "/").split("/"))
+
+
+def registered_functions(gen_dir):
+    """Every function address the generated code registers (its *_register.cpp), or None without one."""
+    files = sorted(glob.glob(os.path.join(gen_dir, "*_register.cpp")))
+    if not files:
+        return None
+    reg = set()
+    for path in files:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            reg.update(int(m.group(1), 16) for m in RE_SET_FUNCTION.finditer(f.read()))
+    return reg
+
+
+def switch_labels(path):
+    """{case label: its bctr} of every table in a find_switch_tables.py --json report."""
+    with open(path, encoding="utf-8") as f:
+        report = json.load(f)
+    labels = {}
+    for t in report.get("tables", []):
+        for label in t.get("labels", []):
+            labels.setdefault(int(label, 16), int(t["bctr"], 16))
+    return labels
+
+
+def pointer_sites(image, targets):
+    """{target: [(site, section)]}: the 4-aligned words of the image's data sections (every section that is
+    not executable, .pdata or .reloc) that hold one of `targets`. Code is not searched: an instruction word
+    can equal a code address (0x82D6FC78 decodes as lwz r22,-904(r22))."""
+    targets = set(targets)
+    found = {}
+    if not targets:
+        return found
+    for name, lo, hi, executable in image.sections:
+        if executable or name in POINTER_SKIP:
+            continue
+        start = (max(lo, image.base) + 3) & ~3
+        end = min(hi, image.base + len(image.pe)) & ~3
+        if end <= start:
+            continue
+        words = array.array(_WORD, image.pe[start - image.base:end - image.base])
+        if sys.byteorder == "little":
+            words.byteswap()
+        hits = targets.intersection(words)
+        if not hits:
+            continue
+        for i, w in enumerate(words):
+            if w in hits:
+                found.setdefault(w, []).append((start + 4 * i, name))
+    return found
+
+
+def _indirect_check(image, t, size, ptrs, reg, pdata, pstarts, labels, excluded):
+    """(reason key, evidence) of the first check reference function `t` fails, or (None, None)."""
+    if t in excluded:
+        return "excluded", f"taken out in an earlier run: {excluded[t]}"
+    if not ptrs:
+        return "no-pointer", "no 4-aligned word in the image's data sections holds its address"
+    w = image.word(t)
+    if w is None or not image.in_code(t) or w in (0, 0xFFFFFFFF):
+        return "not-code", f"the image has no code at {hx(t)}"
+    end = t + max(size, 4)
+    section = next(((lo, hi) for lo, hi in image.code if lo <= t < hi), None)
+    if section is None or end > section[1]:
+        return "extent", f"its reference extent {hx(t)}+0x{size:X} leaves the code section"
+    for a in range(t, end, 4):
+        if image.word(a) in (0, None):
+            return "extent", f"its reference extent {hx(t)}+0x{size:X} holds a zero word at {hx(a)}"
+    if falls_through(image.word(end - 4)):
+        return "extent", (f"its reference extent {hx(t)}+0x{size:X} ends at {hx(end - 4)} with an instruction that "
+                          "falls through (into the next function)")
+    prev = image.word(t - 4) if image.in_code(t - 4) else None
+    if falls_through(prev):
+        return "fallthrough", (f"the instruction before it ({hx(t - 4)}: 0x{prev:08X}) falls through into it: a "
+                               "point inside a function, not an entry")
+    k = bisect.bisect_right(pstarts, t) - 1
+    if k >= 0 and pdata[k][0] < t < pdata[k][0] + pdata[k][1]:
+        return "pdata", f"it lies inside the .pdata function {hx(pdata[k][0])}+0x{pdata[k][1]:X}"
+    if t in labels:
+        return "switch-label", f"it is a case label of the switch at {hx(labels[t])}"
+    i = bisect.bisect_right(reg, t)
+    if i < len(reg) and reg[i] < end:
+        return "overlap", f"ReXGlue registered {hx(reg[i])} inside its reference extent: the boundaries disagree"
+    return None, None
+
+
+def decide_indirect(image, ref, registered, labels, entries, excluded):
+    """Decisions for every reference function ReXGlue did not register (and no entry names yet): an entry
+    ahead of time when a data word points at it and the code checks pass, otherwise the reason."""
+    reg = sorted(registered)
+    pdata = sorted(image.pdata())
+    pstarts = [b for b, _ in pdata]
+    candidates = [s for s in ref.starts if s not in registered and s not in entries]
+    sites = pointer_sites(image, candidates)
+    decisions = []
+    for t in candidates:
+        size, source = ref.funcs[t]
+        out = {"target": t, "site": None, "mnemonic": "pointer", "function": None, "kind": "pointer",
+               "instruction": "pointer in data", "reference_size": size}
+        ptrs = sites.get(t, [])
+        reason, why = _indirect_check(image, t, size, ptrs, reg, pdata, pstarts, labels, excluded)
+        if reason:
+            decisions.append({**out, "decision": "unverified", "reason": reason, "evidence": why})
+            continue
+        site, section = ptrs[0]
+        origin = f"pointer at {hx(site)} ({section})" + (f" and {len(ptrs) - 1} more" if len(ptrs) > 1 else "")
+        decisions.append({**out, "decision": "entry", "entry": t, "size": 0, "origin": origin, "reason": "registered",
+                          "pointers": [p for p, _ in ptrs[:16]],
+                          "evidence": f"{origin}; the {source} lists a function starting at {hx(t)} "
+                                      f"(size 0x{size:X}); the code checks pass"})
+    return decisions
+
+
+def error_addresses(parsed):
+    """Every address the analysis errors of a codegen log name (targets and branch sites)."""
+    out = set()
+    for errs in parsed["errors"].values():
+        for e in errs:
+            out.add(e["address"])
+            if e.get("from") is not None:
+                out.add(e["from"])
+    return out
+
+
 # ---------------------------------------------------------------------------- the output file
 
 HEADER = """# Function boundaries the pinned ReXGlue analysis misses on this image, added by
-# recomp/tools/resolve_functions.py. Each entry was verified before it was added: the branch the
-# codegen log names was decoded from the image, and a boundary reference (TTT2 Web's published
-# table when its helper fingerprint matches, and the image's .pdata) agrees; the comment after each
-# entry gives the evidence. Addresses and sizes only. Valid only for the image with this SHA-1:
+# recomp/tools/resolve_functions.py. Each entry was verified before it was added: a boundary
+# reference (TTT2 Web's published table when its helper fingerprint matches, and the image's .pdata)
+# agrees with evidence from this image: a branch a codegen error names, decoded from the image; an
+# address the game called at run time (boot log); or, for the entries marked "ahead of time", a
+# pointer in the image's data plus the code checks. The comment after each entry gives the evidence.
+# Addresses and sizes only. Valid only for the image with this SHA-1:
 # image-sha1: {sha1}
 [functions]
 """
+EXCLUDED_HEADER = """
+# Not entries: functions a pointer reaches that were registered ahead of time once and taken out
+# again because codegen failed with them. `codegen --indirect` skips them; the boot step still adds
+# one that the game calls.
+"""
+AOT_MARK = "ahead of time"
+AOT_PREFIX = f"entry: {AOT_MARK}"
+RE_EXCLUDED = re.compile(r"^#\s*excluded (0x[0-9A-Fa-f]{8}): (.*?)\s*$", re.M)
 
 
 def read_out(path):
@@ -471,12 +655,24 @@ def overlaps(entries):
     return bad
 
 
-def write_out(path, entries, sha1):
+def read_exclusions(path):
+    """{address: reason} of the functions an earlier run took out of the ahead-of-time batch."""
+    if not path or not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return {int(m.group(1), 16): m.group(2) for m in RE_EXCLUDED.finditer(f.read())}
+
+
+def write_out(path, entries, sha1, excluded=None):
     lines = [HEADER.format(sha1=sha1).rstrip("\n")]
     for a in sorted(entries):
         size, comment = entries[a]
         body = f"{{ size = 0x{size:X} }}" if size else "{}"
         lines.append(f'"0x{a:08X}" = {body}' + (f"  # {comment}" if comment else ""))
+    if excluded:
+        lines.append(EXCLUDED_HEADER.rstrip("\n"))
+        for a in sorted(excluded):
+            lines.append(f"# excluded {hx(a)}: " + " ".join(str(excluded[a]).split()))
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
@@ -490,7 +686,9 @@ def apply_decisions(entries, decisions):
         if d["decision"] not in ("entry", "function"):
             continue
         a, size = d["entry"], d["size"]
-        if d.get("site") is None:
+        if d.get("kind") == "pointer":
+            comment = f"{AOT_PREFIX}, {d['origin']}"
+        elif d.get("site") is None:
             comment = f"{d['decision']}: called through a pointer at run time ({d.get('origin', 'boot log')})"
         else:
             comment = (f"{d['decision']}: {d['instruction']} at {hx(d['site'])}"
@@ -523,13 +721,25 @@ def markdown(state):
                      f" ({ref['detail']}); {ref.get('entries', 0)} entries; image .pdata: {ref.get('pdata_entries', 0)} entries")
     else:
         lines.append(f"* Reference: none; image .pdata: {ref.get('pdata_entries', 0)} entries")
-    lines.append(f"* Output: `{state['out']}` ({len(state['entries'])} entries)")
+    aot_count = sum(1 for _, c in state["entries"].values() if c.startswith(AOT_PREFIX))
+    lines.append(f"* Output: `{state['out']}` ({len(state['entries'])} entries"
+                 + (f", {aot_count} of them registered ahead of time" if aot_count else "") + ")")
     lines.append(f"* Result: **{state['result']}**")
     if state.get("discarded"):
         lines.append(f"* {state['discarded']}")
+    if state.get("dropped") is not None:
+        lines.append(f"* --drop-indirect removed {len(state['dropped'])} entries registered ahead of time")
+    if state.get("unregistered_entries"):
+        missing = state["unregistered_entries"]
+        lines.append(f"* PROBLEM: {len(missing)} entries of the output file are not registered in the generated code "
+                     "(ReXGlue ignored them): " + ", ".join(hx(a) for a in missing[:40]) + (" ..." if len(missing) > 40 else ""))
+    elif "unregistered_entries" in state:
+        lines.append("* Every entry of the output file is registered in the generated code")
     for r in state["rounds"]:
         title = (f"## Boot logs: {r['unresolved']} calls to unregistered functions" if r.get("boot")
-                 else f"## Round {r['round']}: rexglue exit {r['rc']}, {r['unresolved']} unresolved calls")
+                 else f"## Round {r['round']}: rexglue exit {r['rc']}, {r['unresolved']} unresolved calls"
+                 + (f"; then {plural(len(r['indirect_added']), 'function')} registered ahead of time"
+                    if r.get("indirect_added") else ""))
         lines += ["", title + (f", other errors: {r['other']}" if r.get("other") else "")]
         if not r["decisions"]:
             continue
@@ -546,7 +756,46 @@ def markdown(state):
             lines.append(f"Added {len(r['added'])} entries: " + ", ".join(hx(a) for a in r["added"]))
         for c in r.get("conflicts", []):
             lines.append(f"* conflict: {c}")
+    lines += indirect_markdown(state.get("indirect"))
     return "\n".join(lines) + "\n"
+
+
+def indirect_markdown(aot):
+    """The report section of the ahead-of-time pass (counts by reason, with examples)."""
+    if not aot or not aot.get("enabled"):
+        return []
+    lines = ["", "## Ahead of time: functions only a pointer in the image's data reaches (--indirect)", ""]
+    lines.append(f"* Outcome: **{aot.get('outcome', aot.get('status', '?'))}**")
+    if aot.get("detail"):
+        lines.append(f"* {aot['detail']}")
+    decisions = aot.get("decisions") or []
+    if "candidates" in aot:
+        lines.append(f"* {aot['candidates']} reference functions have no registered function at their address "
+                     f"({aot['registered']} functions registered in the generated code)")
+    added = aot.get("added") or []
+    if added:
+        lines.append(f"* Registered ahead of time: {len(added)}: " + ", ".join(hx(a) for a in added[:40])
+                     + (" ... (all of them are in the output file, marked \"ahead of time\")" if len(added) > 40 else ""))
+    for key, title in (("taken_out", "Taken out again after codegen failed with them"),
+                       ("rolled_back", "Rolled back with the whole batch")):
+        if aot.get(key):
+            lines.append(f"* {title}: {len(aot[key])}: " + ", ".join(hx(a) for a in aot[key][:40])
+                         + (" ..." if len(aot[key]) > 40 else ""))
+    rejected = {}
+    for d in decisions:
+        if d["decision"] != "entry":
+            rejected.setdefault(d.get("reason", "?"), []).append(d)
+    if rejected:
+        lines += ["", "| not registered ahead of time | count | examples (address: evidence) |", "|---|---|---|"]
+        for key in list(INDIRECT_REASONS) + sorted(k for k in rejected if k not in INDIRECT_REASONS):
+            ds = rejected.get(key)
+            if not ds:
+                continue
+            examples = "; ".join(f"{hx(d['target'])}: {d['evidence']}" for d in ds[:3])
+            lines.append(f"| {INDIRECT_REASONS.get(key, key)} | {len(ds)} | {examples} |")
+    for c in aot.get("conflicts") or []:
+        lines.append(f"* conflict: {c}")
+    return lines
 
 
 def write_reports(state, report, json_path):
@@ -586,19 +835,26 @@ def start_entries(out, image, state):
     return entries
 
 
+def start_exclusions(out, image):
+    """The exclusions an earlier run recorded in `out`, when that file belongs to this image."""
+    _, sha1 = read_out(out)
+    return read_exclusions(out) if sha1 == image.sha1 else {}
+
+
 def cmd_verify(args):
     image = load_image(args.image, args.base)
     with open(args.log, encoding="utf-8", errors="replace") as f:
         log_text = f.read()
     state = {"image": args.image, "image_sha1": image.sha1, "out": args.out or "-", "rounds": []}
     entries = start_entries(args.out, image, state)
+    excluded = start_exclusions(args.out, image)
     parsed, status, decisions, added, conflicts, other = resolve_round(image, log_text, args.reference, entries)
     state["reference"] = status
     state["rounds"].append({"round": 1, "rc": None, "unresolved": len(parsed["unresolved"]), "other": other,
                             "decisions": decisions, "added": added, "conflicts": conflicts})
     unverified = [d for d in decisions if d["decision"] == "unverified"]
     if args.out:
-        write_out(args.out, entries, image.sha1)
+        write_out(args.out, entries, image.sha1, excluded)
     state["entries"] = entries
     if not parsed["unresolved"]:
         state["result"] = "no UnresolvedCall errors in the log"
@@ -625,6 +881,7 @@ def cmd_boot(args):
             helpers = parse_log(f.read())["helpers"]
     state = {"image": args.image, "image_sha1": image.sha1, "out": args.out or "-", "rounds": []}
     entries = start_entries(args.out, image, state)
+    excluded = start_exclusions(args.out, image)
     ref, status = build_reference(image, args.reference, helpers)
     state["reference"] = status
     decisions = [decide_runtime(t, origin, image, ref) for t, origin in sorted(targets.items())]
@@ -636,7 +893,7 @@ def cmd_boot(args):
     state["rounds"].append({"round": 1, "rc": None, "boot": True, "unresolved": len(targets), "decisions": decisions,
                             "added": added, "conflicts": conflicts})
     if args.out:
-        write_out(args.out, entries, image.sha1)
+        write_out(args.out, entries, image.sha1, excluded)
     state["entries"] = entries
     state["added"] = added
     unverified = [d for d in decisions if d["decision"] == "unverified"]
@@ -656,6 +913,13 @@ def cmd_boot(args):
     print(f"resolve_functions: {state['result']}")
     for d in decisions:
         print(f"  {hx(d['target'])}: {d['decision']}: {d['evidence']}")
+    # One line each for scripts (the owner pipeline's boot loop reads these, not the JSON).
+    print(f"resolve_functions: boot summary: {len(targets)} called, {len(added)} added, {len(repeated)} already present, "
+          f"{len(unverified)} unverified")
+    if added:
+        print("resolve_functions: added " + " ".join(hx(a) for a in added))
+    if repeated:
+        print("resolve_functions: already present " + " ".join(hx(d["entry"]) for d in repeated))
     return rc
 
 
@@ -671,6 +935,28 @@ def run_rexglue(args, round_no, log_path):
     return rc, time.time() - started
 
 
+def indirect_pass(args, image, log_text, entries, excluded):
+    """The ahead-of-time pass after a successful codegen round: (decisions, added, info, reference)."""
+    gen = manifest_out_dir(args.manifest)
+    registered = registered_functions(gen)
+    if registered is None:
+        return [], [], {"status": "skipped", "detail": f"the generated code in {gen} has no *_register.cpp"}, None
+    try:
+        labels = switch_labels(args.switch_json)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        return [], [], {"status": "skipped", "detail": f"the switch report {args.switch_json} could not be read: {e}"}, None
+    ref, status = build_reference(image, args.reference, parse_log(log_text)["helpers"])
+    info = {"reference": status, "registered": len(registered)}
+    if ref is None:
+        return [], [], {**info, "status": "skipped", "detail": "no boundary reference applies to this image"}, None
+    decisions = decide_indirect(image, ref, registered, labels, entries, excluded)
+    added, conflicts = apply_decisions(entries, decisions)
+    for d in decisions:
+        if d["decision"] == "unverified" and d.get("reason") == "registered":
+            d["reason"] = "conflict"
+    return decisions, added, {**info, "status": "evaluated", "candidates": len(decisions), "conflicts": conflicts}, ref
+
+
 def cmd_codegen(args):
     if not os.path.isfile(args.rexglue):
         print(f"resolve_functions: rexglue not found: {args.rexglue}", file=sys.stderr)
@@ -679,19 +965,79 @@ def cmd_codegen(args):
     state = {"image": args.image, "image_sha1": image.sha1, "out": args.out, "rounds": [],
              "reference": {"path": args.reference, "applies": False, "detail": "not evaluated (codegen succeeded)"}}
     entries = start_entries(args.out, image, state)
-    write_out(args.out, entries, image.sha1)        # the manifest includes it: it must exist
+    excluded = start_exclusions(args.out, image)
+    if getattr(args, "drop_indirect", False):
+        dropped = sorted(a for a, (_, c) in entries.items() if c.startswith(AOT_PREFIX))
+        for a in dropped:
+            del entries[a]
+        excluded = {}
+        state["dropped"] = dropped
+        print(f"resolve_functions: --drop-indirect: removed {len(dropped)} entries registered ahead of time "
+              "and the list of exclusions")
+    write_out(args.out, entries, image.sha1, excluded)        # the manifest includes it: it must exist
     log = args.log or os.path.join(os.path.dirname(os.path.abspath(args.manifest)), "codegen.log")
     stem, ext = os.path.splitext(log)
-    rc = 1
-    for round_no in range(1, args.rounds + 1):
+    aot = {"enabled": bool(getattr(args, "indirect", False)), "status": "pending"}
+    state["indirect"] = aot
+    batch = None            # the entries registered ahead of time that codegen has not accepted yet
+    limit, round_no, rc = args.rounds, 0, 1
+
+    def roll_back(why):
+        # Back to the entries that compiled before the batch (everything added since depends on it); the batch's
+        # functions are remembered as exclusions, so later runs do not try them again.
+        entries.clear()
+        entries.update(batch["snapshot"])
+        for a in batch["added"]:
+            excluded[a] = f"rolled back with the batch registered ahead of time: {why}"
+        aot.update(status="rolled back", rolled_back=list(batch["added"]), added=[],
+                   outcome=f"rolled back: {why}; every entry from before the batch is kept")
+        write_out(args.out, entries, image.sha1, excluded)
+        n = len(batch["added"])
+        print(f"resolve_functions: {why}: rolled back the {n} {'entry' if n == 1 else 'entries'} registered ahead of "
+              "time; rerunning codegen on the entries that compiled before")
+
+    while True:
+        round_no += 1
+        if round_no > limit:
+            if batch is None:
+                state["result"] = f"stopped: unresolved calls remain after {args.rounds} rounds"
+                rc = 3
+                break
+            roll_back(f"unresolved calls still came back after {limit} rounds")
+            batch, limit = None, round_no
         rc, seconds = run_rexglue(args, round_no, log)
         with open(log, encoding="utf-8", errors="replace") as f:
             log_text = f.read()
         print(f"resolve_functions: round {round_no}: rexglue exit {rc} after {seconds:.1f} s")
         if rc == 0:
             state["rounds"].append({"round": round_no, "rc": 0, "unresolved": 0, "decisions": []})
+            if batch is not None:
+                aot.update(status="accepted", added=list(batch["added"]),
+                           outcome=f"{plural(len(batch['added']), 'function')} registered ahead of time; codegen "
+                                   f"accepted {'it' if len(batch['added']) == 1 else 'them'} in round {round_no}")
+                batch = None
+            elif aot["enabled"] and aot["status"] == "pending":
+                snapshot = dict(entries)
+                decisions, added, info, ref = indirect_pass(args, image, log_text, entries, excluded)
+                aot.update(info)
+                aot.update(decisions=decisions, added=list(added))
+                if info.get("reference"):
+                    state["reference"] = info["reference"]
+                if added:
+                    batch = {"added": list(added), "snapshot": snapshot, "retried": False,
+                             "extents": {a: max(ref.funcs[a][0], 4) for a in added}}
+                    aot["status"] = "batch"
+                    state["rounds"][-1]["indirect_added"] = list(added)
+                    write_out(args.out, entries, image.sha1, excluded)
+                    print(f"resolve_functions: round {round_no}: registered {plural(len(added), 'function')} that a "
+                          "pointer in the image's data reaches, ahead of time; rerunning codegen")
+                    continue
+                aot.update(status="done", outcome=("nothing new to register ahead of time" if info["status"] == "evaluated"
+                                                   else f"skipped: {info.get('detail', '')}"))
+            n_aot = sum(1 for _, c in entries.values() if c.startswith(AOT_PREFIX))
             state["result"] = (f"codegen succeeded in round {round_no}"
-                               + (f" with {len(entries)} resolved entries" if entries else ""))
+                               + (f" with {len(entries)} resolved entries" if entries else "")
+                               + (f" ({n_aot} of them ahead of time)" if n_aot else ""))
             break
         parsed, status, decisions, added, conflicts, other = resolve_round(image, log_text, args.reference, entries)
         state["reference"] = status
@@ -703,30 +1049,62 @@ def cmd_codegen(args):
         # keep this round's log next to the final one
         with open(f"{stem}.round{round_no}{ext}", "w", encoding="utf-8", newline="\n") as f:
             f.write(log_text)
-        if not parsed["unresolved"]:
-            state["result"] = (f"codegen failed in round {round_no} for a reason other than unresolved calls"
-                               + (f" ({', '.join(f'{k} {v}' for k, v in other.items())})" if other else "")
-                               + f"; see {log}")
-            rc = 1
-            break
         unverified = [d for d in decisions if d["decision"] == "unverified"]
-        write_out(args.out, entries, image.sha1)
-        if unverified:
-            state["result"] = (f"stopped in round {round_no}: {len(unverified)} unresolved calls could not be "
-                               f"verified ({len(added)} verified entries were added)")
-            rc = 3
-            break
-        if not added:
-            state["result"] = f"stopped in round {round_no}: no new entries (the same errors came back)"
-            rc = 3
-            break
-        print(f"resolve_functions: round {round_no}: added {len(added)} verified entries; rerunning codegen")
-    else:
-        state["result"] = f"stopped: unresolved calls remain after {args.rounds} rounds"
-        rc = 3
+        if not parsed["unresolved"]:
+            failure = ("other", f"codegen failed in round {round_no} for a reason other than unresolved calls"
+                                + (f" ({', '.join(f'{k} {v}' for k, v in other.items())})" if other else "")
+                                + f"; see {log}")
+        elif unverified:
+            failure = ("unverified", f"stopped in round {round_no}: {len(unverified)} unresolved calls could not be "
+                                     f"verified ({len(added)} verified entries were added)")
+        elif not added:
+            failure = ("no-progress", f"stopped in round {round_no}: no new entries (the same errors came back)")
+        else:
+            failure = None
+        write_out(args.out, entries, image.sha1, excluded)
+        if failure is None:
+            print(f"resolve_functions: round {round_no}: added {len(added)} verified entries; rerunning codegen")
+            continue
+        if batch is not None:
+            # Codegen failed with the entries registered ahead of time in a way the error resolution cannot fix.
+            # The errors are reported, never suppressed: first the batch entries they point into are taken out,
+            # then, if codegen still fails, the whole batch.
+            summary = ", ".join(f"{k} {len(v)}" for k, v in parsed["errors"].items() if v) or f"rexglue exit {rc}"
+            why = f"codegen failed in round {round_no} ({summary})"
+            errs = error_addresses(parsed)
+            hit = [a for a in batch["added"] if any(a <= e < a + batch["extents"][a] for e in errs)]
+            if hit and len(hit) < len(batch["added"]) and not batch["retried"] and round_no < limit:
+                batch["retried"] = True
+                for a in hit:
+                    entries.pop(a, None)
+                    excluded[a] = f"{why} with it registered ahead of time"
+                batch["added"] = [a for a in batch["added"] if a not in hit]
+                aot.setdefault("taken_out", []).extend(hit)
+                aot["added"] = list(batch["added"])
+                write_out(args.out, entries, image.sha1, excluded)
+                print(f"resolve_functions: {why}: the errors point into {len(hit)} of the functions registered ahead "
+                      "of time; taking them out and rerunning codegen")
+                continue
+            roll_back(why)
+            batch, limit = None, max(limit, round_no + 1)
+            continue
+        state["result"] = failure[1]
+        rc = 1 if failure[0] == "other" else 3
+        break
+    if rc == 0:
+        reg = registered_functions(manifest_out_dir(args.manifest))
+        if reg is not None:
+            state["unregistered_entries"] = sorted(a for a in entries if a not in reg)
+            if state["unregistered_entries"]:
+                print(f"resolve_functions: PROBLEM: {len(state['unregistered_entries'])} entries are not registered in "
+                      "the generated code: " + " ".join(hx(a) for a in state["unregistered_entries"][:20]))
+    if aot["enabled"] and "outcome" not in aot:
+        aot["outcome"] = "not run: codegen did not succeed"
     state["entries"] = entries
     write_reports(state, args.report, args.json)
     print(f"resolve_functions: {state['result']}")
+    if aot["enabled"]:
+        print(f"resolve_functions: ahead of time: {aot['outcome']}")
     return 0 if rc == 0 else rc
 
 
@@ -750,6 +1128,14 @@ def main(argv):
     c.add_argument("--rounds", type=int, default=8)
     c.add_argument("--ignore-stamp", action="store_true", help="pass --ignore-stamp to the first run too")
     c.add_argument("--log-level", default="debug")
+    c.add_argument("--indirect", action="store_true",
+                   help="after a successful codegen, register ahead of time the reference functions ReXGlue did not "
+                        "register whose address a word in the image's data holds (needs --switch-json); rerun codegen")
+    c.add_argument("--switch-json", help="find_switch_tables.py --json report of the image (its case labels are "
+                                         "never registered as functions)")
+    c.add_argument("--drop-indirect", action="store_true",
+                   help="first remove the entries registered ahead of time and the list of exclusions (every other "
+                        "entry stays)")
     bt = sub.add_parser("boot", parents=[common], help="verify the unregistered functions a host run called")
     bt.add_argument("--boot-log", action="append", required=True, help="host log file (repeatable)")
     bt.add_argument("--codegen-log", help="codegen log of the build, for the reference's helper fingerprint")
@@ -757,6 +1143,8 @@ def main(argv):
     bt.add_argument("--switch-json", help="find_switch_tables.py --json report: names the switch dispatch it could "
                                           "not read when a called address lies in the same function")
     args = ap.parse_args(argv[1:])
+    if args.command == "codegen" and args.indirect and not args.switch_json:
+        ap.error("codegen --indirect needs --switch-json (the finder's report of the image)")
     try:
         if args.command == "boot":
             return cmd_boot(args)

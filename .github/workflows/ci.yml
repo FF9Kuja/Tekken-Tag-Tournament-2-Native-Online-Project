@@ -18,8 +18,10 @@ jobs:
       - run: python3 scripts/check_repo_hygiene.py
       - name: Python tool unit tests (synthetic images and outputs; the switch finder's tables checked by execution)
         run: python3 -I -m unittest discover -s tests/python -v
-      - name: Switch-table finder, switch audit and packer compile
-        run: python3 -I -m py_compile recomp/tools/find_switch_tables.py recomp/tools/audit_switches.py scripts/ppc_elf_to_xex.py scripts/check_instruction_coverage.py scripts/gen_xbox_exports.py
+      - name: Switch-table finder, switch audit, resolver and packer compile
+        run: python3 -I -m py_compile recomp/tools/find_switch_tables.py recomp/tools/audit_switches.py recomp/tools/resolve_functions.py scripts/ppc_elf_to_xex.py scripts/check_instruction_coverage.py scripts/gen_xbox_exports.py
+      - name: Owner pipeline boot-repair loop (PowerShell 7; scripted boots and rebuilds, no host)
+        run: pwsh -NoProfile -File tests/powershell/test_boot_repair.ps1
 
   linux:
     name: Linux ${{ matrix.compiler }}
@@ -104,6 +106,13 @@ jobs:
         run: cmake --build --preset windows-clang-cl
       - name: Test
         run: ctest --preset windows-clang-cl
+      - name: Owner pipeline boot-repair loop under Windows PowerShell 5.1 (scripted boots and rebuilds, no host)
+        # The owner's shell: every stop condition of the loop (run limit and cap, time limit, disk floor, no progress,
+        # repeated trap, failed rebuild) with the pipeline's own functions and fake boots.
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests\powershell\test_boot_repair.ps1
+          if ($LASTEXITCODE -ne 0) { throw "the boot-repair loop test failed ($LASTEXITCODE)" }
       - name: Owner pipeline dry run on the synthetic fixtures (no game content)
         # The one-command owner workflow on real PowerShell with the built tools: disc and title
         # update identification, extraction, the patch attempt (the synthetic delta is not a real

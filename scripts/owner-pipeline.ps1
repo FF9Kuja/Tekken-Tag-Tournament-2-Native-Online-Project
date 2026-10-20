@@ -4,7 +4,8 @@
 #                              [-Work work] [-Report work\report.txt] [-Preset windows-clang-cl]
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
 #                              [-BuildHost] [-SdkInstall <dir>] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
-#                              [-BootRounds 3] [-BuildJobs <n>]
+#                              [-BootRounds 10] [-BootMinutes 480] [-MinFreeGb 5] [-BuildJobs <n>] [-NoIndirect]
+#                              [-NoGpu] [-Reference recomp\ttt2_functions.ttt2web.toml]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -30,7 +31,11 @@
 #      ReXGlue's analysis never registers: leaf functions entered only by a tail branch, blocks cut off their
 #      function) into a [functions] entry in recomp\game\ttt2_resolved_functions.toml, but only after checking
 #      the branch in the image and finding the same boundary in TTT2 Web's published table, which it uses only
-#      when the image's helper fingerprint matches; then it reruns codegen. Its report is <work>\resolve-REPORT.md;
+#      when the image's helper fingerprint matches; then it reruns codegen. Once codegen succeeds it also registers
+#      ahead of time the functions only a pointer in the image's data reaches (vtable slots without RTTI,
+#      callbacks: each would otherwise end a boot with a trap and cost a rebuild), every one checked against the
+#      image and the reference, and compiles once more; one that codegen then fails with is taken out again and
+#      remembered (-NoIndirect drops all of them instead). Its report is <work>\resolve-REPORT.md;
 #   6c. audits how the codegen emitted every bctr (recomp\tools\audit_switches.py, <work>\switch-audit.md): the
 #      finder's tables as written, the SDK detector's own switches checked against the finder's model (certain
 #      miscompiles named), and the dispatches the finder could not read, with their few instructions each;
@@ -45,10 +50,20 @@
 #      closes its window after -BootTimeout seconds), triages its log (<work>\boot-triage.md) and copies the
 #      log file to <work>\boot-logs\; the triage goes into the report too.
 #   9b. when that run ended on the runtime's trap for a call to an address no recompiled function starts at
-#      (a function only a pointer reaches, which ReXGlue's analysis never registers), resolve_functions.py boot
-#      verifies each called address against the image and TTT2 Web's table and adds the verified ones; with
-#      -Codegen and -BuildHost the pipeline then recompiles, rebuilds and boots again, up to -BootRounds runs
-#      (<work>\resolve-boot-<n>.md says what each round added).
+#      (a function only a pointer reaches that step 6 could not prove ahead of time), resolve_functions.py boot
+#      verifies each called address against the image and the reference and adds the verified ones; with -Codegen
+#      and -BuildHost the pipeline then recompiles, rebuilds and boots again, by itself, until a run ends some
+#      other way. Safeguards stop the loop and the report says which one (the verified entries are kept, so
+#      rerunning the same command continues): -BootRounds runs at most (default 10, never more than 50);
+#      -BootMinutes for the whole loop (default 480, 0 = no limit), checked before each rebuild; a run whose log
+#      gives no new verified entry (no progress); a trap at an address an earlier run of the loop already added
+#      or one the resolved entries already list although the host was built with them (the entry did not take
+#      effect); less than -MinFreeGb (default 5) GB free before a rebuild; a failed rebuild. The runs after a
+#      rebuild close the game after -BootTimeout seconds, or after 300 when -BootTimeout is 0, so the loop never
+#      waits for a person; <work>\resolve-boot-<n>.md says what each run added;
+#   9c. the loop's summary: one line per run (how it ended, what its log added) and why the loop stopped.
+# -NoGpu runs the host without GPU emulation (--gpu_plugin=none: log gathering only, the game cannot draw).
+# -Reference names the boundary reference the resolver checks against (default: TTT2 Web's published table).
 # A CRITICAL FAILURE STOPS THE PIPELINE: when a stage the later ones depend on fails (the disc or the title
 # update cannot be read or extracted, the image cannot be prepared, the finder, codegen, the host build or the
 # extraction fails), the report gets a "CRITICAL:" line naming the cause, is written, and the script throws
@@ -73,8 +88,13 @@ param(
     [switch]$ExtractGame,
     [switch]$Boot,
     [int]$BootTimeout = 0,
-    [int]$BootRounds = 3,
-    [int]$BuildJobs = 0
+    [int]$BootRounds = 10,
+    [int]$BootMinutes = 480,
+    [double]$MinFreeGb = 5,
+    [int]$BuildJobs = 0,
+    [switch]$NoIndirect,
+    [switch]$NoGpu,
+    [string]$Reference = "recomp\ttt2_functions.ttt2web.toml"
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -162,6 +182,30 @@ function Find-Python {
         if ($major -eq "3") { return $cmd.Source }   # the Store alias prints a message instead
     }
     return $null
+}
+function Get-FreeGb {
+    # Free space on the checkout's drive in GB, or $null when it cannot be read.
+    try {
+        $driveRoot = [System.IO.Path]::GetPathRoot((Get-Location).Path)
+        return [Math]::Round((New-Object System.IO.DriveInfo($driveRoot)).AvailableFreeSpace / 1GB, 1)
+    } catch { return $null }
+}
+function Get-Minutes($watch) {
+    # Minutes on a stopwatch (a function, so the boot-repair test can simulate long runs).
+    return $watch.Elapsed.TotalMinutes
+}
+function Format-Address([string]$text) {
+    # 0x%08X, the form the resolver prints, whatever form the log had.
+    try { return ("0x{0:X8}" -f [Convert]::ToUInt32($text.Substring(2), 16)) } catch { return $text }
+}
+function Get-ResolvedCounts {
+    # (entries, entries registered ahead of time) of recomp\game\ttt2_resolved_functions.toml.
+    $file = "recomp\game\ttt2_resolved_functions.toml"
+    if (-not (Test-Path $file)) { return @(0, 0) }
+    $text = @(Get-Content $file)
+    $all = @($text | Where-Object { $_ -match '^"0x[0-9A-Fa-f]+" = ' }).Count
+    $aot = @($text | Where-Object { $_ -match '^"0x[0-9A-Fa-f]+" = .*# entry: ahead of time' }).Count
+    return @($all, $aot)
 }
 
 Section "Tekken Tag Tournament 2 Native Online - owner pipeline report"
@@ -336,17 +380,20 @@ function Invoke-Codegen([int]$pass) {
     if ($script:lastExit -ne 0 -or -not (Test-Path $tables)) {
         Fail-Pipeline "the switch-table finder failed (exit $($script:lastExit)) or wrote no $tables; rexglue codegen cannot run without it"
     }
-    Section "6b. Recompile (rexglue codegen through recomp\tools\resolve_functions.py)"
+    Section ("6b. Recompile (rexglue codegen through recomp\tools\resolve_functions.py" +
+             $(if ($NoIndirect) { "; -NoIndirect: nothing registered ahead of time)" } else { "; then the functions only a pointer reaches, ahead of time)" }))
     $script:codegenLog = Join-Path $Work "codegen.log"
     $resolveMd = Join-Path $Work "resolve-REPORT.md"
     $resolveJson = Join-Path $Work "resolve-report.json"
     foreach ($old in @($resolveMd, $resolveJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
     Get-ChildItem -Path $Work -Filter "codegen.round*.log" -ErrorAction SilentlyContinue | Remove-Item -Force
     $codegenWatch = [System.Diagnostics.Stopwatch]::StartNew()
-    Run $script:python @("-I", "recomp\tools\resolve_functions.py", "codegen", "--rexglue", $script:Rexglue,
+    $resolveArgs = @("-I", "recomp\tools\resolve_functions.py", "codegen", "--rexglue", $script:Rexglue,
         "--manifest", "recomp\ttt2_manifest.toml", "--image", "recomp\game\default.xex",
-        "--out", "recomp\game\ttt2_resolved_functions.toml", "--reference", "recomp\ttt2_functions.ttt2web.toml",
-        "--log", $script:codegenLog, "--report", $resolveMd, "--json", $resolveJson, "--ignore-stamp") | Out-Null
+        "--out", "recomp\game\ttt2_resolved_functions.toml", "--reference", $Reference,
+        "--log", $script:codegenLog, "--report", $resolveMd, "--json", $resolveJson, "--ignore-stamp")
+    if ($NoIndirect) { $resolveArgs += "--drop-indirect" } else { $resolveArgs += @("--indirect", "--switch-json", $tablesJson) }
+    Run $script:python $resolveArgs | Out-Null
     $codegenCode = $script:lastExit
     Log ("Codegen (all rounds) took {0:N1} minutes" -f $codegenWatch.Elapsed.TotalMinutes)
     if (Test-Path $resolveMd) { Log ""; Get-Content $resolveMd | ForEach-Object { Log $_ } }
@@ -416,12 +463,17 @@ function Invoke-HostBuild([int]$pass) {
     # The whole game is about 300 generated files plus their objects, the precompiled header and the
     # executable with its line tables: a few GB. Say so before a long build rather than after a failed one.
     $driveRoot = [System.IO.Path]::GetPathRoot((Get-Location).Path)
-    try {
-        $freeGb = [Math]::Round((New-Object System.IO.DriveInfo($driveRoot)).AvailableFreeSpace / 1GB, 1)
+    $freeGb = Get-FreeGb
+    if ($null -eq $freeGb) { Log "(free space on $driveRoot unknown)" }
+    else {
         Log "Free space on ${driveRoot}: $freeGb GB"
         if ($freeGb -lt 10) { Log "WARNING: less than 10 GB free on $driveRoot; the build of the whole game needs a few GB (free some space if it fails with a write error)" }
-    } catch { Log "(free space on $driveRoot unknown: $($_.Exception.Message))" }
-    $hostArgs = @("-Game", $plain)
+    }
+    $hostArgs = @("-Game", $plain, "-Reference", $Reference)
+    # Step 6 has just generated the code for this image (and for this pass): build-host.ps1 builds from it
+    # instead of running the finder and codegen a second time.
+    if ($Codegen) { $hostArgs += "-SkipCodegen" }
+    if ($NoIndirect) { $hostArgs += "-NoIndirect" }
     if ($SdkInstall -ne "") { $hostArgs += @("-SdkInstall", $SdkInstall) }
     if ($InstallSdk -and $pass -eq 1) { $hostArgs += "-InstallSdk" }
     if ($BuildJobs -gt 0) { $hostArgs += @("-Jobs", $BuildJobs); Log "Compiling at most $BuildJobs files at once (-BuildJobs)." }
@@ -445,7 +497,7 @@ function Invoke-HostBuild([int]$pass) {
 }
 
 # --- 9. boot ------------------------------------------------------------------------------------
-function Invoke-Boot([int]$pass) {
+function Invoke-Boot([int]$pass, [int]$timeout) {
     # $true when the host ran (whatever the outcome), $false when a prerequisite is missing.
     Section ("9. Boot the host on the extracted game data (scripts\run-host.ps1) and triage its log" + $(if ($pass -gt 1) { " (pass $pass)" } else { "" }))
     $hostExe = "recomp\out\build\win-amd64-release\ttt2.exe"
@@ -459,7 +511,9 @@ function Invoke-Boot([int]$pass) {
         return $false
     }
     foreach ($old in @($triageMd, $triageJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
-    $bootArgs = @("-GameRoot", $bootRoot, "-Work", $Work, "-TimeoutSeconds", $BootTimeout)
+    $bootArgs = @("-GameRoot", $bootRoot, "-Work", $Work, "-TimeoutSeconds", $timeout)
+    if ($NoGpu) { $bootArgs += "-NoGpu" }
+    Log $(if ($timeout -gt 0) { "The game is closed after $timeout s if it is still running." } else { "Close the game window yourself once nothing happens any more (-BootTimeout 0)." })
     Invoke-ChildScript (Join-Path $PSScriptRoot "run-host.ps1") $bootArgs | Out-Null
     $bootCode = $script:lastExit
     Log "(run-host exit code ${bootCode}: the host's own exit code (3 = host crash, 4 = the runtime aborted), 1 = closed by the timeout, 2 = prerequisites missing)"
@@ -469,6 +523,27 @@ function Invoke-Boot([int]$pass) {
         Get-Content $triageMd | ForEach-Object { Log $_ }
     }
     return $true
+}
+function Read-Triage {
+    # How the last run ended and the addresses it called where no function is registered, from the triage
+    # Markdown (plain text: no JSON parsing, which Windows PowerShell 5.1 does slowly and with a size limit).
+    $outcome = "no triage was written (see step 9)"
+    $calls = New-Object System.Collections.Generic.List[string]
+    if (Test-Path $triageMd) {
+        $md = @(Get-Content $triageMd)
+        for ($i = 0; $i -lt $md.Count; $i++) {
+            if ($md[$i] -eq "## Outcome") {
+                for ($j = $i + 1; $j -lt $md.Count -and $j -le $i + 3; $j++) {
+                    if ($md[$j] -match '^\*\*(.+)\*\*$') { $outcome = $Matches[1]; break }
+                }
+            }
+            if ($md[$i] -match 'indirect call to (0x[0-9A-Fa-f]+)') {
+                $a = Format-Address $Matches[1]
+                if (-not $calls.Contains($a)) { $calls.Add($a) }
+            }
+        }
+    }
+    return @{ Outcome = $outcome; Calls = @($calls) }
 }
 
 if ($Codegen) { Invoke-Codegen 1 }
@@ -495,27 +570,58 @@ if ($ExtractGame) {
     Log "Run the host with: ttt2.exe --game_data_root `"$gameRoot`"  (keep the game folder private)"
 }
 
-# --- 9, 9b. boot, and the functions the boot shows ReXGlue missed -------------------------------
-if ($Boot) {
-    $rounds = [Math]::Max(1, $BootRounds)
-    for ($pass = 1; $pass -le $rounds; $pass++) {
+# --- 9, 9b, 9c. boot; the functions the boot shows ReXGlue missed, automatically; the summary --------------
+function Invoke-BootRepair {
+    # A function so tests/powershell/test_boot_repair.ps1 can run this loop with scripted boots and rebuilds.
+    $maxRuns = [Math]::Min([Math]::Max(1, $BootRounds), 50)
+    $autoTimeout = $(if ($BootTimeout -gt 0) { $BootTimeout } else { 300 })
+    $minFreeGb = $MinFreeGb
+    $repair = ($Codegen -and $BuildHost)
+    $loopWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $addedIn = @{}                  # address -> the run whose log added it
+    $runLines = New-Object System.Collections.Generic.List[string]
+    $stop = ""
+    $rebuildError = $null
+    $lastRebuildMinutes = 0.0
+    if ($repair) {
+        Log ""
+        Log ("Boot repair: up to $maxRuns runs" + $(if ($BootRounds -gt 50) { " (-BootRounds $BootRounds is capped at 50)" } else { "" }) +
+             "; the runs after a rebuild close the game after $autoTimeout s; " +
+             $(if ($BootMinutes -gt 0) { "at most $BootMinutes minutes in all (-BootMinutes)" } else { "no time limit (-BootMinutes 0)" }) +
+             "; no rebuild with less than $minFreeGb GB free.")
+    }
+    for ($pass = 1; $pass -le $maxRuns; $pass++) {
         $passStart = Get-Date
-        if (-not (Invoke-Boot $pass)) { break }
-        # A run that ended on the runtime's trap for a call to an unregistered function (a function only a
-        # pointer reaches, such as a vtable slot without RTTI): verify each called address against the image and
-        # TTT2 Web's table, add the verified ones, rebuild and boot again.
-        $invalid = @()
-        if (Test-Path $triageJson) {
-            try {
-                $tj = Get-Content $triageJson -Raw | ConvertFrom-Json
-                if ($tj.invalid_calls) { $invalid = @($tj.invalid_calls) }
-            } catch { $invalid = @() }
+        # The first run keeps -BootTimeout (0: wait for the window to be closed); the runs after a rebuild never
+        # wait for a person.
+        $timeout = $(if ($pass -eq 1) { $BootTimeout } else { $autoTimeout })
+        if (-not (Invoke-Boot $pass $timeout)) { $stop = "the host or the extracted game data is missing (see step 9)"; break }
+        $tri = Read-Triage
+        $line = "run ${pass}: $($tri.Outcome)"
+        if ($tri.Calls.Count -eq 0) {
+            $runLines.Add($line)
+            $stop = "run $pass did not end on a call to an unregistered function: nothing left for the boot repair (its triage above says how it ended)"
+            break
         }
-        if ($invalid.Count -eq 0) { break }
+        # A call the loop already added an entry for, after the rebuild: the entry did not take effect, and
+        # rebuilding again would only repeat it.
+        $again = @($tri.Calls | Where-Object { $addedIn.ContainsKey($_) })
+        if ($again.Count -gt 0) {
+            $runLines.Add("$line; called $($again -join ', ') again")
+            $stop = "REPEATED FAILURE: the rebuilt host called $($again -join ', ') again, although run $($addedIn[$again[0]]) added the entry; it did not take effect (the codegen report above lists any entry the generated code lacks)"
+            break
+        }
+        # A run that ended on the runtime's trap for a call to an unregistered function (one only a pointer
+        # reaches that step 6 could not prove ahead of time): verify each called address against the image and the
+        # reference, add the verified ones, rebuild and boot again.
         Section "9b. Calls to functions ReXGlue never registered: verify them from the boot log (recomp\tools\resolve_functions.py boot)"
         $newLogs = @(Get-ChildItem -Path (Join-Path $Work "boot-logs") -File -ErrorAction SilentlyContinue |
             Where-Object { $_.LastWriteTime -ge $passStart.AddSeconds(-2) })
-        if ($newLogs.Count -eq 0) { Log "PROBLEM: the triage reports calls to unregistered functions but this run left no log copy in $Work\boot-logs"; break }
+        if ($newLogs.Count -eq 0) {
+            $runLines.Add($line)
+            $stop = "PROBLEM: the triage reports calls to unregistered functions but this run left no log copy in $Work\boot-logs"
+            break
+        }
         $cgLog = $(if ($script:codegenLog -and (Test-Path $script:codegenLog)) { $script:codegenLog }
                    elseif (Test-Path (Join-Path $Work "codegen.log")) { Join-Path $Work "codegen.log" }
                    else { "recomp\game\codegen.log" })
@@ -524,29 +630,69 @@ if ($Boot) {
         foreach ($old in @($bootMd, $bootJson)) { if (Test-Path $old) { Remove-Item $old -Force } }
         $resolveArgs = @("-I", "recomp\tools\resolve_functions.py", "boot", "--image", "recomp\game\default.xex")
         foreach ($l in $newLogs) { $resolveArgs += @("--boot-log", $l.FullName) }
-        $resolveArgs += @("--codegen-log", $cgLog, "--reference", "recomp\ttt2_functions.ttt2web.toml",
+        $resolveArgs += @("--codegen-log", $cgLog, "--reference", $Reference,
                           "--out", "recomp\game\ttt2_resolved_functions.toml", "--report", $bootMd, "--json", $bootJson)
         $switchJson = Join-Path $Work "switch_tables.json"
         if (Test-Path $switchJson) { $resolveArgs += @("--switch-json", $switchJson) }
         $py = $(if ($script:python) { $script:python } else { Find-Python })
-        if (-not $py) { Log "PROBLEM: Python 3 not found on PATH; the boot log cannot be resolved"; break }
-        Run $py $resolveArgs | Out-Null
+        if (-not $py) { $runLines.Add($line); $stop = "PROBLEM: Python 3 not found on PATH; the boot log cannot be resolved"; break }
+        $resolveOut = Run $py $resolveArgs
         if (Test-Path $bootMd) { Log ""; Get-Content $bootMd | ForEach-Object { Log $_ } }
-        $added = 0
-        if (Test-Path $bootJson) {
-            try {
-                $bj = Get-Content $bootJson -Raw | ConvertFrom-Json
-                if ($bj.added) { $added = @($bj.added).Count }
-            } catch { $added = 0 }
+        # The resolver's own summary lines (not its JSON: see Read-Triage).
+        $added = @()
+        $present = @()
+        foreach ($l in $resolveOut) {
+            if ($l -match '^resolve_functions: added (.+)$') { $added = @($Matches[1].Trim() -split '\s+' | ForEach-Object { Format-Address $_ }) }
+            if ($l -match '^resolve_functions: already present (.+)$') { $present = @($Matches[1].Trim() -split '\s+' | ForEach-Object { Format-Address $_ }) }
         }
-        if ($added -eq 0) { Log "No new verified entries: the boot cannot get further this way (the report above says why)."; break }
-        if (-not ($Codegen -and $BuildHost)) { Log "$added verified entries were added to recomp\game\ttt2_resolved_functions.toml; rerun with -Codegen -BuildHost -Boot to rebuild with them."; break }
-        if ($pass -ge $rounds) { Log "$added verified entries were added; the -BootRounds limit ($rounds) is reached: rerun the same command to recompile, rebuild and boot again."; break }
-        Log "$added verified entries added: recompiling, rebuilding and booting again (pass $($pass + 1) of at most $rounds)."
-        Invoke-Codegen ($pass + 1)
-        Invoke-HostBuild ($pass + 1)
+        $runLines.Add("$line; " + $(if ($added.Count -gt 0) { "added " + ($added -join ", ") } else { "added nothing" }))
+        if ($added.Count -eq 0) {
+            if ($present.Count -gt 0 -and $repair) {
+                $stop = "REPEATED FAILURE: run $pass called $($present -join ', '), which the resolved entries already list and this host was built with: the entry did not take effect (the codegen report above lists any entry the generated code lacks)"
+            } elseif ($present.Count -gt 0) {
+                $stop = "run $pass called $($present -join ', '), which the resolved entries already list: this host was built before they were added; rerun with -Codegen -BuildHost -Boot"
+            } else {
+                $stop = "NO PROGRESS: the log of run $pass gave no new verified entry ($bootMd above says why)"
+            }
+            break
+        }
+        foreach ($a in $added) { $addedIn[$a] = $pass }
+        if (-not $repair) { $stop = "$($added.Count) verified entries were added to recomp\game\ttt2_resolved_functions.toml; rerun with -Codegen -BuildHost -Boot to rebuild with them"; break }
+        if ($pass -ge $maxRuns) { $stop = "the limit of $maxRuns runs (-BootRounds) is reached; the verified entries are kept: rerun the same command to continue"; break }
+        $elapsed = Get-Minutes $loopWatch
+        if ($BootMinutes -gt 0 -and ($elapsed + $lastRebuildMinutes) -gt $BootMinutes) {
+            $stop = ("TIME LIMIT: {0:N0} of the {1} minutes of -BootMinutes are used and the last rebuild took {2:N0}; the verified entries are kept: rerun the same command to continue" -f $elapsed, $BootMinutes, $lastRebuildMinutes)
+            break
+        }
+        $free = Get-FreeGb
+        if ($null -ne $free -and $free -lt $minFreeGb) {
+            $stop = "LOW DISK SPACE: $free GB free, less than the $minFreeGb GB a rebuild needs; free some space and rerun the same command (the verified entries are kept)"
+            break
+        }
+        Log "$($added.Count) verified entries added: recompiling, rebuilding and booting again (run $($pass + 1) of at most $maxRuns)."
+        $rebuildWatch = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            Invoke-Codegen ($pass + 1)
+            Invoke-HostBuild ($pass + 1)
+        } catch {
+            $rebuildError = $_
+            $stop = "REBUILD FAILED before run $($pass + 1): $($_.Exception.Message)"
+            break
+        }
+        $lastRebuildMinutes = Get-Minutes $rebuildWatch
+    }
+    Section "9c. Boot repair summary"
+    Log ("{0} in {1:N1} minutes:" -f $(if ($runLines.Count -eq 1) { "1 run" } else { "$($runLines.Count) runs" }), (Get-Minutes $loopWatch))
+    foreach ($l in $runLines) { Log "  $l" }
+    Log "Stopped: $stop"
+    $counts = Get-ResolvedCounts
+    Log "recomp\game\ttt2_resolved_functions.toml: $($counts[0]) verified entries ($($counts[1]) of them registered ahead of time), kept for the next run."
+    if ($rebuildError) {
+        Write-Report
+        throw $rebuildError
     }
 }
+if ($Boot) { Invoke-BootRepair }
 
 Section "Done"
 Log "Report written to $Report. Send this file (text only). Do NOT send anything from $Work, recomp\game or recomp\out."
