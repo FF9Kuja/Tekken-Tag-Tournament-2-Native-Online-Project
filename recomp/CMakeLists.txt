@@ -18,6 +18,9 @@ set(TTT2_SOURCES
     src/kernel_overrides.cpp
     src/runtime_exports.cpp
     src/boot_monitor.cpp
+    src/kernel_clock.cpp
+    src/frame_monitor.cpp
+    src/pm4_stats.cpp
     src/io_overrides.cpp
     src/wait_overrides.cpp
     src/milestone_overrides.cpp

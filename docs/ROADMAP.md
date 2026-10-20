@@ -122,7 +122,13 @@ therefore mandatory for TTT2 and are the path the pipeline uses.
    the disc sector query as unsupported, as TTT2 Web does, so the loader reads files by name. [x] Boot monitor: file
    access, GPU/audio/input/dialog milestones, frames presented, and per-thread waits (objects, owners, call sites)
    and guest call stacks in every stall dump and at window close; the triage reports deadlocks and wait chains.
-   [ ] Confirm on the owner's copy; if the disc device is still opened, give it a device (an SDK file-system change).
+   [x] The owner's second run (PR #16 host): 10,760 frames presented, all black; 2 file reads in 180 s; the bare
+   device opened is `\Device\Image` (no sector query at all); one thread with 339.5 million kernel calls. The runtime
+   never advances `KeTimeStampBundle`'s 64-bit clocks, which TTT2 reads from memory: the host now refreshes them
+   (`docs/RESEARCH.md` 8f). Missing names are answered as the console and both reference ports answer them;
+   `\Device\Image` stays unmapped (neither port maps it). [x] Frame monitor (draws, resolves, clears per frame;
+   optional pixel check), busy-thread flags, critical sections whose count grows between dumps.
+   [ ] Confirm on the owner's copy: the loader reads its data, the spinning thread calms down, frames get draws.
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.
 5. Measurable milestone: boot to the title screen; then to the main menu.
 

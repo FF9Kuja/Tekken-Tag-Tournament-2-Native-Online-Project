@@ -5,12 +5,20 @@
 # FileSectorInformation, class 26) and reads by raw sector through the disc device when that works.
 # ReXGlue 0.10.0 answers the query with a made-up number and mounts no disc device; the host answers it
 # as unsupported, as TTT2 Web does (recomp/src/io_overrides.cpp). This program opens a file of the game
-# root, queries its sector and its size, reads it, closes it, then opens the bare device \Device\Cdrom0
-# (the open the owner's log shows failing as "ResolvePath(\Device) failed") and asks for the attributes
-# of a file that does not exist. The game root must hold io_data.bin, 16 bytes starting with "TTT2".
+# root, queries its sector and its size, reads it, closes it, then opens the bare device \Device\Image
+# (the device the owner's log shows TTT2 probing at sub_82BCC880, failing as "ResolvePath(\Device)
+# failed"), asks for the attributes of a file that does not exist and opens that file with NtOpenFile.
+# A missing name is answered as the console and both reference ports answer it: STATUS_OBJECT_NAME_NOT_FOUND,
+# I/O status {0xC0000034, 0}, the caller's handle variable left as it was (it holds 0x7E57AB1E before each
+# failing open). The runtime's own answer is STATUS_NO_SUCH_FILE, information FILE_DOES_NOT_EXIST (5) and
+# INVALID_HANDLE_VALUE in the handle variable. The game root must hold io_data.bin, 16 bytes starting with
+# "TTT2".
 #
-#   expected results (default):          0 0xC0000003 0 16 0 0x54545432 8 0 0xC000000F 0xC000000F
-#   with TTT2_SECTOR_QUERY=runtime:      0 0          0 16 0 0x54545432 8 0 0xC000000F 0xC000000F
+#   expected results (default):          0 0xC0000003 0 16 0 0x54545432 8 0 0xC0000034 0xC0000034 0x7E57AB1E
+#                                        0xC0000034 0 0xC0000034 0x7E57AB1E
+#   with TTT2_SECTOR_QUERY=runtime:      result 1 is 0 (success), the rest as above
+#   with TTT2_NOT_FOUND_STATUS=runtime:  0 0xC0000003 0 16 0 0x54545432 8 0 0xC000000F 0xC000000F 0xFFFFFFFF
+#                                        0xC000000F 5 0xC000000F 0xFFFFFFFF
 #     0 NtCreateFile game:\io_data.bin          STATUS_SUCCESS
 #     1 sector query (class 26)                 STATUS_INVALID_INFO_CLASS (host) / success (runtime)
 #     2 NtQueryInformationFile class 34         STATUS_SUCCESS (the runtime's own answer)
@@ -19,8 +27,13 @@
 #     5 the first word read                     "TTT2"
 #     6 bytes read (I/O status block)           8
 #     7 NtClose                                 STATUS_SUCCESS
-#     8 NtCreateFile \Device\Cdrom0             STATUS_NO_SUCH_FILE (no device there)
-#     9 NtQueryFullAttributesFile game:\missing.bin   STATUS_NO_SUCH_FILE
+#     8 NtCreateFile \Device\Image              STATUS_OBJECT_NAME_NOT_FOUND (no device there)
+#     9 NtQueryFullAttributesFile game:\missing.bin   STATUS_OBJECT_NAME_NOT_FOUND
+#    10 the handle variable after 8             0x7E57AB1E, as before the call
+#    11 the I/O status of 8                     STATUS_OBJECT_NAME_NOT_FOUND
+#    12 the I/O status information of 8         0
+#    13 NtOpenFile game:\missing.bin            STATUS_OBJECT_NAME_NOT_FOUND
+#    14 the handle variable after 13            0x7E57AB1E, as before the call
 # Assemble with the SDK's bundled powerpc-none-elf-as (scripts/make-ppc-test-xex.sh); our own code, no
 # game bytes. Kernel ordinals from the public xboxkrnl.exe export table (src/xex/xbox_exports_table.inc).
 	.machine "power7"
@@ -111,7 +124,17 @@ _start:
 	bl NtClose_thunk
 	stw r3, 28(r31)
 
-	# 8: NtCreateFile(&handle2, ..., &oa_device, ...): the disc device itself
+	# 8: NtCreateFile(&handle2, ..., &oa_device, ...): the device itself. The handle variable holds
+	#    0x7E57AB1E and the I/O status block 0xFFFFFFFF twice before the call.
+	lis r3, handle2@ha
+	lis r0, 0x7E57
+	ori r0, r0, 0xAB1E
+	stw r0, handle2@l(r3)
+	lis r3, iosb@ha
+	addi r3, r3, iosb@l
+	li r0, -1
+	stw r0, 0(r3)
+	stw r0, 4(r3)
 	li r0, 0x20
 	stw r0, 0x54(r1)
 	lis r3, handle2@ha
@@ -136,6 +159,36 @@ _start:
 	bl NtQueryFullAttributesFile_thunk
 	stw r3, 36(r31)
 
+	# 10, 11, 12: the handle variable and the I/O status block of call 8
+	lis r3, handle2@ha
+	lwz r4, handle2@l(r3)
+	stw r4, 40(r31)
+	lis r3, iosb@ha
+	addi r3, r3, iosb@l
+	lwz r4, 0(r3)
+	stw r4, 44(r31)
+	lwz r4, 4(r3)
+	stw r4, 48(r31)
+
+	# 13, 14: NtOpenFile(&handle2, GENERIC_READ | SYNCHRONIZE, &oa_missing, &iosb, FILE_SYNCHRONOUS_IO_NONALERT)
+	#         with 0x7E57AB1E in the handle variable; then the handle variable
+	lis r3, handle2@ha
+	lis r0, 0x7E57
+	ori r0, r0, 0xAB1E
+	stw r0, handle2@l(r3)
+	addi r3, r3, handle2@l
+	lis r4, 0x8010
+	lis r5, oa_missing@ha
+	addi r5, r5, oa_missing@l
+	lis r6, iosb@ha
+	addi r6, r6, iosb@l
+	li r7, 0x20
+	bl NtOpenFile_thunk
+	stw r3, 52(r31)
+	lis r3, handle2@ha
+	lwz r4, handle2@l(r3)
+	stw r4, 56(r31)
+
 	li r3, 0
 	lwz r31, 120(r1)
 	addi r1, r1, 128
@@ -145,7 +198,7 @@ _start:
 	.size _start, .-_start
 
 # Import thunks, last in .text (see imports_ttt2.s). Ordinals: NtCreateFile 210, NtQueryInformationFile
-# 232, NtReadFile 240, NtClose 207, NtQueryFullAttributesFile 231.
+# 232, NtReadFile 240, NtClose 207, NtQueryFullAttributesFile 231, NtOpenFile 223.
 	.balign 4
 NtCreateFile_thunk:
 	.long 0x010000D2, 0, 0, 0
@@ -157,12 +210,14 @@ NtClose_thunk:
 	.long 0x010000CF, 0, 0, 0
 NtQueryFullAttributesFile_thunk:
 	.long 0x010000E7, 0, 0, 0
+NtOpenFile_thunk:
+	.long 0x010000DF, 0, 0, 0
 
 	.section .rodata
 	.balign 4
 name_data:	.ascii "game:\\io_data.bin"
 name_data_end:
-name_device:	.ascii "\\Device\\Cdrom0"
+name_device:	.ascii "\\Device\\Image"
 name_device_end:
 name_missing:	.ascii "game:\\missing.bin"
 name_missing_end:
@@ -185,6 +240,7 @@ NtQueryInformationFile_slot:	.long 0x000000E8
 NtReadFile_slot:		.long 0x000000F0
 NtClose_slot:			.long 0x000000CF
 NtQueryFullAttributesFile_slot:	.long 0x000000E7
+NtOpenFile_slot:		.long 0x000000DF
 
 	.section .data
 	.balign 8
@@ -195,4 +251,4 @@ handle2:	.long 0
 buffer:		.long 0, 0, 0, 0
 info:		.space 64
 	.globl results
-results:	.long 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+results:	.long 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0

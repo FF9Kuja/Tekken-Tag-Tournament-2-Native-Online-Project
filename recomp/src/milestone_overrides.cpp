@@ -4,8 +4,9 @@
 // A black window says nothing about how far the game got. These say it in the log: the first call of
 // each GPU set-up export with its arguments, the ring buffer and the graphics interrupt callback the game
 // registers, the number of frames it hands to the GPU (VdSwap: none means nothing was ever presented,
-// rather than black frames), and the boot monitor's counters the watchdog prints every tick. Every
-// wrapper calls the runtime's own export; nothing here changes what the game gets back.
+// rather than black frames), what each frame's command stream asks the GPU to do (frame_monitor.h: draws,
+// resolves, clears), and the boot monitor's counters the watchdog prints every tick. Every wrapper calls the
+// runtime's own export; nothing here changes what the game gets back.
 #include <rex/hook.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
@@ -18,6 +19,7 @@
 #include <string>
 
 #include "boot_monitor.h"
+#include "frame_monitor.h"
 #include "runtime_exports.h"
 
 namespace {
@@ -34,6 +36,31 @@ constexpr std::uint64_t kMaxLoggedDialogCalls = 8;
 std::uint32_t LoadU32(std::uint32_t address) {
   const auto* p = rex::system::kernel_memory()->TranslateVirtual<const std::uint8_t*>(address);
   return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) | (std::uint32_t(p[2]) << 8) | p[3];
+}
+
+/// The u32 at a guest address the game passed, or 0 when the address is not allocated memory.
+std::uint32_t LoadU32Checked(std::uint32_t address) {
+  auto* memory = rex::system::kernel_memory();
+  if (!memory || !address) return 0;
+  auto* heap = memory->LookupHeap(address);
+  if (!heap || memory->LookupHeap(address + 3) != heap ||
+      heap->QueryRangeAccess(address, address + 3) == rex::memory::PageAccess::kNoAccess) {
+    return 0;
+  }
+  return LoadU32(address);
+}
+
+/// VdSwap(buffer r3, fetch r4, r5, r6, r7, front buffer address pointer r8, format pointer r9, color space
+/// pointer r10, width pointer and height pointer as the 9th and 10th arguments, on the stack at 0x54 and 0x5C).
+ttt2::frames::Swap ReadSwap(const PPCContext& ctx) {
+  ttt2::frames::Swap swap;
+  swap.buffer = ctx.r3.u32;
+  swap.front_buffer = LoadU32Checked(ctx.r8.u32);
+  swap.format = LoadU32Checked(ctx.r9.u32);
+  swap.width = LoadU32Checked(LoadU32Checked(ctx.r1.u32 + 0x54));
+  swap.height = LoadU32Checked(LoadU32Checked(ctx.r1.u32 + 0x5C));
+  swap.lr = static_cast<std::uint32_t>(ctx.lr);
+  return swap;
 }
 
 /// A Win32-style result of the XAM exports.
@@ -115,6 +142,7 @@ TTT2_WRAPPED_EXPORT(VdInitializeRingBuffer) {
   const std::uint32_t ring = ctx.r3.u32;
   const std::uint32_t size_log2 = ctx.r4.u32;
   TTT2_RUNTIME_ORIGINAL(VdInitializeRingBuffer)(ctx, base);
+  ttt2::frames::NoteRingBuffer(ring, size_log2);
   counters().ring_buffer.store(ring ? ring : 1, std::memory_order_relaxed);
   counters().ring_buffer_size_log2.store(size_log2, std::memory_order_relaxed);
   REXLOG_INFO("ttt2: gpu: ring buffer at 0x{:08X}, size 2^{} ({}, from {})", ring, size_log2, CurrentThreadLabel(),
@@ -132,14 +160,17 @@ TTT2_WRAPPED_EXPORT(VdEnableRingBufferRPtrWriteBack) {
               CurrentThreadLabel());
 }
 
-// VdSwap(...): a frame handed to the display. The count tells "black frames" from "no frames".
+// VdSwap(...): a frame handed to the display. The count tells "black frames" from "no frames", the frame
+// monitor what the frame asked the GPU to draw.
 TTT2_WRAPPED_EXPORT(VdSwap) {
   const auto lr = static_cast<std::uint32_t>(ctx.lr);
   NoteCall(TTT2_EXPORT_ID(VdSwap), lr);
+  const ttt2::frames::Swap swap = ReadSwap(ctx);
   TTT2_RUNTIME_ORIGINAL(VdSwap)(ctx, base);
   if (counters().frames_presented.fetch_add(1, std::memory_order_relaxed) == 0) {
     REXLOG_INFO("ttt2: gpu: first frame presented (VdSwap, {}, from {})", CurrentThreadLabel(), DescribeGuestAddress(lr));
   }
+  ttt2::frames::NoteSwap(swap);
 }
 
 // --- audio ---------------------------------------------------------------------------------------------

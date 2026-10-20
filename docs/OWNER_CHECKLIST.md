@@ -94,6 +94,30 @@ window: whether anything appears (a logo, a loading screen, any colour other tha
 whether a dialog box appears; whether the window still responds. `$env:TTT2_SECTOR_QUERY = "runtime"` before the
 command brings back the runtime's old answer, if we ever need to compare the two (only when asked).
 
+Your latest run (2026-10-20, `main` at `33f43c8`) presented 10,760 frames, all black, read only 2 files in 180 s,
+opened `\Device\Image` (not the disc drive; the game never asked for a disc sector), and one thread made 339.5
+million system calls. What that points at (`docs/RESEARCH.md` 8f): the game reads a clock straight from memory
+(`KeTimeStampBundle`), and ReXGlue never advances two of its three parts. Both working reference ports keep them
+running, one of them measured the game waiting forever on that clock, and the other documents a game thread that loops
+until it moves - your busy thread. **The host now keeps that clock running.** `\Device\Image` is a device the game
+tries on every boot; neither working port has it either, so the host leaves it unmapped and answers the way the
+console does ("no such name"). The host also records what every frame asks the graphics chip to draw, which tells a
+black screen the game shows on its own (frames with nothing drawn, for instance while it waits for data) from frames
+that are drawn but come out black, and names any thread that spins. Next command, the same as last time (`git pull`
+first):
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot -BootTimeout 180
+```
+
+Send the same four files: `work\report.txt`, `work\boot-triage.md`, `work\boot-report.txt` and the newest log in
+`work\boot-logs\`. Watch the window for anything other than black (a logo, a loading screen, a colour) and when it
+appears. In `boot-triage.md`, the "Boot progress" table now has a "Kernel clock" row (it should count up to about the
+run's length) and the frames row says how many frames had draws; "What to do next" names any thread that still spins.
+Only if asked: `$env:TTT2_PIXEL_CHECK = "1"` before the command samples the pictures the game presents (it turns on
+the graphics emulation's copy-back, which is slower); `$env:TTT2_KERNEL_CLOCK = "runtime"` or
+`$env:TTT2_NOT_FOUND_STATUS = "runtime"` bring back the runtime's old behaviour for a comparison.
+
 ## No Title Update 3 yet? Use the base-image path
 
 Every step below works without the update: leave `-TitleUpdate` out and the pipeline runs in base-image mode

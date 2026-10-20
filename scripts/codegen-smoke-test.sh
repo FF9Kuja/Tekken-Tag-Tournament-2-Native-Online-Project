@@ -29,7 +29,10 @@
 # boundary programs run both ways: tailcall_ttt2.s through the cycle of a runtime trap resolved from
 # its log, then from scratch with recomp/tools/resolve_functions.py codegen --indirect, which registers
 # the pointer-called leaf ahead of time (no trap); pointer_ttt2.s with its two pointer-only functions
-# registered ahead of time (must pass) and without them (must trap at the first pointer call).
+# registered ahead of time (must pass) and without them (must trap at the first pointer call). The
+# file-system program (io_ttt2.s) and the kernel-clock program (clock_ttt2.s) run with the host's answers
+# and with the runtime's own (TTT2_SECTOR_QUERY=runtime, TTT2_NOT_FOUND_STATUS=runtime,
+# TTT2_KERNEL_CLOCK=runtime); the GPU-frames program (gpu_ttt2.s) checks the host's per-frame counts.
 #
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
@@ -69,7 +72,7 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
 rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2 \
-    "$work"/pointer_ttt2 "$work"/io_ttt2 "$work"/wait_ttt2
+    "$work"/pointer_ttt2 "$work"/io_ttt2 "$work"/wait_ttt2 "$work"/clock_ttt2 "$work"/gpu_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -271,10 +274,17 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
     run_case imports_ttt2 "$root/recomp/tests/ppc/imports_ttt2.s" 4 0 0 "--expect-imports 3"
 
     # The file-system calls behind the owner's black screen (io_ttt2.s) and a deliberate deadlock between
-    # two threads (wait_ttt2.s, booted by the host's stall test in the workflows): every ordinal must
-    # resolve to an __imp__ call; the entry point (and wait_ttt2's worker) plus one function per thunk.
-    run_case io_ttt2 "$root/recomp/tests/ppc/io_ttt2.s" 6 0 0 "--expect-imports 5"
-    run_case wait_ttt2 "$root/recomp/tests/ppc/wait_ttt2.s" 8 0 0 "--expect-imports 6"
+    # two threads next to a spinning one (wait_ttt2.s, booted by the host's stall test in the workflows): every
+    # ordinal must resolve to an __imp__ call; the entry point (and wait_ttt2's worker and spinner) plus one
+    # function per thunk.
+    run_case io_ttt2 "$root/recomp/tests/ppc/io_ttt2.s" 7 0 0 "--expect-imports 6"
+    run_case wait_ttt2 "$root/recomp/tests/ppc/wait_ttt2.s" 11 0 0 "--expect-imports 8"
+    # The kernel clock read from memory (clock_ttt2.s): a variable import (KeTimeStampBundle, a slot and no
+    # thunk) next to four function imports; the entry point plus one function per thunk.
+    run_case clock_ttt2 "$root/recomp/tests/ppc/clock_ttt2.s" 5 0 0 "--expect-imports 4"
+    # Three frames of GPU commands handed to VdSwap (gpu_ttt2.s): the entry point, its two helpers (copy_words,
+    # swap) and one function per thunk.
+    run_case gpu_ttt2 "$root/recomp/tests/ppc/gpu_ttt2.s" 7 0 0 "--expect-imports 4"
 
     # Function boundaries (tailcall_ttt2.s): the two shapes behind the 14 "target not in any function"
     # errors on the owner's executable. Pass 1, codegen alone: exactly those two errors (measured with
@@ -572,25 +582,31 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
 
         # File system (io_ttt2.s, recomp/src/io_overrides.cpp): the sector query (class 26) answered as
         # unsupported by the host, everything else by the runtime through the host's wrappers (the file
-        # opens, its size, 8 bytes read, the close), the bare device \Device\Cdrom0 failing to open as on
-        # the owner's first boot (the runtime's "ResolvePath(\Device) failed" line), a missing file's
-        # attributes; the host's trace lines must name each. With TTT2_SECTOR_QUERY=runtime the runtime's
-        # own answer (success) comes back instead.
+        # opens, its size, 8 bytes read, the close), the bare device \Device\Image failing to open as on
+        # the owner's boots (the runtime's "ResolvePath(\Device) failed" line), a missing file's attributes
+        # and a missing file opened with NtOpenFile: the missing names answered as the console and both
+        # reference ports answer them (STATUS_OBJECT_NAME_NOT_FOUND, I/O status information 0, the handle
+        # variable left as it was); the host's trace lines must name each. With TTT2_SECTOR_QUERY=runtime the
+        # runtime's own sector answer (success) comes back instead, with TTT2_NOT_FOUND_STATUS=runtime its
+        # own not-found answer (STATUS_NO_SUCH_FILE, information 5, INVALID_HANDLE_VALUE).
         dir="$work/io_ttt2"
         printf 'TTT2-IO-TEST-OK!' > "$dir/io_data.bin"
-        io_results="$(results_of "$dir/io_ttt2.xex.syms"):10"
+        io_results="$(results_of "$dir/io_ttt2.xex.syms"):15"
         rc=0
         run_host io_ttt2 "$dir/generated/default" "$io_results" \
-            "0,0xC0000003,0,16,0,0x54545432,8,0,0xC000000F,0xC000000F" info > "$dir/exec.log" 2>&1 || rc=$?
+            "0,0xC0000003,0,16,0,0x54545432,8,0,0xC0000034,0xC0000034,0x7E57AB1E,0xC0000034,0,0xC0000034,0x7E57AB1E" \
+            info > "$dir/exec.log" 2>&1 || rc=$?
         if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
             && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
             && grep -q "ttt2: file opened: 'game:.io_data.bin'" "$dir/exec.log" \
             && grep -q "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "$dir/exec.log" \
             && grep -q "ResolvePath(.Device) failed - device not found" "$dir/exec.log" \
-            && grep -q "ttt2: the game opened '.Device.Cdrom0', a device itself" "$dir/exec.log" \
-            && grep -q "ttt2: file open failed: '.Device.Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE)" "$dir/exec.log" \
-            && grep -q "ttt2: file attributes missing: 'game:.missing.bin' -> 0xC000000F" "$dir/exec.log"; then
-            echo "ok   exec: file system through the host's wrappers: sector query unsupported, open/size/read/close by the runtime, the bare disc device and a missing file traced"
+            && grep -q "ttt2: the game opened '.Device.Image', a device itself" "$dir/exec.log" \
+            && grep -q "ttt2: missing name: '.Device.Image' (NtCreateFile) answered as 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND)" "$dir/exec.log" \
+            && grep -q "ttt2: file open failed: '.Device.Image' -> 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND)" "$dir/exec.log" \
+            && grep -q "ttt2: file attributes missing: 'game:.missing.bin' -> 0xC0000034" "$dir/exec.log" \
+            && grep -q "ttt2: file open failed: 'game:.missing.bin' -> 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND) (NtOpenFile" "$dir/exec.log"; then
+            echo "ok   exec: file system through the host's wrappers: sector query unsupported, open/size/read/close by the runtime, the bare Image device and missing files answered as on the console"
         else
             echo "FAIL exec: native run of the file-system program (exit $rc, see $dir/exec.log)"
             tail -20 "$dir/exec.log"
@@ -598,7 +614,8 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         fi
         rc=0
         (TTT2_SECTOR_QUERY=runtime; export TTT2_SECTOR_QUERY; run_host io_ttt2 "$dir/generated/default" "$io_results" \
-            "0,0,0,16,0,0x54545432,8,0,0xC000000F,0xC000000F" info) > "$dir/exec-runtime.log" 2>&1 || rc=$?
+            "0,0,0,16,0,0x54545432,8,0,0xC0000034,0xC0000034,0x7E57AB1E,0xC0000034,0,0xC0000034,0x7E57AB1E" info) \
+            > "$dir/exec-runtime.log" 2>&1 || rc=$?
         if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-runtime.log" \
             && ! grep -q "ttt2: sector query:" "$dir/exec-runtime.log"; then
             echo "ok   exec: with TTT2_SECTOR_QUERY=runtime the runtime's own sector answer (success) comes back"
@@ -607,9 +624,97 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             tail -20 "$dir/exec-runtime.log"
             status=1
         fi
+        rc=0
+        (TTT2_NOT_FOUND_STATUS=runtime; export TTT2_NOT_FOUND_STATUS; run_host io_ttt2 "$dir/generated/default" "$io_results" \
+            "0,0xC0000003,0,16,0,0x54545432,8,0,0xC000000F,0xC000000F,0xFFFFFFFF,0xC000000F,5,0xC000000F,0xFFFFFFFF" info) \
+            > "$dir/exec-notfound-runtime.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-notfound-runtime.log" \
+            && ! grep -q "ttt2: missing name:" "$dir/exec-notfound-runtime.log"; then
+            echo "ok   exec: with TTT2_NOT_FOUND_STATUS=runtime the runtime's own not-found answer comes back (0xC000000F, information 5, INVALID_HANDLE_VALUE)"
+        else
+            echo "FAIL exec: the file-system program with TTT2_NOT_FOUND_STATUS=runtime (exit $rc, see $dir/exec-notfound-runtime.log)"
+            tail -20 "$dir/exec-notfound-runtime.log"
+            status=1
+        fi
+
+        # The kernel clock (clock_ttt2.s, recomp/src/kernel_clock.cpp): KeTimeStampBundle read from memory
+        # through its import slot. With the host's refresh InterruptTime and SystemTime advance over a 50 ms
+        # sleep, agree with TickCount and KeQuerySystemTime, and a thread that signals its own event and waits
+        # on it until InterruptTime changes (as TTT2's sub_82ABFDE8 does, per TTT2 Web) gets out of its loop.
+        # With TTT2_KERNEL_CLOCK=runtime (the runtime's own bundle: only TickCount moves) the same loop runs
+        # into its 1,000,000-round cap: the owner's thread with 339 million kernel calls in 180 s.
+        dir="$work/clock_ttt2"
+        clock_results="$(results_of "$dir/clock_ttt2.xex.syms"):7"
+        rc=0
+        run_host clock_ttt2 "$dir/generated/default" "$clock_results" "1,1,1,1,1,1,1" info > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
+            && grep -q "ttt2: kernel clock: KeTimeStampBundle at 0x[0-9A-F]*: the host refreshes InterruptTime and SystemTime" "$dir/exec.log"; then
+            echo "ok   exec: the kernel clock read from memory advances (InterruptTime, SystemTime, TickCount agree) and the wait-for-the-clock loop ends"
+        else
+            echo "FAIL exec: native run of the kernel-clock program (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
+        rc=0
+        (TTT2_KERNEL_CLOCK=runtime; export TTT2_KERNEL_CLOCK; run_host clock_ttt2 "$dir/generated/default" "$clock_results" \
+            "0,0,0,1,0,0,0" info) > "$dir/exec-runtime.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-runtime.log" \
+            && grep -q "TTT2_KERNEL_CLOCK=runtime: KeTimeStampBundle keeps the runtime's behaviour" "$dir/exec-runtime.log"; then
+            echo "ok   exec: with TTT2_KERNEL_CLOCK=runtime InterruptTime and SystemTime stay 0 and the loop runs into its cap, as on the owner's machine"
+        else
+            echo "FAIL exec: the kernel-clock program with TTT2_KERNEL_CLOCK=runtime (exit $rc, see $dir/exec-runtime.log)"
+            tail -20 "$dir/exec-runtime.log"
+            status=1
+        fi
+
+        # The frame monitor (gpu_ttt2.s, recomp/src/frame_monitor.cpp, pm4_stats.cpp): three frames of PM4 packets in a
+        # 4 KB ring buffer, the third wrapping around its end, handed to VdSwap; the host must count each frame's
+        # draws, resolves, clears, render target changes, indirect buffers and the packet the GPU emulation skips.
+        # TTT2_PIXEL_CHECK=1 samples the front buffer (192 of its 256 pixels hold 0x11223344); TTT2_FRAME_STATS=0
+        # turns the counting off. No GPU emulation is involved: VdSwap only fills its 64 words.
+        dir="$work/gpu_ttt2"
+        gpu_results="$(results_of "$dir/gpu_ttt2.xex.syms"):2"
+        rc=0
+        run_host gpu_ttt2 "$dir/generated/default" "$gpu_results" "1,1" info > "$dir/exec.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: front buffer 16x16 k_8_8_8_8 at 0x[0-9A-F]* (frame 1)" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 1: 3 draws, 1 resolve (1 clearing), 1 render target change, 1 indirect buffer, 1 packet the GPU emulation skips (opcode 0x25), 10 packets (26 words of commands)" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: first frame with draws: frame 1:" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 2 packets (4 words of commands)" "$dir/exec.log" \
+            && grep -q "ttt2: gpu: frame 3: 2 draws, 4 packets (872 words of commands)" "$dir/exec.log"; then
+            echo "ok   exec: the frame monitor counted each frame's draws, resolves, clears and skipped packets, across the end of the ring"
+        else
+            echo "FAIL exec: native run of the GPU-frames program (exit $rc, see $dir/exec.log)"
+            tail -20 "$dir/exec.log"
+            status=1
+        fi
+        rc=0
+        (TTT2_PIXEL_CHECK=1; export TTT2_PIXEL_CHECK; run_host gpu_ttt2 "$dir/generated/default" "$gpu_results" "1,1" info) \
+            > "$dir/exec-pixel.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-pixel.log" \
+            && grep -q "ttt2: gpu: pixel check frame 1: front buffer 16x16 k_8_8_8_8 at 0x[0-9A-F]*: 256 samples, 2 distinct values, most common 0x11223344 (75%), 25% zero" "$dir/exec-pixel.log"; then
+            echo "ok   exec: with TTT2_PIXEL_CHECK=1 the presented front buffer was sampled (2 distinct values, 0x11223344 in 75%)"
+        else
+            echo "FAIL exec: the GPU-frames program with TTT2_PIXEL_CHECK=1 (exit $rc, see $dir/exec-pixel.log)"
+            tail -20 "$dir/exec-pixel.log"
+            status=1
+        fi
+        rc=0
+        (TTT2_FRAME_STATS=0; export TTT2_FRAME_STATS; run_host gpu_ttt2 "$dir/generated/default" "$gpu_results" "1,1" info) \
+            > "$dir/exec-off.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec-off.log" && ! grep -q "ttt2: gpu: frame [0-9]" "$dir/exec-off.log"; then
+            echo "ok   exec: with TTT2_FRAME_STATS=0 no frame was counted"
+        else
+            echo "FAIL exec: the GPU-frames program with TTT2_FRAME_STATS=0 (exit $rc, see $dir/exec-off.log)"
+            tail -20 "$dir/exec-off.log"
+            status=1
+        fi
     fi
 else
-    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / io_ttt2 / wait_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / io_ttt2 / wait_ttt2 / clock_ttt2 / gpu_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

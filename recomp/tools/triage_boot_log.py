@@ -40,7 +40,7 @@ RE_STILL_STALLED = re.compile(r"ttt2: still stalled after (\d+) ms")
 RE_DUMP_HEADER = re.compile(r"ttt2: thread state at (.+):$")
 RE_STALL_THREAD = re.compile(r"ttt2:\s+(\S.*?)\s+id (\d+)\s+(running|stopped) priority (-?\d+) suspend (\d+) wait_result (0x[0-9a-fA-F]+)")
 # The boot monitor's lines (recomp/src/boot_monitor.cpp and the export wrappers).
-RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack): (.*)$")
+RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack|busy): (.*)$")
 RE_DUMP_BUSIEST = re.compile(r"ttt2:\s+traced kernel calls in the last tick: (.*)$")
 RE_DUMP_FILES = re.compile(r"ttt2:\s+recent file activity")
 RE_DUMP_FILE_EVENT = re.compile(r"ttt2:\s+t\+([\d.]+) s (\w+) '(.*)' -> (.*)$")
@@ -56,6 +56,24 @@ RE_DEVICE_CONTROL = re.compile(r"ttt2: device control (0x[0-9A-Fa-f]+) on '(.*)'
 RE_MILESTONE = re.compile(r"ttt2: (gpu|audio|input|xam): (.*)$")
 RE_THREAD_CREATED = re.compile(r"ttt2: thread created: id (\d+), start (0x[0-9A-Fa-f]+)(?: \((sub_[0-9A-Fa-f]+)\))?(.*)$")
 RE_OWNER_ID = re.compile(r"owned by (?:.*?\(id (\d+)\)|thread id (\d+))")
+RE_CLOSE_ENDED = re.compile(r"ttt2: main guest thread ended by the window close \(id (\d+)\)")
+RE_KERNEL_CLOCK = re.compile(r"ttt2: kernel clock: (.*)$")
+RE_MISSING_NAME = re.compile(r"ttt2: missing name: '(.*)' \((\w+)\) answered as (0x[0-9A-Fa-f]+)")
+# Frame monitor lines (recomp/src/frame_monitor.cpp), matched on the text after "ttt2: gpu: ".
+RE_FRAME_STATS = re.compile(r"^frame (\d+): (.*) \((\d+) words of commands\)$")
+RE_FIRST_DRAWS = re.compile(r"^first frame with draws: frame (\d+): (.*) \((?:[^()]|\([^()]*\))*, from .*\)$")
+RE_SKIPPED_PACKETS = re.compile(r"^frame (\d+) holds packets the GPU emulation does not execute.*?: (.*)$")
+RE_FRONT_BUFFER = re.compile(r"^front buffer (\d+)x(\d+) (\S+) at (0x[0-9A-Fa-f]+) \(frame (\d+)\)$")
+RE_PIXEL = re.compile(r"^pixel check frame (\d+): (.*)$")
+# A thread dump's "kernel calls" text from hosts without the busy line: "<N> in the last tick ...".
+RE_CALLS_LAST_TICK = re.compile(r"^(\d+) in the last tick")
+RE_CS_WAIT = re.compile(r"critical section (0x[0-9A-Fa-f]+) \(owned by (.*?), recursion (-?\d+)\)")
+# Traced kernel calls in one watchdog tick (5 s by default) from which a thread counts as spinning, for logs of
+# hosts that do not flag busy threads themselves (the host's own threshold is 50000 a second).
+BUSY_CALLS_PER_TICK = 250000
+# Device paths the game opens on every boot that the reference ports (TTT2 Web, TTT2Recomp) do not map either:
+# their failure is expected and not what stops a boot.
+KNOWN_DEVICE_PROBES = {"\\device\\image"}
 # The activity line's fields, read one by one (the GPU part depends on the backend).
 ACTIVITY_FIELDS = {
     "files_opened": r"files (\d+) opened", "open_failures": r"opened, (\d+) failed", "device_failures": r"\((\d+) device paths\)",
@@ -66,7 +84,17 @@ ACTIVITY_FIELDS = {
     "ring_write_pointer": r"ring write pointer (0x[0-9A-Fa-f]+)", "frames_presented": r"frames presented (\d+)",
     "audio_clients": r"audio clients (\d+)", "audio_frames": r"audio frames (\d+)", "input_polls": r"input polls (\d+)",
     "traced_calls": r"traced kernel calls (\d+)",
+    "missing_names": r"missing names (\d+)",
+    "kernel_clock_s": r"kernel clock ([\d.]+) s", "tick_count_s": r"tick count ([\d.]+) s",
+    "kernel_clock_state": r"kernel clock (off|missing|not started)",
+    "frames_with_draws": r"frames presented \d+ \((\d+) with draws", "frames_with_resolves": r"(\d+) with resolves",
+    "draws_total": r"; draws (\d+), resolves \d+, clears \d+", "resolves_total": r"; draws \d+, resolves (\d+), clears \d+",
+    "clears_total": r"; draws \d+, resolves \d+, clears (\d+)", "max_draws": r"at most (\d+) draws in a frame",
+    "skipped_packets": r"clears \d+(?:, at most \d+ draws in a frame)?, (\d+) packets? the GPU emulation skips",
+    "last_frame": r"last frame: (.*?)(?:; front buffer \d+x\d+)?\); audio clients",
+    "front_buffer": r"; front buffer (\d+x\d+)\); audio clients", "frame_stats_off": r"(frame stats off)",
 }
+FLOAT_FIELDS = {"mb_read", "kernel_clock_s", "tick_count_s"}
 RE_REPORT = re.compile(r"ttt2: kernel stub report at (.*): (\d+) calls to (\d+) distinct stubs")
 RE_REPORT_LINE = re.compile(r"ttt2:\s+(\S+)\s+(\d+) calls \(first seen as stub call #(\d+)\)")
 RE_CRASH = re.compile(r"ttt2: HOST CRASH: (.*) at host pc (0x[0-9a-fA-F]+)")
@@ -157,8 +185,10 @@ def parse_activity(text):
         if not m:
             continue
         value = m.group(1)
-        if key == "mb_read":
+        if key in FLOAT_FIELDS:
             out[key] = float(value)
+        elif key == "frame_stats_off":
+            out[key] = True
         elif value.isdigit():
             out[key] = int(value)
         else:
@@ -226,6 +256,10 @@ def triage(lines, ttt2web=None):
              "read_failures": [], "device_controls": []}
     milestones = []
     threads_created = []
+    kernel_clock = None
+    missing_names = []
+    frames = {"first": [], "first_with_draws": None, "skipped_packets": None, "front_buffers": [], "pixel_checks": []}
+    ended_by_close = None
     unparsed = 0
 
     for raw in lines:
@@ -270,6 +304,13 @@ def triage(lines, ttt2web=None):
         elif (mm := RE_MAIN_EXITED.search(msg)):
             main_exited = ts
             events.append((ts, f"main guest thread exited (id {mm.group(1)})"))
+        elif (mm := RE_CLOSE_ENDED.search(msg)):
+            ended_by_close = ts
+            events.append((ts, f"main guest thread ended by the window close (id {mm.group(1)})"))
+        elif (mm := RE_KERNEL_CLOCK.search(msg)):
+            kernel_clock = mm.group(1)
+        elif (mm := RE_MISSING_NAME.search(msg)):
+            missing_names.append({"time": ts, "path": mm.group(1), "api": mm.group(2), "status": mm.group(3)})
         elif (mm := RE_ENDED.search(msg)):
             ended = int(mm.group(1))
             events.append((ts, f"host exited with code {ended} after the program ended"))
@@ -300,9 +341,10 @@ def triage(lines, ttt2web=None):
         elif current_dump is not None and (mm := RE_STALL_THREAD.search(msg)):
             current_dump["threads"].append({"name": mm.group(1), "id": int(mm.group(2)), "state": mm.group(3),
                                             "priority": int(mm.group(4)), "suspend": int(mm.group(5)),
-                                            "wait_result": mm.group(6), "wait": None, "calls": None, "stack": None})
+                                            "wait_result": mm.group(6), "wait": None, "calls": None, "stack": None,
+                                            "busy": None})
         elif current_dump is not None and current_dump["threads"] and (mm := RE_THREAD_DETAIL.search(msg)):
-            key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack"}[mm.group(1)]
+            key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack", "busy": "busy"}[mm.group(1)]
             current_dump["threads"][-1][key] = mm.group(2)
         elif current_dump is not None and (mm := RE_DUMP_BUSIEST.search(msg)):
             current_dump["busiest"] = mm.group(1)
@@ -336,8 +378,22 @@ def triage(lines, ttt2web=None):
                                     "function": mm.group(3), "details": mm.group(4).strip()})
         elif (mm := RE_MILESTONE.search(msg)):
             milestones.append({"time": ts, "area": mm.group(1), "text": mm.group(2)})
-            if mm.group(1) == "gpu" and mm.group(2).startswith("first frame presented"):
-                events.append((ts, "first frame presented (VdSwap)"))
+            text = mm.group(2)
+            if mm.group(1) == "gpu":
+                if text.startswith("first frame presented"):
+                    events.append((ts, "first frame presented (VdSwap)"))
+                elif (mf := RE_FRAME_STATS.match(text)):
+                    frames["first"].append({"frame": int(mf.group(1)), "stats": mf.group(2), "words": int(mf.group(3))})
+                elif (mf := RE_FIRST_DRAWS.match(text)):
+                    frames["first_with_draws"] = {"time": ts, "frame": int(mf.group(1)), "stats": mf.group(2)}
+                    events.append((ts, f"first frame with draws (frame {mf.group(1)})"))
+                elif (mf := RE_SKIPPED_PACKETS.match(text)):
+                    frames["skipped_packets"] = {"frame": int(mf.group(1)), "stats": mf.group(2)}
+                elif (mf := RE_FRONT_BUFFER.match(text)):
+                    frames["front_buffers"].append({"width": int(mf.group(1)), "height": int(mf.group(2)),
+                                                    "format": mf.group(3), "address": mf.group(4), "frame": int(mf.group(5))})
+                elif (mf := RE_PIXEL.match(text)):
+                    frames["pixel_checks"].append({"frame": int(mf.group(1)), "text": mf.group(2)})
         elif (mm := RE_REPORT.search(msg)):
             report = {"when": mm.group(1), "calls": int(mm.group(2)), "distinct": int(mm.group(3)), "stubs": []}
         elif report is not None and (mm := RE_REPORT_LINE.search(msg)):
@@ -466,8 +522,18 @@ def triage(lines, ttt2web=None):
                                "stubbed call that never signals) in the per-thread dump.")
     # The boot monitor's view (hosts with recomp/src/boot_monitor.cpp).
     last_dump = close_dump or (stalls[-1] if stalls else None)
-    if files["device_opens"]:
-        paths = sorted({d["path"] for d in files["device_opens"]})
+    probes = sorted({d["path"] for d in files["device_opens"] if d["path"].lower() in KNOWN_DEVICE_PROBES})
+    for path in probes:
+        statuses = sorted({f["status"] for f in files["failed"] if f["path"] == path})
+        text = (f"The game probed the device {path} ({', '.join(statuses) or 'failed'}): TTT2 does this on every boot, and "
+                "TTT2 Web and TTT2Recomp, which run the game to its menus, have no such device either and answer it as a "
+                "missing name; this is not what stops the boot.")
+        if "0xC000000F" in statuses:
+            text += (" This host answered with the runtime's STATUS_NO_SUCH_FILE; newer hosts give the console's and the "
+                     "reference ports' answer (STATUS_OBJECT_NAME_NOT_FOUND, the caller's handle left alone).")
+        recommendations.append(text)
+    if files["device_opens"] and any(d["path"].lower() not in KNOWN_DEVICE_PROBES for d in files["device_opens"]):
+        paths = sorted({d["path"] for d in files["device_opens"] if d["path"].lower() not in KNOWN_DEVICE_PROBES})
         if files["sector_first"]:
             recommendations.append(
                 f"The game opened the bare device {', '.join(paths)} although the host answered its disc sector query as "
@@ -480,7 +546,8 @@ def triage(lines, ttt2web=None):
                 "error) without asking for a disc sector first: it wants the device itself. Report this log: the next "
                 "step is a device at that path (the game folder, as TTT2 Web maps \\Device\\Cdrom0).")
     if files["failed"]:
-        other = [f for f in files["failed"] if f["path"] not in {d["path"] for d in files["device_opens"]}]
+        other = [f for f in files["failed"] if f["path"] not in {d["path"] for d in files["device_opens"]}
+                 and f["path"].lower() not in KNOWN_DEVICE_PROBES]
         if other:
             shown = ", ".join(f"{f['path']} ({f['status_name'] or f['status']})" for f in other[:5])
             recommendations.append(f"{len(other)} other path(s) failed to open, first: {shown}. A file of the game data "
@@ -491,16 +558,52 @@ def triage(lines, ttt2web=None):
         recommendations.append(f"File reads failed ({len(files['read_failures'])} logged), first: {r['path']} at {r['offset']} "
                                f"length {r['length']} -> {r['status']}.")
     if activity:
-        if activity.get("frames_presented", 0) == 0:
+        presented = activity.get("frames_presented", 0)
+        if presented == 0:
             where = "before graphics initialisation (the GPU ring buffer was never set up)" \
                 if activity.get("ring_buffer") == "not set up" else "after the GPU set-up but before its first frame"
             recommendations.append(
                 f"No frame was presented (VdSwap was never called): the black window is the absence of any frame, not "
                 f"black frames, and the game stopped {where}. The per-thread dump below says where each thread waits.")
+        elif "frames_with_draws" in activity:
+            with_draws = activity["frames_with_draws"]
+            with_resolves = activity.get("frames_with_resolves", 0)
+            if with_draws == 0 and with_resolves == 0:
+                recommendations.append(
+                    f"{presented} frames were presented and not one asked the GPU to draw: their command streams hold no "
+                    "draw and no resolve (last frame: " + activity.get("last_frame", "?") + "). The game presents empty "
+                    "frames - a black screen of its own, as while it waits for its data or a timer - so the GPU emulation "
+                    "is not what keeps the window black: what the game's threads wait for is (see the dumps below).")
+            else:
+                recommendations.append(
+                    f"The game draws: {activity.get('draws_total', '?')} draws and {activity.get('resolves_total', '?')} "
+                    f"resolves ({activity.get('clears_total', '?')} clearing) in {with_draws} of {presented} frames, at most "
+                    f"{activity.get('max_draws', '?')} in one. If the window stays black, the question is what the frames "
+                    "contain: boot again with TTT2_PIXEL_CHECK=1 (the host samples the presented front buffer, with the "
+                    "GPU emulation's readback of resolves turned on).")
+            if activity.get("skipped_packets"):
+                first = frames["skipped_packets"]
+                recommendations.append(
+                    f"The frames hold {activity['skipped_packets']} GPU packets the GPU emulation does not execute (it logs "
+                    "them as \"Unimplemented GPU OPCODE\" and skips them)"
+                    + (f", first in frame {first['frame']}: {first['stats']}" if first else "")
+                    + ". If what they do matters to the picture, the GPU emulation needs them.")
+        elif activity.get("frame_stats_off"):
+            recommendations.append(f"{presented} frame(s) were presented; the frame monitor was off (TTT2_FRAME_STATS=0), "
+                                   "so what they drew is unknown.")
         else:
             recommendations.append(
-                f"{activity['frames_presented']} frame(s) were presented (VdSwap): the game renders. If the window still "
-                "showed nothing, the frames themselves are black: a rendering (GPU emulation) problem, not a boot stall.")
+                f"{presented} frame(s) were presented (VdSwap). This host does not count what the frames draw; newer hosts "
+                "log each frame's draws and resolves, which tells empty frames (the game's own black screen while it "
+                "waits) from frames that are drawn but come out black (the GPU emulation).")
+        for check in frames["pixel_checks"][-1:]:
+            recommendations.append(f"Pixel check (frame {check['frame']}): {check['text']}.")
+        if "kernel_clock_s" in activity and activity["kernel_clock_s"] == 0 and activity.get("tick_count_s", 0) >= 1:
+            recommendations.append("The kernel clock (KeTimeStampBundle InterruptTime) stood still while TickCount moved: "
+                                   "the host's 1 ms refresh is not running. Report this log.")
+        elif activity.get("kernel_clock_state") == "off":
+            recommendations.append("The kernel clock refresh was turned off (TTT2_KERNEL_CLOCK=runtime): the game's "
+                                   "64-bit clocks stand still that way; unset it for a normal boot.")
         if activity.get("gpu_emulation") and activity.get("vblanks") == 0:
             recommendations.append("The GPU emulation's vblank counter never moved: its vsync thread is not running.")
     if last_dump:
@@ -527,6 +630,47 @@ def triage(lines, ttt2web=None):
                 f" waits for a lock held by {names.get(i, '?')} (id {i}), which" for i in path[1:])
             what = f" waits: {end['wait']}" if end and end.get("wait") else " is not in a traced wait"
             recommendations.append(f"Wait chain: {chain}{what}.")
+        for th in last_dump["threads"]:
+            busy = th.get("busy")
+            if not busy and th.get("calls") and (mc := RE_CALLS_LAST_TICK.match(th["calls"])) \
+                    and int(mc.group(1)) >= BUSY_CALLS_PER_TICK:
+                busy = f"{mc.group(1)} traced kernel calls in one watchdog tick ({th['calls'].split(';')[0]})"
+            if not busy:
+                continue
+            busy = busy.split(": a loop that keeps calling")[0]
+            text = (f"{th['name']} (id {th['id']}) spins: {busy}. It keeps calling the kernel without waiting for long: "
+                    "a polling loop, not a deadlock.")
+            if activity is not None and "kernel_clock_s" not in activity and "kernel_clock_state" not in activity:
+                text += (" This host predates the kernel clock fix: KeTimeStampBundle's InterruptTime and SystemTime stood "
+                         "at 0, and TTT2 Web documents a game thread (sub_82ABFDE8) that signals its own event and waits on "
+                         "it until a 64-bit counter changes, which spins forever on a clock that never moves. Boot again "
+                         "with a current host.")
+            elif activity is not None and activity.get("kernel_clock_state") == "off":
+                text += " The kernel clock refresh was off (TTT2_KERNEL_CLOCK=runtime), which leaves such loops spinning."
+            elif activity is not None and "kernel_clock_s" in activity:
+                text += (f" The kernel clock advances ({activity['kernel_clock_s']} s), so the loop waits for something "
+                         "else: the busy line names its call site and the guest stack the functions around it.")
+            recommendations.append(text)
+        sections = {}
+        for dump in [st for st in stalls] + ([close_dump] if close_dump else []):
+            for th in dump["threads"]:
+                for address, owner, recursion in RE_CS_WAIT.findall(th.get("wait") or ""):
+                    seen = sections.setdefault(norm_hex(address), [])
+                    if not seen or seen[-1][0] != dump["time"]:
+                        seen.append((dump["time"], owner, int(recursion)))
+        for address, seen in sections.items():
+            owners = {owner for _, owner, _ in seen}
+            counts = [recursion for _, _, recursion in seen]
+            if len(owners) == 1 and len(set(counts)) > 1:
+                recommendations.append(
+                    f"Critical section {address} stayed with {seen[0][1]} while its recursion count went from {counts[0]} "
+                    f"to {counts[-1]} between the dumps: its owner enters it again and again (RtlEnterCriticalSection) "
+                    "and leaves it less often, so the threads waiting for it never get it. Its guest stack shows the loop.")
+            elif max(counts) >= 64:
+                recommendations.append(
+                    f"Critical section {address} is held by {seen[-1][1]} with recursion count {max(counts)}: entered that "
+                    "many times without being left. Nesting that deep is unusual; if the count changes between dumps, its "
+                    "owner enters it in a loop.")
         blocked = [t for t in last_dump["threads"] if t.get("wait") and "no timeout" in t["wait"]
                    and ("not signaled" in t["wait"] or "count 0 of" in t["wait"])]
         if blocked:
@@ -558,6 +702,10 @@ def triage(lines, ttt2web=None):
         "files": files,
         "milestones": milestones,
         "threads_created": threads_created,
+        "kernel_clock": kernel_clock,
+        "missing_names": missing_names,
+        "frames": frames,
+        "ended_by_close": ended_by_close,
         "stubs": {"source": stub_source, "total_calls": report["calls"] if report else sum(stub_warnings.values()),
                   "list": stubs},
         "crash": crash,
@@ -619,9 +767,19 @@ def render_markdown(t, source):
                   f"{a.get('interrupt_callback', '?')}"
                   + (f", vblanks {a['vblanks']}, ring write pointer {a.get('ring_write_pointer', '?')}" if "vblanks" in a
                      else ", no GPU emulation") + " |",
-                  f"| Frames presented (VdSwap) | {a.get('frames_presented', '?')} |",
+                  f"| Frames presented (VdSwap) | {a.get('frames_presented', '?')}"
+                  + (f": {a['frames_with_draws']} with draws, {a.get('frames_with_resolves', '?')} with resolves; "
+                     f"{a.get('draws_total', '?')} draws, {a.get('resolves_total', '?')} resolves, "
+                     f"{a.get('clears_total', '?')} clears; last frame: {a.get('last_frame', '?')}"
+                     + (f"; front buffer {a['front_buffer']}" if a.get("front_buffer") else "")
+                     if "frames_with_draws" in a else "") + " |",
                   f"| Audio | {a.get('audio_clients', '?')} client(s), {a.get('audio_frames', '?')} frames |",
                   f"| Input polls | {a.get('input_polls', '?')} |",
+                  f"| Missing names answered as not found | {a.get('missing_names', '?')} |",
+                  f"| Kernel clock (KeTimeStampBundle) | "
+                  + (f"{a['kernel_clock_s']} s (tick count {a.get('tick_count_s', '?')} s)" if "kernel_clock_s" in a
+                     else a.get("kernel_clock_state", "not reported (an older host: InterruptTime and SystemTime stood at 0)"))
+                  + " |",
                   f"| Traced kernel calls | {a.get('traced_calls', '?')}"
                   + (f" (through {t['traced_exports']} wrapped exports)" if t.get("traced_exports") else "") + " |", ""]
     fs = t.get("files") or {}
@@ -652,6 +810,23 @@ def render_markdown(t, source):
         for m in t["milestones"][:60]:
             lines.append(f"* `{m['time']}` {m['area']}: {m['text']}")
         lines.append("")
+    fr = t.get("frames") or {}
+    if fr.get("first") or fr.get("first_with_draws") or fr.get("pixel_checks") or fr.get("front_buffers"):
+        lines += ["## Frames (what the command streams asked the GPU to do)", ""]
+        for f in fr.get("front_buffers", [])[:4]:
+            lines.append(f"* front buffer {f['width']}x{f['height']} {f['format']} at {f['address']} (from frame {f['frame']})")
+        for f in fr.get("first", []):
+            lines.append(f"* frame {f['frame']}: {f['stats']} ({f['words']} words of commands)")
+        if fr.get("first_with_draws"):
+            lines.append(f"* first frame with draws: frame {fr['first_with_draws']['frame']}: {fr['first_with_draws']['stats']}")
+        else:
+            lines.append("* no frame with draws")
+        if fr.get("skipped_packets"):
+            lines.append(f"* packets the GPU emulation skips, first in frame {fr['skipped_packets']['frame']}: "
+                         f"{fr['skipped_packets']['stats']}")
+        for c in fr.get("pixel_checks", [])[:12]:
+            lines.append(f"* pixel check, frame {c['frame']}: {c['text']}")
+        lines.append("")
     if t.get("threads_created"):
         lines += ["## Threads created", ""]
         for c in t["threads_created"]:
@@ -665,10 +840,10 @@ def render_markdown(t, source):
         for th in dump["threads"]:
             out.append(f"| {th['name']} | {th['id']} | {th['state']} | {th['priority']} | {th['suspend']} | {th['wait_result']} |")
         out.append("")
-        detailed = [th for th in dump["threads"] if th.get("wait") or th.get("stack")]
+        detailed = [th for th in dump["threads"] if th.get("wait") or th.get("stack") or th.get("busy")]
         for th in detailed:
             out.append(f"* **{th['name']} (id {th['id']})**")
-            for key, label in (("wait", "wait"), ("calls", "kernel calls"), ("stack", "guest stack")):
+            for key, label in (("wait", "wait"), ("calls", "kernel calls"), ("busy", "busy"), ("stack", "guest stack")):
                 if th.get(key):
                     out.append(f"  * {label}: {th[key]}")
         if dump.get("busiest"):

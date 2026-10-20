@@ -1,3 +1,3 @@
 # Import libraries of io_ttt2.s for scripts/ppc_elf_to_xex.py --imports: library, then the
 # ELF symbols of its import records (slot and thunk of each import).
-xboxkrnl.exe: NtCreateFile_slot, NtCreateFile_thunk, NtQueryInformationFile_slot, NtQueryInformationFile_thunk, NtReadFile_slot, NtReadFile_thunk, NtClose_slot, NtClose_thunk, NtQueryFullAttributesFile_slot, NtQueryFullAttributesFile_thunk
+xboxkrnl.exe: NtCreateFile_slot, NtCreateFile_thunk, NtQueryInformationFile_slot, NtQueryInformationFile_thunk, NtReadFile_slot, NtReadFile_thunk, NtClose_slot, NtClose_thunk, NtQueryFullAttributesFile_slot, NtQueryFullAttributesFile_thunk, NtOpenFile_slot, NtOpenFile_thunk

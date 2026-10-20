@@ -115,6 +115,7 @@ struct Counters {
   std::atomic<std::uint64_t> bytes_read{0};
   std::atomic<std::uint64_t> sector_queries{0};  ///< FileSectorInformation queries answered unsupported
   std::atomic<std::uint64_t> attribute_failures{0};  ///< NtQueryFullAttributesFile misses
+  std::atomic<std::uint64_t> not_found_answers{0};  ///< missing names answered as STATUS_OBJECT_NAME_NOT_FOUND
   std::atomic<std::uint64_t> threads_created{0};
   std::atomic<std::uint64_t> frames_presented{0};  ///< VdSwap calls
   std::atomic<std::uint64_t> audio_frames{0};      ///< XAudioSubmitRenderDriverFrame calls

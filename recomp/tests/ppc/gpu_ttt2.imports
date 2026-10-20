@@ -1,0 +1,3 @@
+# Import libraries of gpu_ttt2.s for scripts/ppc_elf_to_xex.py --imports: library, then the
+# ELF symbols of its import records (slot and thunk of each import).
+xboxkrnl.exe: MmAllocatePhysicalMemoryEx_slot, MmAllocatePhysicalMemoryEx_thunk, MmGetPhysicalAddress_slot, MmGetPhysicalAddress_thunk, VdInitializeRingBuffer_slot, VdInitializeRingBuffer_thunk, VdSwap_slot, VdSwap_thunk

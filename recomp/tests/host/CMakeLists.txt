@@ -38,12 +38,14 @@ include("${TTT2_GUEST_GENERATED}/sources.cmake")
 # The host's kernel stub counter, kernel overrides and export wrappers (recomp/src) are compiled in, so
 # the harness reports the stubs a program reaches and binds import calls exactly as the game host does:
 # a program that calls an overridden export (recomp/tests/ppc/imports_ttt2.s) gets the override's result,
-# one that queries a file's disc sector (io_ttt2.s) gets the host's answer.
+# one that queries a file's disc sector (io_ttt2.s) gets the host's answer, one that reads the kernel clock
+# from memory (clock_ttt2.s) sees the host's refresh of it (kernel_clock.cpp).
 set(TTT2_HOST_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../src")
 add_executable(headless_host headless_main.cpp "${TTT2_HOST_SRC}/stub_counter.cpp"
     "${TTT2_HOST_SRC}/kernel_overrides.cpp" "${TTT2_HOST_SRC}/runtime_exports.cpp"
-    "${TTT2_HOST_SRC}/boot_monitor.cpp" "${TTT2_HOST_SRC}/io_overrides.cpp" "${TTT2_HOST_SRC}/wait_overrides.cpp"
-    "${TTT2_HOST_SRC}/milestone_overrides.cpp" ${GENERATED_SOURCES})
+    "${TTT2_HOST_SRC}/boot_monitor.cpp" "${TTT2_HOST_SRC}/kernel_clock.cpp" "${TTT2_HOST_SRC}/io_overrides.cpp"
+    "${TTT2_HOST_SRC}/wait_overrides.cpp" "${TTT2_HOST_SRC}/milestone_overrides.cpp"
+    "${TTT2_HOST_SRC}/frame_monitor.cpp" "${TTT2_HOST_SRC}/pm4_stats.cpp" ${GENERATED_SOURCES})
 target_compile_definitions(headless_host PRIVATE
     TTT2_GUEST_INIT_HEADER="${TTT2_GUEST_PROJECT}_init.h"
     TTT2_GUEST_PROJECT_NAME="${TTT2_GUEST_PROJECT}")

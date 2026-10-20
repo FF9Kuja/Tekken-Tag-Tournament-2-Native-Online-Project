@@ -78,6 +78,9 @@ class Ttt2App : public rex::ReXApp {
   std::shared_ptr<ttt2::KernelStubCounter> stubs_;
   bool crash_handler_installed_ = false;
   std::atomic<bool> crash_reported_{false};
+  // Set when the window is being closed: ReXApp's close path then terminates the title (which ends the main
+  // guest thread too) and hard-exits the process itself.
+  std::atomic<bool> closing_{false};
   rex::system::XThread* main_thread_ = nullptr;
   std::thread watchdog_;
   std::atomic<bool> watchdog_stop_{false};
