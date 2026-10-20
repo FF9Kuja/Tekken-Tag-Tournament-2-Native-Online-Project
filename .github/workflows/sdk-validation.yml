@@ -122,8 +122,9 @@ jobs:
           python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-io.log --report out/host-resolve-io.md --ignore-stamp
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 60 --no-imports --expect-io
-          # And on three frames of GPU commands handed to VdSwap (recomp/tests/ppc/gpu_ttt2.s): the frame monitor must
-          # count each frame's draws, resolves, clears and skipped packets, across the end of the ring buffer.
+          # And on four frames of GPU commands handed to VdSwap (recomp/tests/ppc/gpu_ttt2.s): the frame monitor must
+          # count each frame's draws, resolves, clears and skipped packets, across the end of the ring buffer, and
+          # count the frame outside the ring, which it cannot follow without a GPU emulation, as not followed.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/gpu_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-gpu.json
           python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-gpu.log --report out/host-resolve-gpu.md --ignore-stamp

@@ -45,6 +45,7 @@ add_executable(headless_host headless_main.cpp "${TTT2_HOST_SRC}/stub_counter.cp
     "${TTT2_HOST_SRC}/kernel_overrides.cpp" "${TTT2_HOST_SRC}/runtime_exports.cpp"
     "${TTT2_HOST_SRC}/boot_monitor.cpp" "${TTT2_HOST_SRC}/kernel_clock.cpp" "${TTT2_HOST_SRC}/io_overrides.cpp"
     "${TTT2_HOST_SRC}/wait_overrides.cpp" "${TTT2_HOST_SRC}/milestone_overrides.cpp"
+    "${TTT2_HOST_SRC}/diag_overrides.cpp" "${TTT2_HOST_SRC}/lock_tracker.cpp" "${TTT2_HOST_SRC}/object_tracker.cpp"
     "${TTT2_HOST_SRC}/frame_monitor.cpp" "${TTT2_HOST_SRC}/pm4_stats.cpp" ${GENERATED_SOURCES})
 target_compile_definitions(headless_host PRIVATE
     TTT2_GUEST_INIT_HEADER="${TTT2_GUEST_PROJECT}_init.h"

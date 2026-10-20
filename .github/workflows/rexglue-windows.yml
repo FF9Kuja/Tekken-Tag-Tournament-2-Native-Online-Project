@@ -280,9 +280,10 @@ jobs:
             --report out/host-resolve-io.md --ignore-stamp
           (cd recomp && cmake --build --preset win-amd64-release)
           scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --no-imports --expect-io
-      - name: Boot ttt2.exe on three frames of GPU commands (the frame monitor)
+      - name: Boot ttt2.exe on four frames of GPU commands (the frame monitor)
         # recomp/tests/ppc/gpu_ttt2.s: draws, a clearing resolve, an indirect buffer, a packet the GPU emulation skips
-        # and a frame that wraps around the end of the ring buffer, each counted by the host.
+        # and a frame that wraps around the end of the ring buffer, each counted by the host, and a frame outside the
+        # ring that cannot be followed without a GPU emulation (counted as not followed, its draws unknown).
         if: inputs.build_host
         shell: bash
         run: |

@@ -12,13 +12,16 @@ add_executable(ttt2_tests
     test_stub_name.cpp
     test_input_core.cpp
     test_pm4_stats.cpp
+    test_lock_tracker.cpp
     "${PROJECT_SOURCE_DIR}/recomp/src/input/input_core.cpp"
     "${PROJECT_SOURCE_DIR}/recomp/src/pm4_stats.cpp"
+    "${PROJECT_SOURCE_DIR}/recomp/src/lock_tracker.cpp"
+    "${PROJECT_SOURCE_DIR}/recomp/src/object_tracker.cpp"
 )
 target_link_libraries(ttt2_tests PRIVATE ttt2::core ttt2::xex ttt2::xdvdfs ttt2::stfs doctest::doctest)
-# recomp/src/stub_name.hpp, recomp/src/input/ and recomp/src/pm4_stats.* are SDK-free, so the host's stub-line
-# parser, its keyboard input core and its GPU command-stream counter are tested here (the host build compiles
-# the same sources against the SDK).
+# recomp/src/stub_name.hpp, recomp/src/input/, recomp/src/pm4_stats.*, lock_tracker.* and object_tracker.* are
+# SDK-free, so the host's stub-line parser, its keyboard input core, its GPU command-stream counter and its
+# critical-section and dispatcher-object bookkeeping are tested here (the host build compiles the same sources).
 target_include_directories(ttt2_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/recomp/src")
 ttt2_apply_warnings(ttt2_tests)
 

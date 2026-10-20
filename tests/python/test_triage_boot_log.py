@@ -473,6 +473,63 @@ class Triage(unittest.TestCase):
         self.assertIn("| Frames presented (VdSwap) | 4 (3 followed in the GPU command stream by the ring between swaps, 1 "
                       "not followed): 2 with draws", md)
 
+    def test_lock_holds_calls_by_site_and_the_games_own_calls(self):
+        # The shape of the owner's boots with the new host: the main thread holds the heap lock 390 deep, two threads
+        # wait for it; thread 19's loop by call site; thread names, a C++ throw, a refused allocation, an APC.
+        lines = head(backend="xenos") + [
+            W(955, "ttt2: thread name 'nuscMain' for thread id 6: thread id 6 is named so now; set from 0x82BE70DC (sub_82BE70A0+0x3C) on nuscMain (id 6)"),
+            W(955, "ttt2: thread name 'nuscFileAsyncRequest' for thread id 99: no thread with that id; set from 0x82A4FE9C (sub_82A4FE80+0x1C) on thread id 26"),
+            W(956, "ttt2: C++ exception 1 thrown (type .?AVbad_alloc@std@@) from 0x82BD3F2C (sub_82BD3F08+0x24) on nuscMain (id 6): the runtime cannot unwind the guest stack, so the code after the throw runs next, which on the console never does", level="warning"),
+            W(956, "ttt2: memory: NtAllocateVirtualMemory(base 0x00000000, size 0x2000000, type 0x20003000, protect 0x4) -> 0xC0000017 (STATUS_NO_MEMORY) from 0x82BC3D50 (sub_82BC3CE8+0x68) on thread id 26", level="warning"),
+            W(957, "ttt2: APC 1 queued to handle 0xF8000108: routine 0x82AAE600 (sub_82AAE600) (context 0x40001000) -> 0x00000000 (STATUS_SUCCESS) from 0x82AAD800 (sub_82AAD7F0+0x10) on nuscMain (id 6)"),
+            W(957, "ttt2: NtSignalAndWaitForSingleObjectEx from 0x82BCA6DC (sub_82BCA698+0x44): wait mode 1, alertable 0 (the runtime reads the wait mode as the alertable flag; the host passes it the alertable flag)"),
+            W(961, self.frames_activity("600 (599 followed in the GPU command stream by the ring write pointer; 0 with draws, 0 "
+                                        "with resolves; draws 0, resolves 0, clears 0; last frame: 12 packets; front buffer "
+                                        "1280x720)").replace("(tick count 180.1 s)", "(tick count 180.1 s); exceptions raised 23 "
+                                        "(1 C++), APCs queued 1, memory call failures 1, debug breaks 0")),
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, "ttt2: thread state at window close:"),
+            W(965, "ttt2:   nuscMain                         id 6      running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: none (running guest code, or blocked outside the traced kernel calls)"),
+            W(965, "ttt2:     holds: critical section 0x40000618 at depth 390 since t+0.4 s (the section's own count: 390), unchanged for 179.6 s; 391 enters and 1 leaves since then; open enters from 0x82BD6888 (sub_82BD67E0+0xA8) x389, 0x82552570 (sub_82552220+0x350) x1"),
+            W(965, "ttt2:     holds: critical section 0x40000618 entered to depth 256 at t+0.4 s: 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BD7FAC (sub_82BD7F80+0x2C) <- 0x82552570 (sub_82552220+0x350)"),
+            W(965, "ttt2:   (unnamed)                        id 12     running priority 16 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40000618 (owned by nuscMain (id 6), recursion 390), no timeout, for at least 173.1 s, called from 0x82BD6888 (sub_82BD67E0+0xA8)"),
+            W(965, "ttt2:   (unnamed)                        id 19     running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     calls by site: NtWaitForSingleObjectEx on 0xF8000104 from 0x82BDA250 (sub_82BDA218+0x38): 164000000; NtSignalAndWaitForSingleObjectEx signal 0xF8000104 wait 0xF8000108 from 0x82BCA6DC (sub_82BCA698+0x44): 164000000"),
+            W(966, "ttt2: main guest thread ended by the window close (id 6)"),
+        ]
+        t = MOD.triage(lines, {}, closed_by="the boot step's 180 s timeout")
+        self.assertEqual(t["outcome"], "closed by the boot step's 180 s timeout while the game was running")
+        a = t["activity"]
+        self.assertEqual((a["exceptions_raised"], a["cpp_exceptions"], a["apcs_queued"], a["memory_failures"],
+                          a["debug_breaks"]), (23, 1, 1, 1, 0))
+        main = t["close_dump"]["threads"][0]
+        self.assertEqual(len(main["holds"]), 2)
+        self.assertIn("calls by site", MOD.render_markdown(t, "x.log"))
+        self.assertTrue(t["close_dump"]["threads"][2]["sites"].startswith("NtWaitForSingleObjectEx on 0xF8000104"))
+        recs = t["recommendations"]
+        held = [r for r in recs if r.startswith("Critical section 0x40000618 is held by nuscMain (id 6) at depth 390")]
+        self.assertEqual(len(held), 1)
+        self.assertIn("while 1 thread(s) wait for it: (unnamed) (id 12)", held[0])
+        self.assertIn("0x82BD6888 (sub_82BD67E0+0xA8) x389", held[0])
+        self.assertIn("the enter that took it to depth 256 (t+0.4 s) came through 0x82BD6888", held[0])
+        self.assertFalse(any("Nesting that deep is unusual" in r for r in recs))  # the older guess is replaced
+        cpp = [r for r in recs if r.startswith("The game threw 1 C++ exception(s), the first (type .?AVbad_alloc@std@@)")]
+        self.assertEqual(len(cpp), 1)
+        self.assertIn("from 0x82BD3F2C (sub_82BD3F08+0x24) on nuscMain (id 6).", cpp[0])
+        self.assertTrue(any(r.startswith("1 memory call(s) failed, first NtAllocateVirtualMemory(") and
+                            r.endswith("from 0x82BC3D50 (sub_82BC3CE8+0x68) on thread id 26: the game then runs a path the "
+                                       "console does not.") for r in recs))
+        apc = [r for r in recs if r.startswith("The game queued 1 user APC(s)")]
+        self.assertEqual(len(apc), 1)
+        self.assertIn("(wait mode, alertable) (1, 0)", apc[0])
+        self.assertTrue(any(r.startswith("1 of the 2 thread names the game set reached no thread") for r in recs))
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("## The game's own calls (thread names, exceptions, debug breaks, APCs, memory)", md)
+        self.assertIn("* thread name 'nuscMain' for thread id 6: thread id 6 is named so now", md)
+        self.assertIn("  * holds: critical section 0x40000618 at depth 390", md)
+
     def test_parse_activity_without_gpu(self):
         a = MOD.parse_activity(
             "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "

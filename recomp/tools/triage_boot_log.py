@@ -40,7 +40,22 @@ RE_STILL_STALLED = re.compile(r"ttt2: still stalled after (\d+) ms")
 RE_DUMP_HEADER = re.compile(r"ttt2: thread state at (.+):$")
 RE_STALL_THREAD = re.compile(r"ttt2:\s+(\S.*?)\s+id (\d+)\s+(running|stopped) priority (-?\d+) suspend (\d+) wait_result (0x[0-9a-fA-F]+)")
 # The boot monitor's lines (recomp/src/boot_monitor.cpp and the export wrappers).
-RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack|busy): (.*)$")
+RE_THREAD_DETAIL = re.compile(r"ttt2:\s+(wait|kernel calls|guest stack|busy|calls by site|holds): (.*)$")
+RE_HOLD = re.compile(r"critical section (0x[0-9A-Fa-f]+) at depth (\d+) since t\+([\d.]+) s \(the section's own count: "
+                     r"(-?\d+)\), unchanged for ([\d.]+) s; (\d+) enters and (\d+) leaves since then; open enters from (.*)$")
+RE_HOLD_STACK = re.compile(r"critical section (0x[0-9A-Fa-f]+) entered to depth (\d+) at t\+([\d.]+) s: (.*)$")
+# Diagnostics of the game's own calls (recomp/src/diag_overrides.cpp, wait_overrides.cpp).
+# "... from <call site> on <thread>": a thread label may hold parentheses ("nuscMain (id 7)"), a call site never " on ".
+RE_THREAD_NAME = re.compile(r"ttt2: thread name '(.*)' for thread id (-1: the caller|\d+): (.*); set from (.*) on (.*)$")
+RE_CPP_EXCEPTION = re.compile(r"ttt2: C\+\+ exception (\d+) thrown \((.*?)\) from (.*) on (.*?): the runtime cannot unwind")
+RE_OTHER_EXCEPTION = re.compile(r"ttt2: exception (0x[0-9A-Fa-f]+) raised \(flags (0x[0-9A-Fa-f]+), address (0x[0-9A-Fa-f]+)\) "
+                                r"from (.*) on (.*)$")
+RE_DEBUG_BREAK = re.compile(r"ttt2: debug break (\d+) from (.*) on (.*)$")
+RE_BUG_CHECK = re.compile(r"ttt2: bug check (0x[0-9A-Fa-f]+)(.*?) from (.*) on (.*)$")
+RE_MEMORY_FAILURE = re.compile(r"ttt2: memory: (.*) -> (0x[0-9A-Fa-f]{8}(?: \([A-Z_]+\))?) from (.*) on (.*)$")
+RE_APC = re.compile(r"ttt2: APC (\d+) queued to handle (0x[0-9A-Fa-f]+): routine (.*) \(context (0x[0-9A-Fa-f]+)\) -> (.*?) "
+                    r"from (.*) on (.*)$")
+RE_SIGNAL_WAIT_MODE = re.compile(r"ttt2: NtSignalAndWaitForSingleObjectEx from (.*): wait mode (\d+), alertable (\d+) \((.*)\)$")
 RE_DUMP_BUSIEST = re.compile(r"ttt2:\s+traced kernel calls in the last tick: (.*)$")
 RE_DUMP_FILES = re.compile(r"ttt2:\s+recent file activity")
 RE_DUMP_FILE_EVENT = re.compile(r"ttt2:\s+t\+([\d.]+) s (\w+) '(.*)' -> (.*)$")
@@ -101,6 +116,9 @@ ACTIVITY_FIELDS = {
     "skipped_packets": r"clears \d+(?:, at most \d+ draws in a frame)?, (\d+) packets? the GPU emulation skips",
     "last_frame": r"last frame: (.*?)(?:; front buffer \d+x\d+)?\); audio clients",
     "front_buffer": r"; front buffer (\d+x\d+)\); audio clients", "frame_stats_off": r"(frame stats off)",
+    "exceptions_raised": r"exceptions raised (\d+)", "cpp_exceptions": r"exceptions raised \d+ \((\d+) C\+\+\)",
+    "apcs_queued": r"APCs queued (\d+)", "memory_failures": r"memory call failures (\d+)",
+    "debug_breaks": r"debug breaks (\d+)",
 }
 FLOAT_FIELDS = {"mb_read", "kernel_clock_s", "tick_count_s"}
 RE_REPORT = re.compile(r"ttt2: kernel stub report at (.*): (\d+) calls to (\d+) distinct stubs")
@@ -242,8 +260,9 @@ def find_deadlocks(threads):
     return cycles
 
 
-def triage(lines, ttt2web=None):
-    """Returns the structured triage of the given log lines (dicts and lists only)."""
+def triage(lines, ttt2web=None, closed_by=None):
+    """Returns the structured triage of the given log lines (dicts and lists only). `closed_by` names who closed the
+    window when it was not a person (run-host.ps1's timeout: "the boot step's 180 s timeout")."""
     ttt2web = ttt2web or {}
     facts = {"title_id": None, "version": None, "base_version": None, "media_id": None, "not_ttt2": False,
              "graphics_backend": None, "roots": {}, "imports": {}, "arena": None}
@@ -279,6 +298,9 @@ def triage(lines, ttt2web=None):
     frames = {"first": [], "first_with_draws": None, "skipped_packets": None, "front_buffers": [], "pixel_checks": []}
     ended_by_close = None
     unparsed = 0
+    # The game's own calls: thread names, exceptions, debug breaks, APCs, refused memory calls, signal-and-wait flags.
+    calls = {"thread_names": [], "cpp_exceptions": [], "other_exceptions": [], "debug_breaks": [], "bug_checks": [],
+             "memory_failures": [], "apcs": [], "signal_and_wait": []}
 
     for raw in lines:
         line = raw.rstrip("\r\n")
@@ -360,10 +382,14 @@ def triage(lines, ttt2web=None):
             current_dump["threads"].append({"name": mm.group(1), "id": int(mm.group(2)), "state": mm.group(3),
                                             "priority": int(mm.group(4)), "suspend": int(mm.group(5)),
                                             "wait_result": mm.group(6), "wait": None, "calls": None, "stack": None,
-                                            "busy": None})
+                                            "busy": None, "sites": None, "holds": []})
         elif current_dump is not None and current_dump["threads"] and (mm := RE_THREAD_DETAIL.search(msg)):
-            key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack", "busy": "busy"}[mm.group(1)]
-            current_dump["threads"][-1][key] = mm.group(2)
+            if mm.group(1) == "holds":
+                current_dump["threads"][-1].setdefault("holds", []).append(mm.group(2))
+            else:
+                key = {"wait": "wait", "kernel calls": "calls", "guest stack": "stack", "busy": "busy",
+                       "calls by site": "sites"}[mm.group(1)]
+                current_dump["threads"][-1][key] = mm.group(2)
         elif current_dump is not None and (mm := RE_DUMP_BUSIEST.search(msg)):
             current_dump["busiest"] = mm.group(1)
         elif current_dump is not None and RE_DUMP_FILES.search(msg):
@@ -435,9 +461,30 @@ def triage(lines, ttt2web=None):
             var_imports.append({"library": mm.group(1), "ordinal": mm.group(2), "name": mm.group(3)})
         elif (mm := RE_GPU_MISSING.search(msg)):
             gpu_missing.append(mm.group(1))
+        elif (mm := RE_THREAD_NAME.search(msg)):
+            calls["thread_names"].append({"time": ts, "name": mm.group(1), "id": mm.group(2), "applied": mm.group(3),
+                                          "from": mm.group(4), "thread": mm.group(5)})
+        elif (mm := RE_CPP_EXCEPTION.search(msg)):
+            calls["cpp_exceptions"].append({"time": ts, "n": int(mm.group(1)), "type": mm.group(2), "from": mm.group(3),
+                                            "thread": mm.group(4)})
+        elif (mm := RE_OTHER_EXCEPTION.search(msg)):
+            calls["other_exceptions"].append({"time": ts, "code": mm.group(1), "from": mm.group(4), "thread": mm.group(5)})
+        elif (mm := RE_DEBUG_BREAK.search(msg)):
+            calls["debug_breaks"].append({"time": ts, "from": mm.group(2), "thread": mm.group(3)})
+        elif (mm := RE_BUG_CHECK.search(msg)):
+            calls["bug_checks"].append({"time": ts, "code": mm.group(1), "from": mm.group(3), "thread": mm.group(4)})
+        elif (mm := RE_MEMORY_FAILURE.search(msg)):
+            calls["memory_failures"].append({"time": ts, "call": mm.group(1), "status": mm.group(2), "from": mm.group(3),
+                                             "thread": mm.group(4)})
+        elif (mm := RE_APC.search(msg)):
+            calls["apcs"].append({"time": ts, "handle": mm.group(2), "routine": mm.group(3), "status": mm.group(5),
+                                  "from": mm.group(6), "thread": mm.group(7)})
+        elif (mm := RE_SIGNAL_WAIT_MODE.search(msg)):
+            calls["signal_and_wait"].append({"from": mm.group(1), "wait_mode": int(mm.group(2)),
+                                             "alertable": int(mm.group(3)), "note": mm.group(4)})
         elif "Window closing, shutting down" in msg:
             closed = ts
-            events.append((ts, "window closed by the user"))
+            events.append((ts, f"window closed by {closed_by}" if closed_by else "window closed by the user"))
         elif "Too few processor cores" in msg:
             too_few_cores = True
 
@@ -455,7 +502,8 @@ def triage(lines, ttt2web=None):
         if closed:
             outcome += "; the window was closed afterwards"
     elif closed:
-        outcome = "closed by the user while the game was running"
+        outcome = (f"closed by {closed_by} while the game was running" if closed_by
+                   else "closed by the user while the game was running")
     elif main_created:
         outcome = "incomplete: the log ends while the game runs (killed, still running, or the log was cut)"
     elif facts["title_id"]:
@@ -687,6 +735,36 @@ def triage(lines, ttt2web=None):
                 text += (f" The kernel clock advances ({activity['kernel_clock_s']} s), so the loop waits for something "
                          "else: the busy line names its call site and the guest stack the functions around it.")
             recommendations.append(text)
+        # The critical sections a thread holds, from the host's own count of its enters and leaves (holds: lines).
+        explained = set()
+        for th in last_dump["threads"]:
+            holds = th.get("holds") or []
+            for text in holds:
+                mh = RE_HOLD.match(text)
+                if not mh:
+                    continue
+                address, depth = norm_hex(mh.group(1)), int(mh.group(2))
+                waiters = [o for o in last_dump["threads"] if o is not th and o.get("wait")
+                           and f"critical section {mh.group(1)}".lower() in o["wait"].lower()]
+                if depth < 2:
+                    continue  # an ordinary hold: the wait chain above already says who holds what
+                stacks = [ms for ms in (RE_HOLD_STACK.match(x) for x in holds)
+                          if ms and norm_hex(ms.group(1)) == address]
+                rec = (f"Critical section {address} is held by {th['name']} (id {th['id']}) at depth {depth} since "
+                       f"t+{mh.group(3)} s, unchanged for {mh.group(5)} s ({mh.group(6)} enters and {mh.group(7)} leaves "
+                       f"since it was taken; the section's own count: {mh.group(4)})")
+                if waiters:
+                    rec += (f", while {len(waiters)} thread(s) wait for it: "
+                            + ", ".join(f"{w['name']} (id {w['id']})" for w in waiters[:6]))
+                rec += f". The enters still open came from {mh.group(8)}"
+                if stacks:
+                    deepest = stacks[-1]
+                    rec += (f"; the enter that took it to depth {deepest.group(2)} (t+{deepest.group(3)} s) came through "
+                            f"{deepest.group(4)}")
+                rec += (". Those calls entered the section and their callers returned without leaving it; on the "
+                        "console the code after them leaves it again. The functions on that stack are where to look.")
+                recommendations.append(rec)
+                explained.add(address)
         sections = {}
         for dump in [st for st in stalls] + ([close_dump] if close_dump else []):
             for th in dump["threads"]:
@@ -695,6 +773,8 @@ def triage(lines, ttt2web=None):
                     if not seen or seen[-1][0] != dump["time"]:
                         seen.append((dump["time"], owner, int(recursion)))
         for address, seen in sections.items():
+            if address in explained:
+                continue
             owners = {owner for _, owner, _ in seen}
             counts = [recursion for _, _, recursion in seen]
             if len(owners) == 1 and len(set(counts)) > 1:
@@ -708,13 +788,49 @@ def triage(lines, ttt2web=None):
                     "many times without being left. Nesting that deep is unusual; if the count changes between dumps, its "
                     "owner enters it in a loop.")
         blocked = [t for t in last_dump["threads"] if t.get("wait") and "no timeout" in t["wait"]
-                   and ("not signaled" in t["wait"] or "count 0 of" in t["wait"])]
+                   and ("not signaled" in t["wait"] or "never signaled" in t["wait"] or "count 0 of" in t["wait"])]
         if blocked:
             first = blocked[0]
             recommendations.append(
                 f"{len(blocked)} thread(s) wait without a timeout on an event or semaphore nobody signals, e.g. "
                 f"{first['name']} (id {first['id']}): {first['wait']}. Find what should signal it: the guest stacks name the "
                 "functions; a missing interrupt (vblank), an I/O completion or a stubbed call are the usual causes.")
+    if calls["cpp_exceptions"]:
+        first = calls["cpp_exceptions"][0]
+        n = (activity or {}).get("cpp_exceptions", len(calls["cpp_exceptions"]))
+        recommendations.append(
+            f"The game threw {n} C++ exception(s), the first ({first['type']}) from {first['from']} on {first['thread']}. "
+            "The runtime cannot unwind the guest stack, so the code after each throw ran, which never happens on the "
+            "console (TTT2 Web stops there): what came after it in this log is suspect. Why the game threw - a failed "
+            "allocation, a missing file - is the next question.")
+    for ex in calls["other_exceptions"][:1]:
+        recommendations.append(f"The game raised exception {ex['code']} from {ex['from']} on {ex['thread']}: the runtime "
+                               "does not handle it and goes on after the call.")
+    if calls["debug_breaks"] or calls["bug_checks"]:
+        hits = calls["bug_checks"] + calls["debug_breaks"]
+        recommendations.append(
+            f"The game stopped at {len(hits)} debug break(s) or bug check(s) (an assertion that failed), first from "
+            f"{hits[0]['from']} on {hits[0]['thread']}: the runtime goes on after it; the console would not. The assertion "
+            "names a state the game did not expect.")
+    if calls["memory_failures"]:
+        first = calls["memory_failures"][0]
+        n = (activity or {}).get("memory_failures", len(calls["memory_failures"]))
+        recommendations.append(f"{n} memory call(s) failed, first {first['call']} -> {first['status']} from {first['from']} "
+                               f"on {first['thread']}: the game then runs a path the console does not.")
+    if calls["apcs"]:
+        first = calls["apcs"][0]
+        n = (activity or {}).get("apcs_queued", len(calls["apcs"]))
+        modes = sorted({(c["wait_mode"], c["alertable"]) for c in calls["signal_and_wait"]})
+        recommendations.append(
+            f"The game queued {n} user APC(s), the first to handle {first['handle']} (routine {first['routine']}). The "
+            "runtime delivers them at the thread's next alertable wait; neither reference port delivers APCs at all."
+            + (" Its signal-and-wait calls pass (wait mode, alertable) " + ", ".join(f"({m}, {a})" for m, a in modes)
+               + ": the host passes the alertable flag where the runtime reads it." if modes else ""))
+    unnamed = [n for n in calls["thread_names"] if n["applied"].startswith("no thread")]
+    if unnamed:
+        recommendations.append(f"{len(unnamed)} of the {len(calls['thread_names'])} thread names the game set reached no "
+                               f"thread (first '{unnamed[0]['name']}' for thread id {unnamed[0]['id']}): the runtime found no "
+                               "thread with the id the game passed, so the dumps cannot use those names.")
     if outcome.startswith("incomplete"):
         recommendations.append("The log has no end marker: if the host was still running, it was not frozen for 15 s "
                                "(no stall dump) and not crashed; attach the console output and what the window showed.")
@@ -753,6 +869,7 @@ def triage(lines, ttt2web=None):
         "errors": [{"message": first_error_text[k], "count": c} for k, c in errors.most_common(15)],
         "levels": dict(levels),
         "unparsed_lines": unparsed,
+        "calls": calls,
         "recommendations": recommendations,
     }
 
@@ -848,6 +965,26 @@ def render_markdown(t, source):
         for m in t["milestones"][:60]:
             lines.append(f"* `{m['time']}` {m['area']}: {m['text']}")
         lines.append("")
+    gc = t.get("calls") or {}
+    if any(gc.get(k) for k in ("thread_names", "cpp_exceptions", "other_exceptions", "debug_breaks", "bug_checks",
+                               "memory_failures", "apcs", "signal_and_wait")):
+        lines += ["## The game's own calls (thread names, exceptions, debug breaks, APCs, memory)", ""]
+        for n in gc.get("thread_names", [])[:40]:
+            lines.append(f"* thread name '{n['name']}' for thread id {n['id']}: {n['applied']} (from {n['from']})")
+        for e in gc.get("cpp_exceptions", [])[:16]:
+            lines.append(f"* C++ exception {e['n']} ({e['type']}) from {e['from']} on {e['thread']}")
+        for e in gc.get("other_exceptions", [])[:16]:
+            lines.append(f"* exception {e['code']} from {e['from']} on {e['thread']}")
+        for e in (gc.get("bug_checks", []) + gc.get("debug_breaks", []))[:16]:
+            lines.append(f"* {'bug check ' + e['code'] if 'code' in e else 'debug break'} from {e['from']} on {e['thread']}")
+        for e in gc.get("memory_failures", [])[:16]:
+            lines.append(f"* memory: {e['call']} -> {e['status']} from {e['from']} on {e['thread']}")
+        for e in gc.get("apcs", [])[:16]:
+            lines.append(f"* APC queued to handle {e['handle']}: routine {e['routine']} -> {e['status']} from {e['from']}")
+        for e in gc.get("signal_and_wait", [])[:16]:
+            lines.append(f"* NtSignalAndWaitForSingleObjectEx from {e['from']}: wait mode {e['wait_mode']}, alertable "
+                         f"{e['alertable']}")
+        lines.append("")
     fr = t.get("frames") or {}
     if fr.get("first") or fr.get("first_with_draws") or fr.get("pixel_checks") or fr.get("front_buffers"):
         lines += ["## Frames (what the command streams asked the GPU to do)", ""]
@@ -878,12 +1015,16 @@ def render_markdown(t, source):
         for th in dump["threads"]:
             out.append(f"| {th['name']} | {th['id']} | {th['state']} | {th['priority']} | {th['suspend']} | {th['wait_result']} |")
         out.append("")
-        detailed = [th for th in dump["threads"] if th.get("wait") or th.get("stack") or th.get("busy")]
+        detailed = [th for th in dump["threads"] if th.get("wait") or th.get("stack") or th.get("busy") or th.get("holds")
+                    or th.get("sites")]
         for th in detailed:
             out.append(f"* **{th['name']} (id {th['id']})**")
-            for key, label in (("wait", "wait"), ("calls", "kernel calls"), ("busy", "busy"), ("stack", "guest stack")):
+            for key, label in (("wait", "wait"), ("calls", "kernel calls"), ("busy", "busy"), ("sites", "calls by site"),
+                               ("stack", "guest stack")):
                 if th.get(key):
                     out.append(f"  * {label}: {th[key]}")
+            for hold in th.get("holds") or []:
+                out.append(f"  * holds: {hold}")
         if dump.get("busiest"):
             out.append(f"* traced kernel calls in the last tick: {dump['busiest']}")
         for f in dump.get("files", []):
@@ -964,6 +1105,8 @@ def main(argv):
     ap.add_argument("--ttt2web-list", default=os.path.join(here, "ttt2web_kernel_functions.txt"),
                     help="TTT2 Web reference list (name, file:line, kind per line)")
     ap.add_argument("--quiet", action="store_true", help="only print the outcome line")
+    ap.add_argument("--closed-by", help="who closed the window when it was not a person, e.g. \"the boot step's 180 s "
+                                        "timeout\" (scripts/run-host.ps1 passes it)")
     args = ap.parse_args(argv[1:])
 
     files = session_files(args.log)
@@ -971,7 +1114,7 @@ def main(argv):
     for f in files:
         with open(f, encoding="utf-8", errors="replace") as fh:
             lines.extend(fh.readlines())
-    t = triage(lines, load_ttt2web_list(args.ttt2web_list))
+    t = triage(lines, load_ttt2web_list(args.ttt2web_list), closed_by=args.closed_by)
     t["source_files"] = [os.path.basename(f) for f in files]
     md = render_markdown(t, args.log)
     if args.md:

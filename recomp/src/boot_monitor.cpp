@@ -20,6 +20,8 @@
 #include <mutex>
 
 #include "frame_monitor.h"
+#include "lock_tracker.h"
+#include "object_tracker.h"
 #include "kernel_clock.h"
 #include "runtime_exports.h"
 
@@ -162,8 +164,19 @@ std::string ThreadLabelForId(std::uint32_t id) {
 
 // --- naming wait objects ----------------------------------------------------------------------------
 
+std::string DescribeDispatcherHeader(std::uint32_t ptr);
+
 std::string DescribeDispatcher(std::uint32_t ptr) {
   if (!Readable(ptr, 0x1C)) return fmt::format("0x{:08X} (unreadable)", ptr);
+  std::string signals;
+  if (auto info = objects::Find(ptr); info && info->signals) {
+    signals = fmt::format(" (last signaled by {} from {}, {} signals)", ThreadLabelForId(info->signaled_by),
+                          DescribeGuestAddress(info->signaled_lr), info->signals);
+  }
+  return DescribeDispatcherHeader(ptr) + signals;
+}
+
+std::string DescribeDispatcherHeader(std::uint32_t ptr) {
   const std::uint8_t type = LoadU8(ptr);
   const auto signal = static_cast<std::int32_t>(LoadU32(ptr + 4));
   const char* state = signal ? "signaled" : "not signaled";
@@ -211,6 +224,9 @@ const char* ObjectTypeName(rex::system::XObject::Type type) {
   }
 }
 
+std::string LabelForThreadIdPlain(std::uint32_t id);
+std::string DescribeGuestAddressPlain(std::uint32_t address);
+
 std::string DescribeHandle(std::uint32_t handle) {
   auto* kernel = rex::system::kernel_state();
   if (!kernel) return fmt::format("handle 0x{:08X}", handle);
@@ -219,6 +235,12 @@ std::string DescribeHandle(std::uint32_t handle) {
   if (object->type() == rex::system::XObject::Type::Thread) {
     auto* thread = static_cast<rex::system::XThread*>(object.get());
     return fmt::format("handle 0x{:08X} (thread {})", handle, ThreadLabel(*thread));
+  }
+  // Objects created by handle get a guest header the runtime zeroes and never updates (every event would read as
+  // "notification event, not signaled"): what the create call and the signals the host saw say instead.
+  if (auto info = objects::Find(handle); info && info->kind != objects::Kind::kUnknown) {
+    return fmt::format("handle 0x{:08X} ({})", handle,
+                       objects::Describe(*info, NowMs(), &LabelForThreadIdPlain, &DescribeGuestAddressPlain));
   }
   if (const std::uint32_t guest = object->guest_object()) {
     return fmt::format("handle 0x{:08X} -> {}", handle, DescribeDispatcher(guest));
@@ -234,6 +256,15 @@ std::string DescribeCriticalSection(std::uint32_t ptr) {
   return fmt::format("critical section 0x{:08X} (owned by {}, recursion {})", ptr, ThreadLabelForKthread(owner),
                      recursion);
 }
+
+/// The recursion count a critical section's own fields hold (-1: unreadable).
+std::int32_t SectionRecursion(std::uint32_t ptr) {
+  if (!Readable(ptr, 0x1C)) return -1;
+  return static_cast<std::int32_t>(LoadU32(ptr + 0x14));
+}
+
+/// Traced calls from which a thread's call signatures are listed in a dump.
+constexpr std::uint64_t kSignatureCallsShown = 10000;
 
 std::string FormatTimeout(std::int64_t timeout) {
   if (timeout == kNoTimeout) return "no timeout";
@@ -297,6 +328,37 @@ ThreadActivity& Current() {
   thread_local ThreadActivity* record = nullptr;
   if (!record) record = NewRecord();
   return *record;
+}
+
+CallSignature& NoteSignature(ThreadActivity& t, std::uint32_t id, std::uint32_t lr, std::uint32_t object,
+                             std::uint32_t object2) {
+  constexpr auto relaxed = std::memory_order_relaxed;
+  CallSignature* empty = nullptr;
+  CallSignature* least = &t.signatures[0];
+  for (CallSignature& sig : t.signatures) {
+    const std::uint32_t sig_id = sig.export_id.load(relaxed);
+    if (sig_id == id && sig.lr.load(relaxed) == lr && sig.object.load(relaxed) == object &&
+        sig.object2.load(relaxed) == object2) {
+      sig.count.store(sig.count.load(relaxed) + 1, relaxed);
+      return sig;
+    }
+    if (sig_id == ThreadActivity::kNoExport && !empty) empty = &sig;
+    if (sig.count.load(relaxed) < least->count.load(relaxed)) least = &sig;
+  }
+  // A new signature takes a free slot, else the least used one (a loop's own calls keep theirs).
+  CallSignature& slot = empty ? *empty : *least;
+  slot.export_id.store(id, relaxed);
+  slot.lr.store(lr, relaxed);
+  slot.object.store(object, relaxed);
+  slot.object2.store(object2, relaxed);
+  slot.count.store(1, relaxed);
+  slot.failures.store(0, relaxed);
+  slot.last_status.store(0, relaxed);
+  return slot;
+}
+
+std::string LabelForThreadId(std::uint32_t id) {
+  return ThreadLabelForId(id);
 }
 
 std::vector<ThreadActivity*> AllThreads() {
@@ -450,6 +512,14 @@ void SetImage(const rex::PPCImageInfo& image) {
 
 namespace {
 
+std::string LabelForThreadIdPlain(std::uint32_t id) {
+  return ThreadLabelForId(id);
+}
+
+std::string DescribeGuestAddressPlain(std::uint32_t address) {
+  return DescribeGuestAddress(address);
+}
+
 /// `address` named by the function holding `lookup` (the image's function starts are sorted).
 std::string NameInFunction(std::uint32_t address, std::uint32_t lookup) {
   const auto& map = Image();
@@ -492,6 +562,27 @@ std::vector<std::uint32_t> GuestStack(rex::system::XThread& thread, std::size_t 
     if (sp < stack_low || sp + 4 > stack_high || (sp & 3)) break;
     const std::uint32_t back = LoadU32(sp);
     // The back chain points to the caller's frame, higher up the stack.
+    if (back <= sp || back > stack_high || (back & 3) || back - 8 < stack_low) break;
+    const std::uint32_t ret = LoadU32(back - 8);
+    if (InCode(ret) && (frames.empty() || frames.back() != ret)) frames.push_back(ret);
+    sp = back;
+  }
+  return frames;
+}
+
+std::vector<std::uint32_t> CurrentGuestStack(std::uint32_t sp, std::uint32_t lr, std::size_t max_frames) {
+  std::vector<std::uint32_t> frames;
+  if (!rex::system::XThread::IsInThread() || !GuestMemory()) return frames;
+  auto* thread = rex::system::XThread::GetCurrentThread();
+  const auto* kthread = thread ? thread->guest_object<rex::system::X_KTHREAD>() : nullptr;
+  if (!kthread) return frames;
+  const auto stack_high = static_cast<std::uint32_t>(kthread->stack_base);
+  const auto stack_low = static_cast<std::uint32_t>(kthread->stack_limit);
+  if (InCode(lr)) frames.push_back(lr);
+  if (stack_low >= stack_high) return frames;
+  for (std::size_t depth = 0; depth < 64 && frames.size() < max_frames; ++depth) {
+    if (sp < stack_low || sp + 4 > stack_high || (sp & 3)) break;
+    const std::uint32_t back = LoadU32(sp);
     if (back <= sp || back > stack_high || (back & 3) || back - 8 < stack_low) break;
     const std::uint32_t ret = LoadU32(back - 8);
     if (InCode(ret) && (frames.empty() || frames.back() != ret)) frames.push_back(ret);
@@ -562,11 +653,14 @@ std::string ActivityLine(const GpuState& gpu) {
   return fmt::format(
       "activity: files {} opened, {} failed ({} device paths); read {:.1f} MB in {} reads ({} failed); sector "
       "queries {}; missing names {}; threads created {}; {}; frames presented {}; audio clients {}, audio frames {}; "
-      "input polls {}; traced kernel calls {}; {}",
+      "input polls {}; traced kernel calls {}; {}; exceptions raised {} ({} C++), APCs queued {}, memory call "
+      "failures {}, debug breaks {}",
       c.files_opened.load(relaxed), c.open_failures.load(relaxed), c.device_open_failures.load(relaxed), mb,
       c.reads.load(relaxed), c.read_failures.load(relaxed), c.sector_queries.load(relaxed),
       c.not_found_answers.load(relaxed), c.threads_created.load(relaxed), gpu_part, frames, c.audio_clients.load(relaxed),
-      c.audio_frames.load(relaxed), c.input_polls.load(relaxed), calls, kernel_clock::Describe());
+      c.audio_frames.load(relaxed), c.input_polls.load(relaxed), calls, kernel_clock::Describe(),
+      c.exceptions_raised.load(relaxed), c.cpp_exceptions.load(relaxed), c.apcs_queued.load(relaxed),
+      c.memory_failures.load(relaxed), c.debug_breaks.load(relaxed));
 }
 
 std::vector<std::string> DescribeThread(rex::system::XThread& thread, std::uint64_t now_ms) {
@@ -647,6 +741,58 @@ std::vector<std::string> DescribeThread(rex::system::XThread& thread, std::uint6
             "calling the kernel without waiting for long",
             per_second, FormatSeconds(state.tick_ms), mostly.empty() ? "?" : mostly, DescribeGuestAddress(last_lr)));
       }
+    }
+  }
+
+  // The shape of its calls: export, call site, objects, how often, what they returned (most frequent first; only
+  // for threads that call the kernel a lot, where a loop shows).
+  if (t && t->calls.load(std::memory_order_relaxed) >= kSignatureCallsShown) {
+    std::vector<const CallSignature*> sigs;
+    for (const CallSignature& sig : t->signatures) {
+      if (sig.export_id.load(std::memory_order_relaxed) != ThreadActivity::kNoExport) sigs.push_back(&sig);
+    }
+    std::sort(sigs.begin(), sigs.end(), [](const CallSignature* a, const CallSignature* b) {
+      return a->count.load(std::memory_order_relaxed) > b->count.load(std::memory_order_relaxed);
+    });
+    std::string text;
+    for (std::size_t i = 0; i < sigs.size() && i < 4; ++i) {
+      const CallSignature& sig = *sigs[i];
+      const std::uint32_t object = sig.object.load(std::memory_order_relaxed);
+      const std::uint32_t object2 = sig.object2.load(std::memory_order_relaxed);
+      const std::uint64_t failures = sig.failures.load(std::memory_order_relaxed);
+      std::string what = WrappedExportName(sig.export_id.load(std::memory_order_relaxed));
+      if (object2) what += fmt::format(" signal 0x{:08X} wait 0x{:08X}", object2, object);
+      else if (object) what += fmt::format(" on 0x{:08X}", object);
+      what += fmt::format(" from {}: {}", DescribeGuestAddress(sig.lr.load(std::memory_order_relaxed)),
+                          sig.count.load(std::memory_order_relaxed));
+      if (failures) {
+        what += fmt::format(" ({} returned other than STATUS_SUCCESS, last {})", failures,
+                            FormatStatus(sig.last_status.load(std::memory_order_relaxed)));
+      }
+      text += (text.empty() ? "" : "; ") + what;
+    }
+    if (!text.empty()) lines.push_back("    calls by site: " + text);
+  }
+
+  // The critical sections it holds, how deep and since when, and from where it entered them without leaving.
+  for (const locks::Hold& hold : locks::HoldsOf(thread.thread_id())) {
+    if (hold.depth < 2 && now_ms - hold.since_ms < 1000) continue;  // ordinary short holds
+    std::string sites;
+    for (std::size_t i = 0; i < hold.open_sites.size() && i < 4; ++i) {
+      sites += fmt::format("{}{} x{}", i ? ", " : "", DescribeGuestAddress(hold.open_sites[i].first),
+                           hold.open_sites[i].second);
+    }
+    lines.push_back(fmt::format(
+        "    holds: critical section 0x{:08X} at depth {} since t+{} (the section's own count: {}), unchanged for {}; "
+        "{} enters and {} leaves since then; open enters from {}",
+        hold.section, hold.depth, FormatSeconds(hold.since_ms), SectionRecursion(hold.section),
+        FormatSeconds(now_ms - hold.changed_ms), hold.enters, hold.leaves, sites.empty() ? "?" : sites));
+    for (const auto& snap : hold.snapshots) {
+      if (snap.depth < 2 && hold.depth >= 2) continue;  // the deeper enters are the interesting ones
+      std::string stack;
+      for (std::uint32_t frame : snap.stack) stack += (stack.empty() ? "" : " <- ") + DescribeGuestAddress(frame);
+      lines.push_back(fmt::format("    holds: critical section 0x{:08X} entered to depth {} at t+{}: {}", hold.section,
+                                  snap.depth, FormatSeconds(snap.ms), stack.empty() ? "(no stack)" : stack));
     }
   }
 
