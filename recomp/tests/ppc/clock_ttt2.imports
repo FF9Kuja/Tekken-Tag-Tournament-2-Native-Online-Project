@@ -1,0 +1,4 @@
+# Import libraries of clock_ttt2.s for scripts/ppc_elf_to_xex.py --imports: library, then the
+# ELF symbols of its import records (slot and thunk of each function import; a variable import,
+# KeTimeStampBundle, has a slot only).
+xboxkrnl.exe: KeTimeStampBundle_slot, KeDelayExecutionThread_slot, KeDelayExecutionThread_thunk, KeQuerySystemTime_slot, KeQuerySystemTime_thunk, NtCreateEvent_slot, NtCreateEvent_thunk, NtSignalAndWaitForSingleObjectEx_slot, NtSignalAndWaitForSingleObjectEx_thunk

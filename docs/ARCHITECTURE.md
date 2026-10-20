@@ -145,6 +145,18 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   the Xbox 360 ABI saves at -8 from each caller's frame, inside the thread's own stack only), and formats the
   watchdog's activity line and the per-thread dumps (stall, still stalled, window close) that
   `recomp/tools/triage_boot_log.py` turns into progress tables, deadlock cycles and wait chains.
+* Kernel clock, missing names, frame and thread diagnostics **[implemented, session 9]** (`docs/RESEARCH.md` 8f).
+  `kernel_clock.cpp` refreshes `KeTimeStampBundle`'s InterruptTime and SystemTime every millisecond from the
+  runtime's guest clock (the runtime refreshes only TickCount; the game reads all three from memory;
+  `TTT2_KERNEL_CLOCK=runtime` turns it off). `io_overrides.cpp` answers a missing name as the console and both
+  reference ports do (`STATUS_OBJECT_NAME_NOT_FOUND`, I/O status information 0, the handle variable untouched on a
+  failed open; `TTT2_NOT_FOUND_STATUS=runtime` keeps the runtime's `STATUS_NO_SUCH_FILE`). `frame_monitor.cpp` reads
+  each frame's PM4 command stream after `VdSwap` (the ring stretch since the previous swap and its indirect buffers,
+  from guest physical memory) and counts draws by EDRAM mode, resolves, clears, render-target changes and packets
+  the GPU emulation skips, with the SDK-free parser `pm4_stats.cpp` (unit-tested in `tests/`); `TTT2_PIXEL_CHECK=1`
+  samples the presented front buffer with resolve readback on. The thread dumps add each thread's calls of the last
+  tick by export and a `busy:` line for threads that poll; `OnGuestThreadExit` tells a window close from a program
+  that ended.
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing
   handled through SDK mechanisms plus game-specific hooks (as T6 NO does for its 1024x576 targets).
 * Audio: SDK XMA decoder + SDL3 audio driver; a deterministic stepping mode for netplay (D).

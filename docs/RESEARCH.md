@@ -692,6 +692,101 @@ missing file's attributes fail; all ten values checked. `wait_ttt2.s` (the main 
 a worker holds; the worker waits on an event nobody sets): the dump names the critical section with its owner, the
 unsignaled event, both call sites and stacks and the worker's start address, and the triage reports the wait chain.
 
+## 8f. The black screen, second run: a kernel clock that never moves, `\Device\Image`, and what the frames hold (session 9)
+
+**What the owner's run showed (2026-10-20, `main` at `33f43c8`, the PR #16 host).** Everything up to native execution
+as before (348 verified function entries, codegen clean, 28 guest threads). The GPU was set up and the game presented
+frames: 10,760 `VdSwap` calls, 21,548 vblanks and 10,762 controller polls in 180 s, all black. It read 2 files, 0.0 MB
+in all. One bare device was opened, `NtCreateFile("\Device\Image")` from `0x82BCC930` in `sub_82BCC880`, failing with
+`0xC000000F`; no disc sector query reached the host, so the sector hypothesis of 8e does not apply to this run (the
+game never asked). Thread 6 was running while threads 12 and 26 waited on a critical section it owned (recursion 390),
+and thread 14 waited on a lock thread 12 owned. Thread 19 made about 339.5 million traced kernel calls (about 1.9
+million a second). The pipeline closed the window after 180 s.
+
+**The strongest lead: the kernel clock the game reads from memory stands still.** `KeTimeStampBundle` (xboxkrnl data
+export 0xAD) is 24 bytes the game reads without a kernel call: InterruptTime (u64, 100 ns units since boot) at +0,
+SystemTime (u64, FILETIME) at +8, TickCount (u32, milliseconds) at +16. The pinned SDK allocates it and patches the
+game's import slot, but its 1 ms timer refreshes only TickCount: InterruptTime and SystemTime stay 0 for the whole run
+(`src/kernel/xboxkrnl/xboxkrnl_module.cpp`). Both reference ports refresh all three every millisecond. TTT2Recomp
+measured why it matters for this game: code reads the bundle through its import slot (its `sub_82BEF480`, NACE's
+clock), and with the fields at 0 "those clocks read 0 and never advanced" - a 1 s timeout waited forever. TTT2 Web
+documents a game thread (`sub_82ABFDE8`) that "sets an auto-reset event and SignalAndWaits on it until a 64-bit counter
+changes (~8 M kernel calls/s)": on a counter that never changes that loop never ends, which matches thread 19 (millions
+of traced calls a second, without a single blocking wait). Clocks that never advance also stall every timed wait and
+time-sliced loader step built on them, which fits a loader that read 2 files in 180 s. Not yet confirmed on the real
+game; the next run shows it (the loader's reads, the spinning thread).
+
+**The change (`recomp/src/kernel_clock.cpp`).** A host timer refreshes InterruptTime and SystemTime every millisecond
+from the runtime's own guest clock (`rex::chrono::Clock`): SystemTime as `KeQuerySystemTime` reports it, InterruptTime
+as the time since the guest time base (the same offset the runtime derives TickCount from), never going backwards.
+TickCount stays the runtime's (two writers could make it step back a millisecond). The bundle is found through the
+export resolver (ordinal 0xAD) after the runtime is set up, in the game host and in the test harness alike.
+`TTT2_KERNEL_CLOCK=runtime` keeps the runtime's behaviour. The activity line reports the clock (`kernel clock 12.3 s
+(tick count 12.3 s)`). Upstream, the SDK's timer should write all three fields.
+
+**`\Device\Image`.** The game opens the device itself (nothing after the name), so the SDK's `OpenFile` fails to
+resolve the parent `\Device` and logs "ResolvePath(\Device) failed" (8e). Neither reference port maps such a device,
+and both run the game to its menus: TTT2 Web answers any missing name with `STATUS_OBJECT_NAME_NOT_FOUND`
+(`0xC0000034`), I/O status `{0xC0000034, 0}` and the caller's handle variable untouched; TTT2Recomp strips `\Device\X\`
+prefixes, finds nothing for `\Device\Image` and answers `0xC0000034` for opens and attribute queries alike. That is
+also the console object manager's answer for a name missing from `\Device`. The runtime instead answers
+`STATUS_NO_SUCH_FILE` (`0xC000000F`), writes `INVALID_HANDLE_VALUE` into the handle variable and `FILE_DOES_NOT_EXIST`
+(5) into the I/O status block. What the game wants from the device (a disc image, raw sectors, a directory) is not
+visible in the logs; the call site handles the failure in both working ports. So the host maps nothing there - a
+device that pretends to exist would be a guess the game then builds on - and instead answers a missing name the way the
+console and both ports do (`recomp/src/io_overrides.cpp`): for `NtCreateFile` and `NtOpenFile`, `0xC0000034` with I/O
+status information 0, and the handle variable left as it was on any failed open; for `NtQueryFullAttributesFile`,
+`0xC0000034`. Only the runtime's not-found status is translated; every other answer is the runtime's.
+`TTT2_NOT_FOUND_STATUS=runtime` keeps the runtime's answer.
+
+**What the frames hold.** 10,760 black frames can be frames the game draws nothing into (its own black screen while it
+waits for data or a timer) or frames it draws that come out black (the GPU emulation). The host now reads each frame's
+command stream right after `VdSwap` (`recomp/src/frame_monitor.cpp`, the SDK-free parser `recomp/src/pm4_stats.cpp`):
+the stretch of the primary ring buffer between the previous swap and this one (wrapping at its end), and the indirect
+buffers it names, from guest physical memory (only allocated pages). The parser follows the packets as the SDK's
+command processor executes them (a zero word skipped, predicated packets skipped while bin select and mask do not
+overlap, `SET_CONSTANT` type 4 and `SET_CONSTANT2` writing registers) and counts: draws by the EDRAM mode in force
+(`RB_MODECONTROL`: color+depth and depth-only render, copy is a resolve, off does nothing), resolves that clear
+(`RB_COPY_CONTROL` bits 8-9), render-target changes (`RB_SURFACE_INFO`, `RB_COLOR_INFO`, `RB_DEPTH_INFO`), indirect
+buffers, swaps, and packets the SDK does not execute (its "Unimplemented GPU OPCODE" cases, e.g. binned draws), by
+opcode. The first three frames, the first frame with draws, the first with skipped packets and every front-buffer
+change (size, format, address, from `VdSwap`'s arguments) are logged; the activity line carries the totals. A pixel
+check is opt-in (`TTT2_PIXEL_CHECK=1`): the GPU emulation renders on the host GPU and copies results back to guest
+memory only with `readback_resolve` (default `none`), so the check sets it to `fast` (the frame arrives one frame
+late) and samples the presented front buffer: distinct values and the most common one, nothing else is kept.
+
+**Thread synchronisation.** The pinned SDK's critical sections (`src/kernel/xboxkrnl/xboxkrnl_rtl.cpp`) follow NT's
+algorithm (a lock count, a recursion count, the owner, the section's own synchronization event for waiters); nothing
+there miscounts, so a recursion count of 390 is the game's own nesting at that moment. The host does not release
+locks or signal anything. It now shows what the dumps could not: per thread, the calls of the last tick by export, and
+a `busy:` line for a thread making 50,000 or more traced calls a second (with its rate, busiest call and call site);
+the triage names spinning threads (also from the old logs' "N in the last tick", at 250,000 per 5 s tick), ties them to
+the kernel clock (an old host, the refresh turned off, or a clock that advances so the loop waits for something
+else), and reports a critical section whose recursion count changes between dumps under the same owner (entered more
+often than left).
+
+**A shutdown race, found by the new test.** When the window closes, `ReXApp::OnClosing` terminates the title, which
+ends the main guest thread; `ReXApp`'s module thread then calls `OnGuestThreadExit` while the close path is still
+running. With a busy thread delaying termination, the host's handler logged "guest program ended" - which the triage
+reads as a clean exit. The host now notes the close request and logs `main guest thread ended by the window close`
+instead, leaving the exit to the close path.
+
+**Measured with license-free programs.** `clock_ttt2.s` reads the bundle through a variable import slot (a type 0
+record with no thunk): with the host's refresh, InterruptTime and SystemTime advance over a 50 ms sleep, agree with
+TickCount and `KeQuerySystemTime`, and a thread that signals its own event and waits on it until InterruptTime changes
+leaves its loop; with `TTT2_KERNEL_CLOCK=runtime` they stay 0 and the loop runs into its 1,000,000-round cap (about
+5 million calls a second on the build machine). `io_ttt2.s` now opens `\Device\Image`, reads the handle variable and
+the I/O status block back, and opens a missing file with `NtOpenFile`: 15 values, checked in both modes. `gpu_ttt2.s`
+writes three frames of PM4 packets into a 4 KB ring and presents each; the host's counts match exactly (frame 1: 3
+draws, 1 clearing resolve, 1 render-target change, 1 indirect buffer, 1 skipped packet, 10 packets, 26 words; frame
+2: 1 draw with the EDRAM mode off and an indirect buffer at an address with no memory, counted as unreadable and not
+read; frame 3, across the end of the ring: 2 draws in 869 words); the pixel check reads its 16x16 front buffer (75%
+`0x11223344`). The host reads guest memory it does not own only where every page is committed: the page table also
+reports a protection for pages that are merely reserved, with no memory behind them, so the commit state is checked
+too (`ttt2::monitor::GuestReadable`, `PhysicalReadable`; the wait-object and front-buffer reads use them as well). `wait_ttt2.s` gained a third thread that spins like `sub_82ABFDE8`: the
+dump flags it at about 5 million calls a second with `NtSignalAndWaitForSingleObjectEx` as its call, and the triage
+names it.
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source

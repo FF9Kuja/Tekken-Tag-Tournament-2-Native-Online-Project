@@ -19,6 +19,8 @@
 #include <memory>
 #include <mutex>
 
+#include "frame_monitor.h"
+#include "kernel_clock.h"
 #include "runtime_exports.h"
 
 namespace ttt2::monitor {
@@ -92,12 +94,31 @@ rex::memory::Memory* GuestMemory() {
   return kernel ? kernel->memory() : nullptr;
 }
 
+/// Every page of [address, address + size) in `heap` committed and readable; `covered_end` receives the end of the
+/// last region checked (at or past the end of the range).
+bool HeapRangeCommitted(rex::memory::BaseHeap* heap, std::uint32_t address, std::uint64_t size,
+                        std::uint64_t* covered_end = nullptr) {
+  if (!heap || !size) return false;
+  const std::uint64_t base = heap->heap_base();
+  const std::uint64_t end = std::uint64_t(address) + size;
+  const std::uint64_t page = heap->page_size();
+  if (address < base || end > base + heap->heap_size() || !page) return false;
+  std::uint64_t at = address - (address - base) % page;  // the start of the page holding `address`
+  while (at < end) {
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(static_cast<std::uint32_t>(at), &info)) return false;
+    if (!(info.state & rex::memory::kMemoryAllocationCommit) || !(info.protect & rex::memory::kMemoryProtectRead) ||
+        !info.region_size) {
+      return false;
+    }
+    at += info.region_size;  // the region of pages with the same attributes, from `at`
+  }
+  if (covered_end) *covered_end = at;
+  return true;
+}
+
 bool Readable(std::uint32_t address, std::uint32_t size) {
-  auto* memory = GuestMemory();
-  if (!memory || size == 0 || address + (size - 1) < address) return false;
-  auto* heap = memory->LookupHeap(address);
-  if (!heap || memory->LookupHeap(address + size - 1) != heap) return false;
-  return heap->QueryRangeAccess(address, address + size - 1) != rex::memory::PageAccess::kNoAccess;
+  return GuestReadable(address, size);
 }
 
 std::uint32_t LoadU32(std::uint32_t address) {
@@ -228,6 +249,10 @@ std::string FormatSeconds(std::uint64_t ms) {
   return fmt::format("{:.1f} s", static_cast<double>(ms) / 1000.0);
 }
 
+/// Traced kernel calls a second from which a thread counts as busy (polling): a game thread that waits for its
+/// frame or its data makes a few hundred at most.
+constexpr std::uint64_t kBusyCallsPerSecond = 50000;
+
 // --- what the watchdog saw on earlier ticks -----------------------------------------------------------
 
 struct Observed {
@@ -238,12 +263,14 @@ struct Observed {
   std::uint64_t wait_seen_ms = 0;  // first tick at which this wait was seen
   std::uint64_t calls_last_tick = 0;
   std::array<std::uint32_t, kMaxTrackedExports> per_export{};
+  std::array<std::uint32_t, kMaxTrackedExports> per_export_tick{};  // this thread's calls per export, last tick
 };
 
 struct ObservedState {
   std::mutex mutex;
   bool ticked = false;
   std::uint64_t last_tick_ms = 0;
+  std::uint64_t tick_ms = 0;  // length of the last tick (0 before the second one)
   std::map<const ThreadActivity*, Observed> threads;
   std::array<std::uint64_t, kMaxTrackedExports> per_export_last_tick{};
 };
@@ -386,6 +413,20 @@ std::string FormatStatus(std::uint32_t status) {
   return fmt::format("0x{:08X} ({})", status, name);
 }
 
+bool GuestReadable(std::uint32_t address, std::uint64_t size) {
+  auto* memory = GuestMemory();
+  if (!memory || !size || std::uint64_t(address) + size > 0x100000000ull) return false;
+  auto* heap = memory->LookupHeap(address);
+  if (!heap || memory->LookupHeap(static_cast<std::uint32_t>(address + size - 1)) != heap) return false;
+  return HeapRangeCommitted(heap, address, size);
+}
+
+bool PhysicalReadable(std::uint32_t address, std::uint64_t size, std::uint64_t* committed_end) {
+  auto* memory = GuestMemory();
+  if (!memory || !size || std::uint64_t(address) + size > 0x20000000ull) return false;
+  return HeapRangeCommitted(memory->GetPhysicalHeap(), address, size, committed_end);
+}
+
 std::string CurrentThreadLabel() {
   if (rex::system::XThread::IsInThread()) {
     if (auto* thread = rex::system::XThread::GetCurrentThread()) return ThreadLabel(*thread);
@@ -475,7 +516,9 @@ void Observe(std::uint64_t now_ms) {
     seen.calls = calls;
     for (std::uint32_t i = 0; i < kMaxTrackedExports; ++i) {
       const std::uint32_t now_count = t->per_export[i].load(std::memory_order_relaxed);
-      tick[i] += static_cast<std::uint32_t>(now_count - seen.per_export[i]);
+      const auto delta = static_cast<std::uint32_t>(now_count - seen.per_export[i]);
+      seen.per_export_tick[i] = inserted ? 0 : delta;
+      tick[i] += delta;
       seen.per_export[i] = now_count;
     }
     const std::uint32_t wait_export = t->wait_export.load(std::memory_order_acquire);
@@ -485,6 +528,7 @@ void Observe(std::uint64_t now_ms) {
     seen.wait_seq = wait_seq;
   }
   state.per_export_last_tick = tick;
+  state.tick_ms = state.ticked && now_ms > state.last_tick_ms ? now_ms - state.last_tick_ms : 0;
   state.last_tick_ms = now_ms;
   state.ticked = true;
 }
@@ -512,14 +556,17 @@ std::string ActivityLine(const GpuState& gpu) {
   } else {
     gpu_part += ", no GPU emulation";
   }
+  // "10760 (0 with draws, 0 with resolves; draws 0, ...; front buffer 1280x720)": what the frames asked for.
+  std::string frames = std::to_string(c.frames_presented.load(relaxed));
+  if (const std::string detail = ttt2::frames::Describe(); !detail.empty()) frames += " (" + detail + ")";
   return fmt::format(
       "activity: files {} opened, {} failed ({} device paths); read {:.1f} MB in {} reads ({} failed); sector "
-      "queries {}; threads created {}; {}; frames presented {}; audio clients {}, audio frames {}; input polls {}; "
-      "traced kernel calls {}",
+      "queries {}; missing names {}; threads created {}; {}; frames presented {}; audio clients {}, audio frames {}; "
+      "input polls {}; traced kernel calls {}; {}",
       c.files_opened.load(relaxed), c.open_failures.load(relaxed), c.device_open_failures.load(relaxed), mb,
       c.reads.load(relaxed), c.read_failures.load(relaxed), c.sector_queries.load(relaxed),
-      c.threads_created.load(relaxed), gpu_part, c.frames_presented.load(relaxed), c.audio_clients.load(relaxed),
-      c.audio_frames.load(relaxed), c.input_polls.load(relaxed), calls);
+      c.not_found_answers.load(relaxed), c.threads_created.load(relaxed), gpu_part, frames, c.audio_clients.load(relaxed),
+      c.audio_frames.load(relaxed), c.input_polls.load(relaxed), calls, kernel_clock::Describe());
 }
 
 std::vector<std::string> DescribeThread(rex::system::XThread& thread, std::uint64_t now_ms) {
@@ -564,19 +611,43 @@ std::vector<std::string> DescribeThread(rex::system::XThread& thread, std::uint6
                                 DescribeGuestAddress(t->wait_lr.load(std::memory_order_relaxed))));
   }
 
-  // Its traced kernel calls.
+  // Its traced kernel calls: how many in the last tick and which, in total, the last one.
   if (t) {
     const std::uint64_t calls = t->calls.load(std::memory_order_relaxed);
+    const std::uint32_t last_lr = t->last_lr.load(std::memory_order_relaxed);
     std::string recent;
+    std::string mostly;
     if (seen) {
-      recent = fmt::format("{} in the last tick, ", seen->calls_last_tick);
+      std::vector<std::pair<std::uint32_t, std::uint32_t>> busiest;  // calls, export id
+      for (std::uint32_t i = 0; i < kMaxTrackedExports; ++i) {
+        if (seen->per_export_tick[i]) busiest.emplace_back(seen->per_export_tick[i], i);
+      }
+      std::sort(busiest.rbegin(), busiest.rend());
+      std::string top;
+      for (std::size_t i = 0; i < busiest.size() && i < 3; ++i) {
+        top += fmt::format("{}{} {}", i ? ", " : "", WrappedExportName(busiest[i].second), busiest[i].first);
+      }
+      if (!busiest.empty()) mostly = WrappedExportName(busiest[0].second);
+      recent = fmt::format("{} in the last tick{}, ", seen->calls_last_tick, top.empty() ? "" : " (" + top + ")");
       if (seen->calls == calls && now_ms > seen->quiet_since_ms) {
         recent += fmt::format("none for at least {}, ", FormatSeconds(now_ms - seen->quiet_since_ms));
       }
     }
     lines.push_back(fmt::format("    kernel calls: {}{} in total; last {} from {}", recent, calls,
                                 WrappedExportName(t->last_export.load(std::memory_order_relaxed)),
-                                DescribeGuestAddress(t->last_lr.load(std::memory_order_relaxed))));
+                                DescribeGuestAddress(last_lr)));
+    // A thread that keeps calling the kernel without waiting for long: a polling loop. TTT2 Web documents one
+    // (sub_82ABFDE8 signals its own event and waits on it until a 64-bit counter changes) that spins forever
+    // when the kernel clock stands still.
+    if (seen && state.tick_ms) {
+      const std::uint64_t per_second = seen->calls_last_tick * 1000 / state.tick_ms;
+      if (per_second >= kBusyCallsPerSecond) {
+        lines.push_back(fmt::format(
+            "    busy: {} traced kernel calls a second over the last {} (mostly {}), last from {}: a loop that keeps "
+            "calling the kernel without waiting for long",
+            per_second, FormatSeconds(state.tick_ms), mostly.empty() ? "?" : mostly, DescribeGuestAddress(last_lr)));
+      }
+    }
   }
 
   // Its guest call stack.

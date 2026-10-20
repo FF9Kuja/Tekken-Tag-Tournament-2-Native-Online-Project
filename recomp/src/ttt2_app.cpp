@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <string>
 
+#include "frame_monitor.h"
+#include "kernel_clock.h"
 #include "runtime_exports.h"
 
 namespace {
@@ -124,6 +126,10 @@ void Ttt2App::OnPostSetup() {
   REXLOG_INFO("ttt2: {} kernel exports traced by the host (file access, waits, GPU, audio, input, dialogs, threads)",
               ttt2::WrappedExportCount());
   ttt2::monitor::SetImage(PPCImageConfig);
+  // KeTimeStampBundle's InterruptTime and SystemTime, which the runtime leaves at 0 (kernel_clock.h).
+  ttt2::kernel_clock::Start(*runtime());
+  // TTT2_PIXEL_CHECK=1: sample the presented front buffer (frame_monitor.h); the GPU plugin is loaded by now.
+  ttt2::frames::ConfigurePixelCheck();
 }
 
 void Ttt2App::OnAbort(int /*signal*/) {
@@ -242,6 +248,12 @@ void Ttt2App::OnPostLaunchModule(rex::system::XThread* thread) {
 }
 
 void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
+  if (closing_.load(std::memory_order_acquire)) {
+    // The window close terminated the title (ReXApp::OnClosing), and with it the main guest thread: the program
+    // did not end on its own. The close path has written the reports and hard-exits the process itself.
+    REXLOG_INFO("ttt2: main guest thread ended by the window close (id {})", thread ? thread->thread_id() : 0u);
+    return;
+  }
   REXLOG_INFO("ttt2: main guest thread exited (id {})", thread ? thread->thread_id() : 0u);
   WatchdogTick();
   StopWatchdog();
@@ -257,6 +269,7 @@ void Ttt2App::OnGuestThreadExit(rex::system::XThread* thread) {
 }
 
 bool Ttt2App::OnWindowCloseRequested() {
+  closing_.store(true, std::memory_order_release);
   // Closing the window (the X button, or a quit signal, which SDL turns into the same request) is
   // how the owner's first boots will end: a black or frozen window. ReXApp's close path terminates
   // the title and hard-exits the process without OnShutdown, so the full kernel stub report and the
@@ -273,6 +286,7 @@ bool Ttt2App::OnWindowCloseRequested() {
 
 void Ttt2App::OnShutdown() {
   StopWatchdog();
+  ttt2::kernel_clock::Stop();
   if (crash_handler_installed_) {
     rex::arch::ExceptionHandler::Uninstall(&Ttt2App::OnHostException, this);
     crash_handler_installed_ = false;

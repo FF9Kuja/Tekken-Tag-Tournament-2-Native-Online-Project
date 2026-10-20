@@ -166,13 +166,18 @@ use to put a license-free program into the retail form) round-tripped. All input
   no load or presentation-setup failure); the Windows workflow runs it as a non-blocking, informative step on the
   runner's software D3D12 adapter. On a Linux box without a Vulkan device the plugin loads but the instance
   creation fails ("ErrorIncompatibleDriver"), which the form reports. `--expect-waits` (with `--expect-stall`; image:
-  `recomp/tests/ppc/wait_ttt2.s`, two threads deadlocked on a critical section and an event nobody sets) also checks
-  the boot monitor's dump: the worker's creation with its start address, both waits with their objects (the
-  critical section's owner, the unsignaled event), guest call sites and stacks, and the dump written on window close.
+  `recomp/tests/ppc/wait_ttt2.s`, two threads deadlocked on a critical section and an event nobody sets, and a third
+  that signals its own event and waits on it forever) also checks the boot monitor's dump: the threads' creation with
+  their start addresses, both waits with their objects (the critical section's owner, the unsignaled event), the
+  spinner flagged as busy with its busiest call, guest call sites and stacks, and the dump written on window close.
   `--expect-io` (image: `recomp/tests/ppc/io_ttt2.s`; the script writes the `io_data.bin` it reads into the game root)
-  checks the file-system trace: the disc sector query answered as unsupported, the bare device `\Device\Cdrom0`
-  failing with the runtime's "ResolvePath(\Device)" line and the host's explanation, the open file, the activity
-  counters. Every normal-form run also checks that the host's export wrappers found the runtime's originals.
+  checks the file-system trace: the disc sector query answered as unsupported, the bare device `\Device\Image`
+  failing with the runtime's "ResolvePath(\Device)" line and answered as a missing name (`STATUS_OBJECT_NAME_NOT_FOUND`)
+  with the host's explanation, a missing file's attributes and `NtOpenFile`, the open file, the activity counters.
+  `--expect-gpu-frames` (image: `recomp/tests/ppc/gpu_ttt2.s`) checks the frame monitor's counts for three frames of
+  GPU commands, one of them wrapping around the end of the ring buffer, and the activity line's frame summary. Every
+  normal-form run also checks that the host's export wrappers found the runtime's originals and that the host keeps
+  the kernel clock current.
 * `scripts/run-host.ps1 [-GameRoot work\game] [-Exe ttt2.exe] [-Work work] [-TimeoutSeconds N] [-NoGpu]` - the
   owner's boot step as one command: runs the host on the game data root, waits for its exit (with a timeout it
   sends the close request a player's X button sends: `taskkill`, SIGTERM on Linux, and kills a host that ignores
@@ -186,8 +191,15 @@ use to put a license-free program into the retail form) round-tripped. All input
   `wait_overrides.cpp`, `milestone_overrides.cpp`; `docs/RESEARCH.md` 8e). `TTT2_WRAPPED_EXPORT(Name) { ... }`
   defines the host's `__imp__Name` and registers it; `TTT2_RUNTIME_ORIGINAL(Name)(ctx, base)` calls the runtime's
   own function; `ttt2::monitor::NoteCall` / `WaitScope` record the call for the watchdog. The harness compiles the
-  same files, so `scripts/codegen-smoke-test.sh --exec` runs `io_ttt2.s` through them and checks its ten values
-  (with and without `TTT2_SECTOR_QUERY=runtime`). `TTT2_WATCHDOG_MS` sets the watchdog period (default 5000).
+  same files, so `scripts/codegen-smoke-test.sh --exec` runs `io_ttt2.s` through them and checks its 15 values (with
+  and without `TTT2_SECTOR_QUERY=runtime` and `TTT2_NOT_FOUND_STATUS=runtime`), `clock_ttt2.s` (the kernel clock read
+  from memory, with and without `TTT2_KERNEL_CLOCK=runtime`) and `gpu_ttt2.s` (the frame monitor, also with
+  `TTT2_PIXEL_CHECK=1` and `TTT2_FRAME_STATS=0`). `TTT2_WATCHDOG_MS` sets the watchdog period (default 5000).
+* Host switches for comparisons on the owner's machine (environment variables, all off by default):
+  `TTT2_SECTOR_QUERY=runtime`, `TTT2_NOT_FOUND_STATUS=runtime` and `TTT2_KERNEL_CLOCK=runtime` restore the runtime's
+  own behaviour for the disc sector query, missing names and `KeTimeStampBundle`; `TTT2_FRAME_STATS=0` turns the
+  frame monitor off; `TTT2_PIXEL_CHECK=1` samples the presented front buffer (and turns on the GPU emulation's
+  resolve readback, `readback_resolve=fast`).
 * `recomp/tests/host` - headless host: the ReXGlue runtime in tool mode plus one program's generated code;
   runs the program natively, checks the values it stores and reports the kernel stubs it reached
   (`--max-stub-calls N` turns more than N stub calls into a failure; `scripts/codegen-smoke-test.sh --exec`).

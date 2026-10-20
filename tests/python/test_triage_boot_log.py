@@ -280,6 +280,135 @@ class Triage(unittest.TestCase):
         # The device's own failure is not repeated among the other failed paths.
         self.assertFalse(any("other path(s) failed to open" in r for r in recs))
 
+    def test_owner_black_screen_old_host(self):
+        # Shaped like the owner's 180 s boot on the PR #16 host: \Device\Image answered with the runtime's
+        # STATUS_NO_SUCH_FILE, frames presented without frame statistics, no kernel clock in the activity line, one
+        # thread with millions of kernel calls a tick and a critical section whose recursion count grows.
+        activity = ACTIVITY.replace("frames presented 0", "frames presented 10760")
+        def dump(recursion):
+            return [
+                "ttt2:   (unnamed)                        id 6      running priority 0 suspend 0 wait_result 0x0",
+                "ttt2:     wait: none (running guest code, or blocked outside the traced kernel calls)",
+                "ttt2:     kernel calls: 12 in the last tick, 5120 in total; last RtlEnterCriticalSection from 0x82300010 (sub_82300000+0x10)",
+                "ttt2:   (unnamed)                        id 12     running priority 0 suspend 0 wait_result 0x0",
+                f"ttt2:     wait: RtlEnterCriticalSection on critical section 0x4a001000 (owned by thread id 6, recursion {recursion}), no timeout",
+                "ttt2:   (unnamed)                        id 19     running priority 0 suspend 0 wait_result 0x0",
+                "ttt2:     wait: NtSignalAndWaitForSingleObjectEx on handle 0xF8000044, no timeout, called from 0x82ABFE10 (sub_82ABFDE8+0x28)",
+                "ttt2:     kernel calls: 9433000 in the last tick, 339500000 in total; last NtSignalAndWaitForSingleObjectEx from 0x82ABFE10 (sub_82ABFDE8+0x28)",
+            ]
+        lines = head(backend="xenos", title="4E4D0859", version="0.0.0.2") + [
+            W(959, "ResolvePath(\\Device) failed - device not found", level="error", category="fs"),
+            W(959, "ttt2: the game opened '\\Device\\Image', a device itself rather than a file on it", level="warning"),
+            W(959, "ttt2: file open failed: '\\Device\\Image' -> 0xC000000F (STATUS_NO_SUCH_FILE) (NtCreateFile, thread id 6, from 0x82BCC930 (sub_82BCC880+0xB0))"),
+            W(960, activity),
+            W(961, "ttt2: possible stall: thread census, stub calls and boot progress (files, reads, frames) unchanged for 15000 ms; per-thread state:", level="warning"),
+        ] + [W(961, line, level="warning") for line in dump(390)] + [
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, activity),
+            W(965, "ttt2: thread state at window close:"),
+        ] + [W(965, line) for line in dump(412)]
+        t = MOD.triage(lines, {})
+        recs = t["recommendations"]
+        probe = [r for r in recs if r.startswith("The game probed the device \\Device\\Image")]
+        self.assertEqual(len(probe), 1)
+        self.assertIn("0xC000000F", probe[0])
+        self.assertIn("not what stops the boot", probe[0])
+        self.assertIn("STATUS_OBJECT_NAME_NOT_FOUND", probe[0])
+        self.assertFalse(any("next step is a device at that path" in r for r in recs))
+        self.assertFalse(any("other path(s) failed to open" in r for r in recs))
+        self.assertTrue(any(r.startswith("10760 frame(s) were presented (VdSwap). This host does not count") for r in recs))
+        spin = [r for r in recs if r.startswith("(unnamed) (id 19) spins:")]
+        self.assertEqual(len(spin), 1)
+        self.assertIn("9433000 traced kernel calls in one watchdog tick", spin[0])
+        self.assertIn("predates the kernel clock fix", spin[0])
+        self.assertIn("sub_82ABFDE8", spin[0])
+        self.assertFalse(any(r.startswith("(unnamed) (id 6) spins") for r in recs))
+        grows = [r for r in recs if r.startswith("Critical section 0x4A001000")]
+        self.assertEqual(len(grows), 1)
+        self.assertIn("from 390 to 412", grows[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("not reported (an older host", md)
+
+    def test_new_host_frames_clock_and_busy_thread(self):
+        activity = ("ttt2: activity: files 14 opened, 3 failed (1 device paths); read 4.1 MB in 96 reads (0 failed); sector "
+                    "queries 5; missing names 3; threads created 27; gpu: engines initialized, ring buffer 0x1FF00000, "
+                    "interrupt callback 0x82A3B4C0, vblanks 600, ring write pointer 0x40; frames presented 600 (0 with draws, "
+                    "0 with resolves; draws 0, resolves 0, clears 0; last frame: 1 draw with EDRAM mode off, 2 packets; front "
+                    "buffer 1280x720); audio clients 1, audio frames 0; input polls 0; traced kernel calls 104532; kernel "
+                    "clock 180.2 s (tick count 180.2 s)")
+        lines = head(backend="xenos", title="4E4D0859", version="0.0.0.2") + [
+            W(955, "ttt2: kernel clock: KeTimeStampBundle at 0x3000A000: the host refreshes InterruptTime and SystemTime every 1 ms"),
+            W(959, "ttt2: missing name: '\\Device\\Image' (NtCreateFile) answered as 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND), as the console"),
+            W(959, "ttt2: the game opened '\\Device\\Image', a device itself rather than a file on it", level="warning"),
+            W(959, "ttt2: file open failed: '\\Device\\Image' -> 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND) (NtCreateFile, thread id 6, from 0x82BCC930 (sub_82BCC880+0xB0))"),
+            W(960, "ttt2: gpu: front buffer 1280x720 k_8_8_8_8 at 0x9F000000 (frame 1)"),
+            W(960, "ttt2: gpu: frame 1: 1 draw with EDRAM mode off, 2 packets (40 words of commands)"),
+            W(961, activity),
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, "ttt2: thread state at window close:"),
+            W(965, "ttt2:   (unnamed)                        id 19     running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     kernel calls: 9433000 in the last tick (NtSignalAndWaitForSingleObjectEx 9433000), 339500000 in total; last NtSignalAndWaitForSingleObjectEx from 0x82ABFE10 (sub_82ABFDE8+0x28)"),
+            W(965, "ttt2:     busy: 1886600 traced kernel calls a second over the last 5.0 s (mostly NtSignalAndWaitForSingleObjectEx), last from 0x82ABFE10 (sub_82ABFDE8+0x28): a loop that keeps calling the kernel without waiting for long"),
+            W(966, "ttt2: main guest thread ended by the window close (id 4)"),
+        ]
+        t = MOD.triage(lines, {})
+        a = t["activity"]
+        self.assertEqual((a["missing_names"], a["kernel_clock_s"], a["tick_count_s"]), (3, 180.2, 180.2))
+        self.assertEqual((a["frames_presented"], a["frames_with_draws"], a["frames_with_resolves"]), (600, 0, 0))
+        self.assertEqual((a["draws_total"], a["resolves_total"], a["clears_total"]), (0, 0, 0))
+        self.assertEqual(a["last_frame"], "1 draw with EDRAM mode off, 2 packets")
+        self.assertEqual(a["front_buffer"], "1280x720")
+        self.assertIn("KeTimeStampBundle at 0x3000A000", t["kernel_clock"])
+        self.assertEqual(t["missing_names"][0]["status"], "0xC0000034")
+        self.assertEqual(t["frames"]["first"], [{"frame": 1, "stats": "1 draw with EDRAM mode off, 2 packets", "words": 40}])
+        self.assertEqual(t["frames"]["front_buffers"][0]["width"], 1280)
+        self.assertIsNotNone(t["ended_by_close"])
+        self.assertFalse(t["outcome"].startswith("clean exit"))
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("600 frames were presented and not one asked the GPU to draw") for r in recs))
+        probe = [r for r in recs if r.startswith("The game probed the device")]
+        self.assertEqual(len(probe), 1)
+        self.assertNotIn("This host answered with the runtime's", probe[0])
+        spin = [r for r in recs if r.startswith("(unnamed) (id 19) spins:")]
+        self.assertEqual(len(spin), 1)
+        self.assertIn("1886600 traced kernel calls a second", spin[0])
+        self.assertEqual(spin[0].count("without waiting for long"), 1)
+        self.assertIn("The kernel clock advances (180.2 s)", spin[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("## Frames (what the command streams asked the GPU to do)", md)
+        self.assertIn("* no frame with draws", md)
+        self.assertIn("| Kernel clock (KeTimeStampBundle) | 180.2 s (tick count 180.2 s) |", md)
+        self.assertIn("busy: 1886600", md)
+
+    def test_frames_with_draws_and_skipped_packets(self):
+        activity = ("ttt2: activity: files 1 opened, 0 failed (0 device paths); read 0.0 MB in 1 reads (0 failed); sector "
+                    "queries 0; missing names 0; threads created 2; gpu: engines initialized, ring buffer 0x1FF00000, "
+                    "interrupt callback none, no GPU emulation; frames presented 3 (2 with draws, 1 with resolves; draws 5, "
+                    "resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, "
+                    "4 packets; front buffer 16x16); audio clients 0, audio frames 0; input polls 0; traced kernel calls 9; "
+                    "kernel clock 0.4 s (tick count 0.4 s)")
+        lines = head() + [
+            W(960, "ttt2: gpu: first frame with draws: frame 1: 3 draws, 1 resolve (1 clearing), 1 packet the GPU emulation "
+                   "skips (opcode 0x25), 10 packets (nuscMain (id 4), from 0x82010234 (sub_820101F8+0x3C))"),
+            W(960, "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute (it logs them as \"Unimplemented GPU "
+                   "OPCODE\" and skips them): 3 draws, 1 packet the GPU emulation skips (opcode 0x25), 10 packets", level="warning"),
+            W(960, "ttt2: gpu: pixel check frame 1: front buffer 16x16 k_8_8_8_8 at 0xBFC81000: 256 samples, 2 distinct values, "
+                   "most common 0x11223344 (75%), 25% zero"),
+            W(961, activity),
+        ]
+        t = MOD.triage(lines, {})
+        a = t["activity"]
+        self.assertEqual((a["frames_with_draws"], a["frames_with_resolves"], a["max_draws"], a["skipped_packets"]), (2, 1, 3, 1))
+        self.assertEqual(t["frames"]["first_with_draws"]["frame"], 1)
+        self.assertEqual(t["frames"]["first_with_draws"]["stats"],
+                         "3 draws, 1 resolve (1 clearing), 1 packet the GPU emulation skips (opcode 0x25), 10 packets")
+        self.assertEqual(t["frames"]["skipped_packets"]["frame"], 1)
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("The game draws: 5 draws and 1 resolves (1 clearing) in 2 of 3 frames") and
+                            "TTT2_PIXEL_CHECK=1" in r for r in recs))
+        self.assertTrue(any(r.startswith("The frames hold 1 GPU packets the GPU emulation does not execute") for r in recs))
+        self.assertTrue(any(r.startswith("Pixel check (frame 1): front buffer 16x16") for r in recs))
+
     def test_parse_activity_without_gpu(self):
         a = MOD.parse_activity(
             "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "

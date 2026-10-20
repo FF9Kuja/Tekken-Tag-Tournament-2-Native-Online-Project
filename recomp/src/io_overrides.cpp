@@ -1,5 +1,6 @@
-// Host wrappers of the runtime's file-system exports: the one answer TTT2 needs that differs from the
-// runtime's (the disc sector query), and a trace of what the game opens and reads.
+// Host wrappers of the runtime's file-system exports: the answers TTT2 gets differently from the
+// runtime's (the disc sector query, a name that does not exist), and a trace of what the game opens and
+// reads.
 //
 // The sector query. NtQueryInformationFile with FileSectorInformation (class 26) asks for the disc
 // sector a file starts at. ReXGlue 0.10.0 answers it with success and a made-up number (a hash of the
@@ -9,6 +10,17 @@
 // runs the game to menus and fights, answers the query as unsupported (STATUS_INVALID_INFO_CLASS) and
 // the loader falls back to ordinary file reads; the host does the same. TTT2_SECTOR_QUERY=runtime keeps
 // the runtime's answer, for comparing the two on the owner's machine.
+//
+// A name that does not exist. The runtime answers an open of a missing file, or of a path whose parent
+// is missing (a bare device path such as \Device\Image, whose parent \Device is not a mount), with
+// STATUS_NO_SUCH_FILE (0xC000000F), writes INVALID_HANDLE_VALUE into the caller's handle variable and
+// FILE_DOES_NOT_EXIST (5) into the I/O status block. The console's object manager and file systems answer
+// STATUS_OBJECT_NAME_NOT_FOUND (0xC0000034) and leave the handle variable alone, and so do both reference
+// ports that run the game to its menus: TTT2 Web (I/O status {0xC0000034, 0}, handle untouched) and
+// TTT2Recomp (0xC0000034 for opens and attribute queries). Neither maps \Device\Image either: the game
+// probes it at sub_82BCC880 and goes on without it. The host gives the console's answer for opens
+// (NtCreateFile, NtOpenFile: status, I/O status block, handle left as it was on any failure) and attribute
+// queries (NtQueryFullAttributesFile); TTT2_NOT_FOUND_STATUS=runtime keeps the runtime's.
 //
 // The trace. The owner's first boot logged one error, "ResolvePath(\Device) failed - device not
 // found": the runtime's message when an open names a bare device path (\Device\<name>), whose parent
@@ -46,6 +58,8 @@ constexpr std::uint32_t kFileSectorInformation = 26;     // X_FILE_INFORMATION_C
 constexpr std::uint32_t kStatusInvalidInfoClass = 0xC0000003;
 constexpr std::uint32_t kStatusEndOfFile = 0xC0000011;
 constexpr std::uint32_t kStatusPending = 0x00000103;
+constexpr std::uint32_t kStatusNoSuchFile = 0xC000000F;          // the runtime's answer for a missing name
+constexpr std::uint32_t kStatusObjectNameNotFound = 0xC0000034;  // the console's
 constexpr std::uint32_t kObDosDevices = 0xFFFFFFFD;  // OBJECT_ATTRIBUTES.RootDirectory: the DOS device namespace
 constexpr std::size_t kMaxLoggedPaths = 64;
 constexpr std::uint64_t kMaxLoggedReadFailures = 16;
@@ -63,6 +77,16 @@ bool SectorQueryUnsupported() {
   return unsupported;
 }
 
+/// Missing names answered as the console answers them (STATUS_OBJECT_NAME_NOT_FOUND), unless
+/// TTT2_NOT_FOUND_STATUS=runtime.
+bool NotFoundAsConsole() {
+  static const bool console = [] {
+    const char* value = std::getenv("TTT2_NOT_FOUND_STATUS");
+    return !(value && std::string_view(value) == "runtime");
+  }();
+  return console;
+}
+
 // --- guest arguments (pointers the game passed in; valid for the duration of the call) -------------
 
 rex::memory::Memory* GuestMemory() {
@@ -72,6 +96,14 @@ rex::memory::Memory* GuestMemory() {
 std::uint32_t LoadU32(std::uint32_t address) {
   const auto* p = GuestMemory()->TranslateVirtual<const std::uint8_t*>(address);
   return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) | (std::uint32_t(p[2]) << 8) | p[3];
+}
+
+void StoreU32(std::uint32_t address, std::uint32_t value) {
+  auto* p = GuestMemory()->TranslateVirtual<std::uint8_t*>(address);
+  p[0] = static_cast<std::uint8_t>(value >> 24);
+  p[1] = static_cast<std::uint8_t>(value >> 16);
+  p[2] = static_cast<std::uint8_t>(value >> 8);
+  p[3] = static_cast<std::uint8_t>(value);
 }
 
 std::uint16_t LoadU16(std::uint32_t address) {
@@ -191,8 +223,11 @@ void NoteOpen(const char* api, const std::string& path, std::uint32_t status, st
           "ttt2: the game opened '{}', a device itself rather than a file on it; ReXGlue mounts the game folder "
           "at \\Device\\Harddisk0\\Partition1 (game:, d:) and has no device at this path, so the open fails and "
           "the runtime logs \"ResolvePath(\\Device) failed - device not found\" (it resolves the parent, \\Device). "
-          "A game opens its disc device to read raw sectors.",
-          path);
+          "TTT2 probes \\Device\\Image this way on every boot; TTT2 Web and TTT2Recomp, which run the game to its "
+          "menus, have no such device either and answer the open as a missing name (STATUS_OBJECT_NAME_NOT_FOUND){}",
+          path,
+          NotFoundAsConsole() ? ", as the host does."
+                              : "; TTT2_NOT_FOUND_STATUS=runtime keeps the runtime's STATUS_NO_SUCH_FILE here.");
     }
   }
   if (FirstTime(FailedPaths(), path + "|" + FormatStatus(status), "file open failed")) {
@@ -227,23 +262,59 @@ TTT2_WRAPPED_EXPORT(NtQueryInformationFile) {
   TTT2_RUNTIME_ORIGINAL(NtQueryInformationFile)(ctx, base);
 }
 
+namespace {
+
+/// The console's answer for a missing name instead of the runtime's (see the top of this file); logs the
+/// first one. Returns the status the caller now sees.
+std::uint32_t AnswerNotFound(PPCContext& ctx, const char* api, const std::string& path, std::uint32_t lr) {
+  ctx.r3.u64 = kStatusObjectNameNotFound;
+  if (counters().not_found_answers.fetch_add(1, std::memory_order_relaxed) == 0) {
+    REXLOG_INFO(
+        "ttt2: missing name: '{}' ({}) answered as {}, as the console and both reference ports answer a name that "
+        "does not exist, instead of the runtime's {} (first one, from {}; later ones are counted; "
+        "TTT2_NOT_FOUND_STATUS=runtime keeps the runtime's answer)",
+        path, api, FormatStatus(kStatusObjectNameNotFound), FormatStatus(kStatusNoSuchFile),
+        ttt2::monitor::DescribeGuestAddress(lr));
+  }
+  return kStatusObjectNameNotFound;
+}
+
+/// NtCreateFile and NtOpenFile take the handle variable in r3, the object attributes in r5 and the I/O
+/// status block in r6. On failure the console leaves the handle variable as it was; a missing name is
+/// STATUS_OBJECT_NAME_NOT_FOUND with information 0.
+void Open(PPCContext& ctx, std::uint8_t* base, ttt2::GuestExportFn* original, const char* api, std::uint32_t id) {
+  const auto lr = static_cast<std::uint32_t>(ctx.lr);
+  ttt2::monitor::NoteCall(id, lr);
+  const std::uint32_t handle_out = ctx.r3.u32;
+  const std::uint32_t io_status_block = ctx.r6.u32;
+  const std::string path = ObjectPath(ctx.r5.u32);
+  const std::uint32_t handle_before = handle_out ? LoadU32(handle_out) : 0;
+  original(ctx, base);
+  std::uint32_t status = ctx.r3.u32;
+  if (!Succeeded(status) && NotFoundAsConsole()) {
+    if (handle_out) StoreU32(handle_out, handle_before);
+    if (status == kStatusNoSuchFile) {
+      status = AnswerNotFound(ctx, api, path, lr);
+      if (io_status_block) {
+        StoreU32(io_status_block, status);
+        StoreU32(io_status_block + 4, 0);
+      }
+    }
+  }
+  NoteOpen(api, path, status, lr);
+}
+
+}  // namespace
+
 // NtCreateFile(handle out r3, access r4, object attributes r5, io_status_block r6, allocation size r7,
 //              attributes r8, share r9, disposition r10, options on the stack).
 TTT2_WRAPPED_EXPORT(NtCreateFile) {
-  const auto lr = static_cast<std::uint32_t>(ctx.lr);
-  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtCreateFile), lr);
-  const std::string path = ObjectPath(ctx.r5.u32);
-  TTT2_RUNTIME_ORIGINAL(NtCreateFile)(ctx, base);
-  NoteOpen("NtCreateFile", path, ctx.r3.u32, lr);
+  Open(ctx, base, TTT2_RUNTIME_ORIGINAL(NtCreateFile), "NtCreateFile", TTT2_EXPORT_ID(NtCreateFile));
 }
 
 // NtOpenFile(handle out r3, access r4, object attributes r5, io_status_block r6, options r7).
 TTT2_WRAPPED_EXPORT(NtOpenFile) {
-  const auto lr = static_cast<std::uint32_t>(ctx.lr);
-  ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtOpenFile), lr);
-  const std::string path = ObjectPath(ctx.r5.u32);
-  TTT2_RUNTIME_ORIGINAL(NtOpenFile)(ctx, base);
-  NoteOpen("NtOpenFile", path, ctx.r3.u32, lr);
+  Open(ctx, base, TTT2_RUNTIME_ORIGINAL(NtOpenFile), "NtOpenFile", TTT2_EXPORT_ID(NtOpenFile));
 }
 
 // NtReadFile(handle r3, event r4, apc routine r5, apc context r6, io_status_block r7, buffer r8,
@@ -283,8 +354,11 @@ TTT2_WRAPPED_EXPORT(NtQueryFullAttributesFile) {
   ttt2::monitor::NoteCall(TTT2_EXPORT_ID(NtQueryFullAttributesFile), lr);
   const std::string path = ObjectPath(ctx.r3.u32);
   TTT2_RUNTIME_ORIGINAL(NtQueryFullAttributesFile)(ctx, base);
-  const std::uint32_t status = ctx.r3.u32;
+  std::uint32_t status = ctx.r3.u32;
   if (Succeeded(status)) return;
+  if (status == kStatusNoSuchFile && NotFoundAsConsole()) {
+    status = AnswerNotFound(ctx, "NtQueryFullAttributesFile", path, lr);
+  }
   counters().attribute_failures.fetch_add(1, std::memory_order_relaxed);
   ttt2::monitor::NoteFileEvent("NtQueryFullAttributesFile", path, status, lr);
   if (FirstTime(MissingAttributePaths(), path, "file attributes missing")) {

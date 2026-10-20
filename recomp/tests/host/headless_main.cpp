@@ -36,6 +36,8 @@
 #include <thread>
 #include <vector>
 
+#include "frame_monitor.h"
+#include "kernel_clock.h"
 #include "stub_counter.h"
 
 namespace {
@@ -168,6 +170,10 @@ int main(int argc, char** argv) {
     return 2;
   }
   std::printf("headless_host: runtime ready (tool mode)\n");
+  // The kernel clock the game reads from memory, refreshed as the game host refreshes it (Ttt2App::OnPostSetup).
+  ttt2::kernel_clock::Start(runtime);
+  // TTT2_PIXEL_CHECK=1 samples presented front buffers, as in the game host (there is no GPU emulation here).
+  ttt2::frames::ConfigurePixelCheck();
   const std::string vfs_path = "game:\\" + opt.xex;
   const rex::X_STATUS loaded = runtime.LoadXexImage(vfs_path);
   if (XFAILED(loaded)) {

@@ -2,6 +2,69 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-20 - Session 9: the second black-screen run - a frozen kernel clock, missing names, frame and thread diagnostics
+
+**The owner's report (2026-10-20, `main` at `33f43c8`, the PR #16 host).** Codegen and the build as before (348
+verified entries, 28 guest threads). GPU engines initialized; 10,760 `VdSwap` calls, 21,548 vblanks and 10,762 input
+polls in 180 s, the window black throughout. Two file reads, 0.0 MB. `NtCreateFile("\Device\Image")` failed with
+`0xC000000F`, called from `0x82BCC930` in `sub_82BCC880`; no disc sector query reached the host. Thread 6 running while
+threads 12 and 26 waited on a critical section it owned (recursion 390), thread 14 on a lock of thread 12; thread 19
+made about 339.5 million traced kernel calls. Closed by the 180 s timeout.
+
+**Completed** (`docs/RESEARCH.md` 8f)
+* **Kernel clock (`recomp/src/kernel_clock.cpp`).** The pinned SDK refreshes only TickCount of `KeTimeStampBundle`;
+  InterruptTime and SystemTime, which the game reads from memory, stay 0. Both reference ports refresh all three;
+  TTT2Recomp measured the game waiting forever on that clock, and TTT2 Web documents a game thread
+  (`sub_82ABFDE8`) that signals its own event and waits until a 64-bit counter changes - the shape of thread 19. The
+  host refreshes both every millisecond from the runtime's guest clock (`TTT2_KERNEL_CLOCK=runtime` turns it off);
+  the activity line reports it. The strongest lead for the stalled loader; not yet confirmed on the real game.
+* **Missing names (`recomp/src/io_overrides.cpp`).** `\Device\Image` is probed on every boot and mapped by neither
+  reference port, both of which run the game to its menus; they answer a missing name with `0xC0000034`
+  (`STATUS_OBJECT_NAME_NOT_FOUND`), I/O status information 0 and the handle variable untouched, as the console's
+  object manager does. The host now answers the runtime's not-found cases that way for `NtCreateFile`, `NtOpenFile`
+  and `NtQueryFullAttributesFile` (`TTT2_NOT_FOUND_STATUS=runtime` keeps the runtime's). No device is mapped there.
+* **Frame monitor (`recomp/src/frame_monitor.cpp`, `pm4_stats.cpp`).** After every `VdSwap` the host reads the
+  frame's PM4 command stream (the ring stretch since the previous swap, wrapping, and its indirect buffers) and counts
+  draws by EDRAM mode, resolves and clears, render-target changes, indirect buffers and packets the GPU emulation
+  skips; the first frames, the first frame with draws, front-buffer changes and totals are logged.
+  `TTT2_PIXEL_CHECK=1` samples the presented front buffer (with the GPU emulation's resolve readback on). This tells
+  the game's own black screen (frames with nothing drawn) from drawn frames that come out black.
+* **Thread diagnostics (`recomp/src/boot_monitor.cpp`).** The dumps give each thread's calls of the last tick by
+  export and flag busy threads (50,000 or more traced calls a second, with the call site). The SDK's critical
+  sections were read and follow NT's algorithm; nothing is force-released or signalled.
+* **A shutdown race.** A window close terminates the title, and the SDK then calls the host's main-thread-exit hook
+  during its close path; with a busy thread the host logged "guest program ended" (a clean exit to the triage). It now
+  logs `main guest thread ended by the window close` and leaves the exit to the close path.
+* **Triage.** Reads the kernel clock, missing names, frame statistics, pixel checks, busy threads (also from older
+  logs) and critical-section recursion across dumps; `\Device\Image` is reported as a known probe, not the next step;
+  empty frames are told apart from drawn ones; a spinning thread is tied to the clock fix on older hosts.
+* **Tests.** `recomp/tests/ppc/clock_ttt2.s` (7 checks of the clock read through a variable import, with and without
+  the refresh: without it the signal-and-wait loop runs into its 1,000,000-round cap); `gpu_ttt2.s` (three frames of
+  PM4 packets in a 4 KB ring, exact counts, the third across the ring's end; pixel check; frame stats off); `io_ttt2.s`
+  now opens `\Device\Image`, reads back the handle variable and I/O status and opens a missing file with `NtOpenFile`
+  (15 values, three modes); `wait_ttt2.s` gained a spinning thread (flagged busy, named by the triage); 11 doctest cases
+  for the PM4 parser; 3 new triage tests (the owner's old-host log shape, the new formats); `host-boot-test.sh
+  --expect-gpu-frames`, clock checks in every normal boot, the new I/O and busy checks; both workflows boot the
+  GPU-frames program and check that the triage names the spinner.
+* **Reading guest memory safely.** The page table reports a protection for pages that are only reserved (no memory
+  behind them), so the host's reads of guest memory it does not own (indirect buffers named by a command stream,
+  wait objects, the front buffer) now also require committed pages (`ttt2::monitor::GuestReadable`,
+  `PhysicalReadable`); `gpu_ttt2.s` names an indirect buffer with no memory, which is counted, not read.
+* **Local runs (Linux, pinned SDK):** the smoke test with `--exec` (63 checks); the real host on `imports_ttt2`,
+  `io_ttt2` (`--expect-io`), `gpu_ttt2` (`--expect-gpu-frames`) and `wait_ttt2` (`--expect-stall --expect-waits`); the
+  triage on that log (wait chain, spinning thread); 95 Python tests; the unit tests with Clang and GCC 13.
+* **CI and workflows on PR #17 (`92e09e3`):** CI green (push 39487724425, PR 39487732479); SDK validation on Linux
+  39487729416: the smoke test with native execution (`clock_ttt2`, `gpu_ttt2`, `io_ttt2` in all their modes), the real
+  host on the deadlock with the spinning thread (flagged busy, its busiest call named; the boot step's triage names it),
+  on the file-system program (`\Device\Image` and the missing file answered as missing names) and on the GPU-frames
+  program (every frame's counts, the unreadable indirect buffer, the frame across the ring's end), the kernel clock
+  checked in every normal boot; the Windows workflow with `build_host` and `native_run` 39487733212: the same on
+  Windows, and the owner pipeline end to end. (A first round on `ee387c0` was cancelled after its CI passed, for the
+  committed-page change.)
+
+**Not verified yet:** the owner's copy: whether the loader reads its data with the clock running, whether thread 19
+calms down, and whether frames get draws.
+
 ## 2026-10-20 - Session 8: the black screen - the one error explained, the sector query answered like TTT2 Web, a boot monitor
 
 **The owner's report (2026-10-20, checkout `0d1d012`).** Native execution again, with everything before it working

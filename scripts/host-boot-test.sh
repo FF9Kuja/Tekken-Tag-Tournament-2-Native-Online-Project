@@ -7,7 +7,7 @@
 #
 #   scripts/host-boot-test.sh <ttt2 executable> <game data root> [timeout seconds]
 #                             [--expect-crash | --expect-stall | --expect-fatal] [--gpu] [--no-imports]
-#                             [--expect-waits] [--expect-io]
+#                             [--expect-waits] [--expect-io] [--expect-gpu-frames]
 #
 # Runs without GPU emulation (--gpu_plugin=none) and with SDL's dummy audio driver; on Linux without a
 # display it starts an Xvfb of its own. With --gpu the host is left to load the staged Xenos plugin
@@ -29,14 +29,19 @@
 # own abort line must be logged and the host must exit with code 4 (Ttt2App::kExitCodeFatal) instead of
 # hanging in the C runtime's abort dialog. --no-imports drops the two kernel-override checks of the
 # normal expectations, for programs other than imports_ttt2.s. --expect-waits (with --expect-stall; image:
-# recomp/tests/ppc/wait_ttt2.s, two threads deadlocked on a critical section and an event) also checks
-# what the host's boot monitor says about the stall: the worker's creation with its start address, the
-# main thread's wait on the critical section naming the worker as its owner, the worker's wait on the
-# unsignaled event, the guest call sites and stacks, and the thread dump the host writes on window
-# close. --expect-io (image: recomp/tests/ppc/io_ttt2.s; writes the 16-byte io_data.bin it reads into
+# recomp/tests/ppc/wait_ttt2.s, two threads deadlocked on a critical section and an event next to a third
+# that spins on its own event) also checks what the host's boot monitor says about the stall: the threads'
+# creation with their start addresses, the main thread's wait on the critical section naming the worker as
+# its owner, the worker's wait on the unsignaled event, the spinner flagged as busy with its busiest call,
+# the guest call sites and stacks, and the thread dump the host writes on window close. --expect-io (image: recomp/tests/ppc/io_ttt2.s; writes the 16-byte io_data.bin it reads into
 # the game root) checks the host's file-system trace: the sector query answered as unsupported, the
-# bare device \Device\Cdrom0 failing to open with the runtime's "ResolvePath(\Device)" line and the host's
-# explanation, the file opened, and the watchdog's activity counters. No game content is involved.
+# bare device \Device\Image failing to open with the runtime's "ResolvePath(\Device)" line, answered as a
+# missing name the way the console answers it (STATUS_OBJECT_NAME_NOT_FOUND) with the host's explanation,
+# the file opened, and the watchdog's activity counters. --expect-gpu-frames (image:
+# recomp/tests/ppc/gpu_ttt2.s, three frames of GPU commands handed to VdSwap) checks the host's frame
+# monitor: each frame's draws, resolves, clears, indirect buffers and skipped packets, the front buffer, and
+# the frame summary in the activity line. Every normal run also checks that the host keeps the kernel clock
+# (KeTimeStampBundle) current. No game content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
 game="${2:?game data root}"
@@ -48,6 +53,7 @@ gpu=0
 imports=1
 expect_waits=0
 expect_io=0
+expect_gpu_frames=0
 for a in "$@"; do
     [ "$a" = "--expect-crash" ] && expect_crash=1
     [ "$a" = "--expect-stall" ] && expect_stall=1
@@ -56,6 +62,7 @@ for a in "$@"; do
     [ "$a" = "--no-imports" ] && imports=0
     [ "$a" = "--expect-waits" ] && expect_waits=1
     [ "$a" = "--expect-io" ] && expect_io=1
+    [ "$a" = "--expect-gpu-frames" ] && expect_gpu_frames=1
 done
 gpu_arg="--gpu_plugin=none"
 [ "$gpu" = 0 ] || gpu_arg="--gpu_plugin=xenos"
@@ -150,6 +157,9 @@ if [ "$expect_stall" = 1 ]; then
         check "called from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*)" "the waits name their guest call sites"
         check "guest stack: 0x[0-9A-F]* (sub_" "the guest call stacks were read"
         check "kernel calls: 0 in the last tick, none for at least" "the quiet threads were named as such"
+        check "kernel calls: [0-9]* in the last tick (NtSignalAndWaitForSingleObjectEx [0-9]*" "the spinner's busiest call was named"
+        check "busy: [0-9]* traced kernel calls a second over the last [0-9.]* s (mostly NtSignalAndWaitForSingleObjectEx), last from 0x[0-9A-F]* (sub_" \
+            "the spinning thread was flagged as busy"
         check "ttt2: thread state at window close:" "the thread dump was written on window close"
     fi
 elif [ "$expect_fatal" = 1 ]; then
@@ -182,15 +192,35 @@ else
     check "ttt2: main guest thread exited" "the program returned from its entry point"
     check "ttt2: guest program ended; exiting" "the host ended after the guest exit"
     check "ttt2: [0-9]* kernel exports traced by the host" "the host's export wrappers found the runtime's originals"
+    check "ttt2: kernel clock: KeTimeStampBundle at 0x[0-9A-F]*: the host refreshes InterruptTime and SystemTime" \
+        "the host keeps the kernel clock current"
+    check "ttt2: activity: .*; kernel clock [0-9.]* s (tick count [0-9.]* s)" "the activity line reports the kernel clock"
     if [ "$expect_io" = 1 ]; then
         check "ttt2: file opened: 'game:.io_data.bin'" "the file open was traced"
         check "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "the sector query was answered as unsupported"
         check "ResolvePath(.Device) failed - device not found" "the bare device open produced the runtime's line from the owner's log"
-        check "ttt2: the game opened '.Device.Cdrom0', a device itself" "the host explained the device open"
-        check "ttt2: file open failed: '.Device.Cdrom0' -> 0xC000000F (STATUS_NO_SUCH_FILE)" "the failed open was traced with its status and caller"
-        check "ttt2: file attributes missing: 'game:.missing.bin'" "the missing file's attribute query was traced"
-        check "ttt2: activity: files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1;" \
+        check "ttt2: the game opened '.Device.Image', a device itself" "the host explained the device open"
+        check "ttt2: missing name: '.Device.Image' (NtCreateFile) answered as 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND)" \
+            "the missing device was answered as the console answers a missing name"
+        check "ttt2: file open failed: '.Device.Image' -> 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND)" "the failed open was traced with its status and caller"
+        check "ttt2: file attributes missing: 'game:.missing.bin' -> 0xC0000034" "the missing file's attribute query was traced"
+        check "ttt2: file open failed: 'game:.missing.bin' -> 0xC0000034 (STATUS_OBJECT_NAME_NOT_FOUND) (NtOpenFile" \
+            "the missing file's NtOpenFile was answered as a missing name"
+        check "ttt2: activity: files 1 opened, 2 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; missing names 3;" \
             "the watchdog's activity line counted them"
+    fi
+    if [ "$expect_gpu_frames" = 1 ]; then
+        check "ttt2: gpu: ring buffer at 0x[0-9A-F]*, size 2^9" "the ring buffer was registered"
+        check "ttt2: gpu: front buffer 16x16 k_8_8_8_8 at 0x[0-9A-F]* (frame 1)" "the front buffer was identified"
+        check "ttt2: gpu: frame 1: 3 draws, 1 resolve (1 clearing), 1 render target change, 1 indirect buffer, 1 packet the GPU emulation skips (opcode 0x25), 10 packets (26 words of commands)" \
+            "frame 1's draws, resolve, clear, indirect buffer and skipped packet were counted"
+        check "ttt2: gpu: first frame with draws: frame 1:" "the first frame with draws was reported"
+        check "ttt2: gpu: frame 1 holds packets the GPU emulation does not execute" "the packet the GPU emulation skips was reported"
+        check "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 1 unreadable buffer, 3 packets (7 words of commands)" \
+            "frame 2's non-rendering draw was told apart and its indirect buffer without memory left unread"
+        check "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "frame 3 was read across the end of the ring"
+        check "frames presented 3 (2 with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)" \
+            "the activity line summarised the frames"
     fi
     absent "ttt2: HOST CRASH" "no host crash"
     absent "STUB" "no runtime stub was reached"
