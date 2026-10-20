@@ -1,0 +1,3 @@
+# Import libraries of falloff_ttt2.s for scripts/ppc_elf_to_xex.py --imports: library, then the
+# ELF symbols of its import records (slot and thunk of each import).
+xboxkrnl.exe: RtlInitializeCriticalSection_slot, RtlInitializeCriticalSection_thunk, RtlEnterCriticalSection_slot, RtlEnterCriticalSection_thunk, RtlLeaveCriticalSection_slot, RtlLeaveCriticalSection_thunk

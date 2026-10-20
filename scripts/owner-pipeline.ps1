@@ -5,7 +5,7 @@
 #                              [-SkipBuild] [-Codegen] [-Rexglue path\to\rexglue.exe]
 #                              [-BuildHost] [-SdkInstall <dir>] [-InstallSdk] [-ExtractGame] [-Boot] [-BootTimeout 0]
 #                              [-BootRounds 10] [-BootMinutes 480] [-MinFreeGb 5] [-BuildJobs <n>] [-NoIndirect]
-#                              [-NoGpu] [-Reference recomp\ttt2_functions.ttt2web.toml]
+#                              [-NoGpu] [-Reference recomp\ttt2_functions.ttt2web.toml] [-AllowUnpatchedSdk]
 #
 # What it does, in order (docs/OWNER_CHECKLIST.md explains each step):
 #   1. builds the tools with scripts\build.ps1 (skip with -SkipBuild);
@@ -64,6 +64,11 @@
 #   9c. the loop's summary: one line per run (how it ended, what its log added) and why the loop stopped.
 # -NoGpu runs the host without GPU emulation (--gpu_plugin=none: log gathering only, the game cannot draw).
 # -Reference names the boundary reference the resolver checks against (default: TTT2 Web's published table).
+# The codegen must come from a ReXGlue build with the project's codegen patches (third_party\rexglue-patches, applied
+# by scripts\fetch-rexglue-sdk.ps1; the Windows workflow's SDK package has them): its log names them ("TTT2 SDK
+# patches: ..."). A rexglue without patch 0001 compiles functions whose recorded end comes before their code's end
+# into early returns (a lock left held, recursion 390 in the owner's boots), so step 6b stops with a message naming
+# the package to download; -AllowUnpatchedSdk continues anyway, for comparisons only.
 # A CRITICAL FAILURE STOPS THE PIPELINE: when a stage the later ones depend on fails (the disc or the title
 # update cannot be read or extracted, the image cannot be prepared, the finder, codegen, the host build or the
 # extraction fails), the report gets a "CRITICAL:" line naming the cause, is written, and the script throws
@@ -94,7 +99,8 @@ param(
     [int]$BuildJobs = 0,
     [switch]$NoIndirect,
     [switch]$NoGpu,
-    [string]$Reference = "recomp\ttt2_functions.ttt2web.toml"
+    [string]$Reference = "recomp\ttt2_functions.ttt2web.toml",
+    [switch]$AllowUnpatchedSdk
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
@@ -403,9 +409,28 @@ function Invoke-Codegen([int]$pass) {
     if ($codegenCode -ne 0 -or -not (Test-Path "recomp\generated\default\sources.cmake")) {
         Fail-Pipeline "rexglue codegen failed (resolve_functions.py exit $codegenCode) or produced no recomp\generated\default\sources.cmake; see $resolveMd and $($script:codegenLog)"
     }
+    # The project's codegen patches (third_party\rexglue-patches) must be in the rexglue that ran.
+    $requiredPatches = @(Get-ChildItem "third_party\rexglue-patches" -Filter *.patch -ErrorAction SilentlyContinue |
+        Sort-Object Name | ForEach-Object { $_.BaseName })
+    $patchLine = $null
+    if (Test-Path $script:codegenLog) { $patchLine = Select-String -Path $script:codegenLog -Pattern "TTT2 SDK patches: (.+)$" | Select-Object -Last 1 }
+    $havePatches = @()
+    if ($patchLine) { $havePatches = @($patchLine.Matches[0].Groups[1].Value.Split(",") | ForEach-Object { $_.Trim() }) }
+    $missingPatches = @($requiredPatches | Where-Object { $havePatches -notcontains $_ })
+    if ($missingPatches.Count -gt 0) {
+        $why = "the rexglue at $($script:Rexglue) lacks the project's codegen patch(es) $($missingPatches -join ', ') " +
+               "(third_party\rexglue-patches): with an older SDK package, functions whose recorded end comes before " +
+               "their code's end compile into early returns. Download the newest rexglue-sdk-install-win-amd64 artifact " +
+               "(Actions tab, 'ReXGlue codegen tool (Windows)' workflow, the latest run on main), unzip it over " +
+               "$(if ($SdkInstall) { $SdkInstall } else { 'your SDK folder' }) and rerun the same command"
+        if ($AllowUnpatchedSdk) { Log "WARNING: $why (-AllowUnpatchedSdk: continuing)" } else { Fail-Pipeline $why }
+    } else {
+        Log "Codegen patches in this rexglue: $($havePatches -join ', ')"
+    }
     $reportMd = Join-Path $Work "codegen-REPORT.md"
     $reportJson = Join-Path $Work "codegen-report.json"
-    Run $script:python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $script:codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet") | Out-Null
+    Run $script:python @("-I", "recomp\tools\codegen_report.py", "recomp\generated\default", "--log", $script:codegenLog, "--project", "ttt2", "--md", $reportMd, "--json", $reportJson, "--quiet",
+        "--require-patches", ($requiredPatches -join ",")) | Out-Null
     if (Test-Path $reportMd) { Get-Content $reportMd | ForEach-Object { Log $_ } } else { Log "PROBLEM: no codegen report was written (codegen_report.py exit $($script:lastExit))" }
 
     # How ReXGlue emitted every bctr: the finder's tables must come out as written; a switch only the SDK's

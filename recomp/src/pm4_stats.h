@@ -2,9 +2,12 @@
 //
 // The Xbox 360 GPU (Xenos) is fed PM4 packets: type 0 writes consecutive registers, type 1 two registers,
 // type 2 is a one-word no-op, type 3 is a command (opcode in bits 8-14, count of the words that follow minus
-// one in bits 16-29; bit 0 predicates it on the bin mask). Direct3D writes a frame's packets into the primary
-// ring buffer, partly through indirect buffers (INDIRECT_BUFFER packets naming a GPU address and a length),
-// and ends the frame with VdSwap, which fills 64 words reserved in the ring with the swap packet. A draw is a
+// one in bits 16-29; bit 0 predicates it on the bin mask). The GPU reads the primary ring buffer up to the write
+// pointer the CPU sets (register CP_RB_WPTR, in words), and the indirect buffers its INDIRECT_BUFFER packets
+// name (a GPU address and a length). Direct3D writes a frame's commands into its own command buffer and kicks
+// them to the GPU with indirect-buffer packets in the ring; VdSwap fills 64 words D3D reserved there with the
+// swap packet (XE_SWAP), which ends the frame in the stream. (TTT2's VdSwap buffers lie outside the 32 KB
+// ring, in D3D's command buffer: the owner's boot logs, every frame.) A draw is a
 // DRAW_INDX or DRAW_INDX_2 packet, and what it does depends on RB_MODECONTROL's EDRAM mode at that point:
 // 4 (color and depth) and 5 (depth only) render, 6 (copy) resolves - copies the EDRAM render target to a
 // texture in memory, clearing it when RB_COPY_CONTROL says so - and 0 does nothing.
@@ -122,6 +125,11 @@ class Parser {
   /// Parses `count` words (host order) as a command buffer, adding to `stats`.
   void Parse(const std::uint32_t* words, std::size_t count, FrameStats& stats);
 
+  /// Called at every XE_SWAP packet (after counting it) with the stats being added to; the handler may take
+  /// them as a finished frame and reset them, and the parse goes on adding to the same object. Empty: none.
+  using SwapFn = std::function<void(FrameStats& stats)>;
+  void SetSwapHandler(SwapFn handler) { on_swap_ = std::move(handler); }
+
   // The register state carried from one Parse to the next (as the GPU keeps it).
   std::uint32_t mode_control() const { return mode_control_; }
   std::uint32_t copy_control() const { return copy_control_; }
@@ -132,6 +140,7 @@ class Parser {
   void Draw(std::uint32_t opcode, FrameStats& stats);
 
   ReadFn read_;
+  SwapFn on_swap_;
   std::uint32_t max_dwords_;
   int max_depth_;
   std::uint32_t mode_control_ = 0;
@@ -151,6 +160,43 @@ struct RingSpan {
   std::uint32_t bytes = 0;
 };
 std::vector<RingSpan> RingSpans(std::uint32_t ring_bytes, std::uint32_t from, std::uint32_t to);
+
+/// Follows a ring buffer the way the GPU reads it. At each sample of the ring's write pointer (CP_RB_WPTR, a
+/// word index) the words written since the previous sample are parsed, with the indirect buffers they name, and
+/// split into frames at the XE_SWAP packets. D3D kicks a frame's commands in one or more stretches (a command
+/// buffer segment when it fills, the rest at Present), so what follows the last swap is kept and continues into
+/// the next sample's frame. The CPU writes whole packets before it moves the write pointer, so a sample never
+/// ends inside a packet; packets may wrap around the ring's end. More than a whole ring written between two
+/// samples cannot be told from less: the caller compares the swaps found with the frames presented.
+class RingFollower {
+ public:
+  using FrameFn = std::function<void(const FrameStats& frame)>;
+  /// The ring: GPU (physical) base address and size in words; `start` is where the GPU starts reading (0 after
+  /// VdInitializeRingBuffer).
+  RingFollower(ReadFn read, std::uint32_t base, std::uint32_t dwords, std::uint32_t start = 0);
+
+  /// Parses the words from the previous position up to `write_pointer` (taken modulo the ring size) and calls
+  /// `on_frame` for every frame a swap packet completes. False when nothing new was written.
+  bool Advance(std::uint32_t write_pointer, const FrameFn& on_frame);
+
+  std::uint32_t position() const { return position_; }
+  /// The frame in progress: what was read after the last swap packet.
+  const FrameStats& pending() const { return pending_; }
+  std::uint64_t words_read() const { return words_read_; }
+  std::uint64_t frames() const { return frames_; }
+
+ private:
+  ReadFn read_;
+  Parser parser_;
+  std::uint32_t base_;
+  std::uint32_t dwords_;
+  std::uint32_t position_;
+  FrameStats pending_;
+  std::vector<std::uint32_t> words_;
+  std::vector<std::uint32_t> part_;
+  std::uint64_t words_read_ = 0;
+  std::uint64_t frames_ = 0;
+};
 
 /// "3 draws, 1 resolve (1 clearing), 2 indirect buffers, 120 packets" - the parts that are not zero.
 std::string Describe(const FrameStats& stats);

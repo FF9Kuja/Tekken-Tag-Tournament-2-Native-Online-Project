@@ -1,0 +1,141 @@
+TTT2 project patch 0001 for the ReXGlue SDK (pin c94f5eb, v0.10.0): fall-through at a function's end.
+
+When a function's recorded extent (its .pdata length, a [functions] size, a gap-fill run) ends before its
+code does, ReXGlue ends the generated C++ function there, so it returns to the caller where the CPU goes on
+into the code that follows - silently, without a warning. Code skipped that way is lost: a lock that is
+never left, a stack frame and non-volatile registers that are never restored.
+recomp/tests/ppc/falloff_ttt2.s measures it: a function whose .pdata length ends after it enters a
+critical section leaves the section held after every call (recursion 5 after 5 calls; the owner's boots
+show a section held by the main thread at recursion 390 while two other threads wait for it).
+
+With this patch the generated code continues where the CPU does: a jump to the label when the code that
+follows belongs to the same function, otherwise a call of the function that starts there followed by a
+return (a tail call: LR is untouched, so that function's blr returns to the original caller). Every site
+is logged ("Fall-through after <mnemonic>: function 0x... runs on past its end at 0x... into ...") and
+marked in the generated code ("// TTT2 fall-through after ..."); recomp/tools/codegen_report.py counts
+them. Where no function starts at that address the generated code still returns (logged and marked).
+The codegen command also names the patch in its log ("TTT2 SDK patches: 0001-fall-through") so the
+pipeline can tell an SDK package built without it.
+
+Applied by scripts/fetch-rexglue-sdk.sh / .ps1. The SDK is BSD-3-Clause (third_party/rexglue-sdk/PIN).
+
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index fc918bb..db75e8a 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -344,6 +344,38 @@ void emit_print(std::string& out, fmt::format_string<Args...> fmt, Args&&... arg
+   fmt::vformat_to(std::back_inserter(out), fmt.get(), fmt::make_format_args(args...));
+ }
+ 
++// Whether the CPU can go on to the next word after this instruction: everything but an unconditional
++// b/ba, blr, bctr (branch-always BO, no link) and an unconditional trap. A zero or undecodable word is
++// data, never treated as falling through.
++bool CanFallThrough(uint32_t raw) {
++  if (raw == 0 || raw == 0xFFFFFFFF)
++    return false;
++  const uint32_t op = raw >> 26;
++  const bool link = (raw & 1) != 0;
++  const uint32_t bo = (raw >> 21) & 31;
++  const bool always = (bo & 0x14) == 0x14;
++  switch (op) {
++    case 18:  // b, ba, bl, bla
++      return link;
++    case 16:  // bc
++      return link || !always;
++    case 19: {
++      const uint32_t xo = (raw >> 1) & 0x3FF;
++      if (xo == 16 || xo == 528)  // bclr, bcctr
++        return link || !always;
++      return true;
++    }
++    case 3:  // twi
++      return bo != 31;
++    case 31:
++      if (((raw >> 1) & 0x3FF) == 4)  // tw
++        return bo != 31;
++      return true;
++    default:
++      return true;
++  }
++}
++
+ }  // namespace
+ 
+ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+@@ -497,7 +529,9 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+   ppc_insn insn;
+   std::unordered_set<size_t> emittedLabels;
+ 
+-  for (const auto& block : blocks()) {
++  const auto& allBlocks = blocks();
++  for (size_t blockIndex = 0; blockIndex < allBlocks.size(); ++blockIndex) {
++    const auto& block = allBlocks[blockIndex];
+     auto blockBase = block.base;
+     auto blockEnd = block.end();
+     auto* data = reinterpret_cast<const uint32_t*>(ctx.binary.translate(block.base));
+@@ -601,6 +635,51 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+       blockBase += 4;
+       ++data;
+     }
++
++    // After the block's last instruction the CPU goes on at block.end() unless that instruction ends
++    // the flow. When the next block of this function starts there, the C++ text does the same. When
++    // nothing of this function does - the function's recorded extent (.pdata length, a [functions]
++    // size, a gap-fill run) ends before its code does - the generated function used to end here,
++    // returning to the caller where the guest goes on into the code that follows (TTT2 project patch
++    // 0001). That code is entered as the function that starts there, without touching LR, as a tail
++    // call would be.
++    if (blockEnd > block.base) {
++      const uint32_t lastWord = load_and_swap<uint32_t>(data - 1);
++      const uint32_t next = blockEnd;
++      const bool adjacent =
++          blockIndex + 1 < allBlocks.size() && allBlocks[blockIndex + 1].base == next;
++      if (!adjacent && CanFallThrough(lastWord)) {
++        // The last Disassemble() call above was for the block's last word.
++        const std::string lastMnemonic = insn.opcode ? std::string(insn.opcode->name) : "?";
++        const FunctionNode* nextFn = ctx.graph.getFunction(next);
++        if (labels.contains(next) && containsAddress(next)) {
++          emit_println(body, "\t// TTT2 fall-through after {}: continues at loc_{:X}", lastMnemonic, next);
++          emit_println(body, "\tgoto loc_{:X};", next);
++        } else if (nextFn && nextFn != this && !nextFn->isImport()) {
++          std::string nextName = nextFn->base() == ctx.entryPoint ? std::string("xstart")
++                                 : !nextFn->name().empty()       ? nextFn->name()
++                                                                 : fmt::format("sub_{:08X}", next);
++          REXCODEGEN_WARN(
++              "Fall-through after {}: function 0x{:08X} runs on past its end at 0x{:08X} into {} "
++              "(0x{:08X}); emitted as a tail call",
++              lastMnemonic, base(), next - 4, nextName, next);
++          ctx.reference(nextName);
++          emit_println(body, "\t// TTT2 fall-through after {}: the code runs on into {} (0x{:08X})",
++                       lastMnemonic, nextName, next);
++          emit_println(body, "\t{}(ctx, base);", nextName);
++          emit_println(body, "\treturn;");
++        } else {
++          REXCODEGEN_WARN(
++              "Fall-through after {}: function 0x{:08X} runs on past its end at 0x{:08X} into "
++              "0x{:08X}, where no function starts; the generated code returns there",
++              lastMnemonic, base(), next - 4, next);
++          emit_println(body,
++                       "\t// TTT2 fall-through after {}: the code runs on into 0x{:08X}, where no "
++                       "function starts (returns here)",
++                       lastMnemonic, next);
++        }
++      }
++    }
+   }
+ 
+   // --- Close function body (or SEH try block) ---
+diff --git a/src/rexglue/commands/codegen_command.cpp b/src/rexglue/commands/codegen_command.cpp
+index df7a2e8..f0e860d 100644
+--- a/src/rexglue/commands/codegen_command.cpp
++++ b/src/rexglue/commands/codegen_command.cpp
+@@ -71,6 +71,9 @@ Result<void> RecompileProject(const fs::path& manifest_path, const CliContext& c
+     return Err<void>(rex::ErrorCategory::Config, "Failed to load manifest");
+   }
+   std::string title = fmt::format("Recompiling {}", manifest->projectName);
++  // Names the TTT2 project patches built into this binary (every patch adds its file name here), so a
++  // run with an older SDK package is recognised in its log (third_party/rexglue-patches, TTT2 repo).
++  REXLOG_INFO("TTT2 SDK patches: 0001-fall-through");
+   rex::codegen::ProjectRecompiler recompiler(std::move(*manifest));
+   ui::ProgressView progress(title);
+   rex::codegen::ProjectRecompilerOptions opts{

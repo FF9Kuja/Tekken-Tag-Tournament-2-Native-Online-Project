@@ -299,3 +299,146 @@ TEST_CASE("pm4: frame stats add up and describe themselves") {
         "3 draws, 1 resolve (1 clearing), 1 indirect buffer, 2 packets the GPU emulation skips (opcode 0x25), 13 packets");
   CHECK(Describe(FrameStats{}) == "0 packets");
 }
+
+namespace {
+
+// A ring of `dwords` words at GPU address `base` in FakeMemory, written the way D3D does: whole packets at the
+// write position, wrapping at the end, the write pointer moved after each batch.
+struct FakeRing {
+  FakeMemory& memory;
+  std::uint32_t base;
+  std::uint32_t dwords;
+  std::uint32_t write = 0;
+
+  FakeRing(FakeMemory& m, std::uint32_t b, std::uint32_t n) : memory(m), base(b), dwords(n) {
+    // Readable as one buffer from any offset: register every word address with the rest of the ring.
+    Sync();
+  }
+  void Sync() {
+    // FakeMemory serves exact (address, length) reads from buffers keyed by start address: give every word
+    // offset its own view of the ring from there to the end.
+    std::vector<std::uint32_t> all(ring.begin(), ring.end());
+    for (std::uint32_t i = 0; i < dwords; ++i) {
+      memory.buffers[base + i * 4] = std::vector<std::uint32_t>(all.begin() + i, all.end());
+    }
+  }
+  void Put(const std::vector<std::uint32_t>& packets) {
+    for (std::uint32_t w : packets) {
+      ring[write] = w;
+      write = (write + 1) % dwords;
+    }
+    Sync();
+  }
+  std::vector<std::uint32_t> ring = std::vector<std::uint32_t>(64, 0);
+};
+
+std::vector<std::uint32_t> IndirectBuffer(std::uint32_t address, std::uint32_t dwords) {
+  return {Type3(kOpIndirectBuffer, 2), address, dwords};
+}
+
+std::vector<std::uint32_t> SwapPacket() {
+  // VdSwap's 64 words: XE_SWAP with 63 words of body ('SWAP', front buffer, width, height, zeros).
+  std::vector<std::uint32_t> s(64, 0);
+  s[0] = Type3(kOpXeSwap, 63);
+  s[1] = 0x53574150;
+  return s;
+}
+
+}  // namespace
+
+TEST_CASE("pm4: the ring follower reads up to the write pointer, follows indirect buffers and ends frames at swaps") {
+  FakeMemory memory;
+  // D3D's command buffer: frame 1 renders two draws, frame 2 one draw and a resolve; each ends with VdSwap's packet.
+  std::vector<std::uint32_t> frame1{Type0(kRegModeControl, 1), kEdramColorDepth};
+  PushDraw2(frame1);
+  PushDraw2(frame1);
+  const auto swap = SwapPacket();
+  frame1.insert(frame1.end(), swap.begin(), swap.end());
+  std::vector<std::uint32_t> frame2;
+  PushDraw2(frame2);
+  frame2.push_back(Type0(kRegModeControl, 1));
+  frame2.push_back(kEdramCopy);
+  PushDrawIndx(frame2);
+  frame2.insert(frame2.end(), swap.begin(), swap.end());
+  memory.buffers[0x100000] = frame1;
+  memory.buffers[0x200000] = frame2;
+
+  FakeRing ring(memory, 0x0BFE8000, 64);
+  RingFollower follower(memory.reader(), ring.base, ring.dwords);
+  std::vector<FrameStats> frames;
+  const auto collect = [&](const FrameStats& f) { frames.push_back(f); };
+
+  CHECK_FALSE(follower.Advance(0, collect));  // nothing written yet
+  ring.Put(IndirectBuffer(0x100000, static_cast<std::uint32_t>(frame1.size())));
+  CHECK(follower.Advance(ring.write, collect));
+  REQUIRE(frames.size() == 1);
+  CHECK(frames[0].draws == 2);
+  CHECK(frames[0].swaps == 1);
+  CHECK(frames[0].indirect_buffers == 1);
+  CHECK(follower.position() == 3);
+
+  ring.Put(IndirectBuffer(0x200000, static_cast<std::uint32_t>(frame2.size())));
+  CHECK(follower.Advance(ring.write, collect));
+  REQUIRE(frames.size() == 2);
+  CHECK(frames[1].draws == 1);
+  CHECK(frames[1].resolves == 1);
+  CHECK(follower.frames() == 2);
+  CHECK(follower.words_read() == 6);
+}
+
+TEST_CASE("pm4: a frame kicked in several stretches continues across samples, and packets wrap at the ring's end") {
+  FakeMemory memory;
+  std::vector<std::uint32_t> part1{Type0(kRegModeControl, 1), kEdramColorDepth};
+  PushDraw2(part1);
+  std::vector<std::uint32_t> part2;
+  PushDraw2(part2);
+  PushDraw2(part2);
+  const auto swap = SwapPacket();
+  part2.insert(part2.end(), swap.begin(), swap.end());
+  memory.buffers[0x300000] = part1;
+  memory.buffers[0x300100] = part2;
+
+  FakeRing ring(memory, 0x0BFE8000, 64);
+  ring.write = 62;  // the next packet starts two words before the end of the ring and wraps
+  RingFollower follower(memory.reader(), ring.base, ring.dwords, 62);
+  std::vector<FrameStats> frames;
+  const auto collect = [&](const FrameStats& f) { frames.push_back(f); };
+
+  ring.Put(IndirectBuffer(0x300000, static_cast<std::uint32_t>(part1.size())));  // words 62, 63, 0
+  CHECK(follower.Advance(ring.write, collect));
+  CHECK(frames.empty());                     // no swap yet: the frame is still open
+  CHECK(follower.pending().draws == 1);
+  CHECK(follower.position() == 1);
+
+  ring.Put(IndirectBuffer(0x300100, static_cast<std::uint32_t>(part2.size())));
+  CHECK(follower.Advance(ring.write + ring.dwords, collect));  // taken modulo the ring size
+  REQUIRE(frames.size() == 1);
+  CHECK(frames[0].draws == 3);                // both stretches in one frame
+  CHECK(frames[0].indirect_buffers == 2);
+  CHECK(follower.pending().draws == 0);       // a new frame starts after the swap
+}
+
+TEST_CASE("pm4: the ring follower counts what it cannot read and keeps the register state between samples") {
+  FakeMemory memory;
+  RingFollower unreadable(memory.reader(), 0x0BFE8000, 64);
+  CHECK(unreadable.Advance(10, nullptr));     // no memory behind the ring: counted, not parsed
+  CHECK(unreadable.pending().unreadable == 1);
+  CHECK(unreadable.pending().packets == 0);
+
+  FakeRing ring(memory, 0x0BFE8000, 64);
+  RingFollower follower(memory.reader(), ring.base, ring.dwords);
+  std::vector<FrameStats> frames;
+  const auto collect = [&](const FrameStats& f) { frames.push_back(f); };
+  ring.Put({Type0(kRegModeControl, 1), kEdramCopy});  // sample 1: copy mode set
+  CHECK(follower.Advance(ring.write, collect));
+  std::vector<std::uint32_t> draw;
+  PushDraw2(draw);
+  ring.Put(draw);                                      // sample 2: a draw, in the mode set before
+  CHECK(follower.Advance(ring.write, collect));
+  ring.Put({Type3(kOpXeSwap, 1), 0x53574150});         // sample 3: the swap ends the frame
+  CHECK(follower.Advance(ring.write, collect));
+  REQUIRE(frames.size() == 1);
+  CHECK(frames[0].resolves == 1);
+  CHECK(frames[0].draws == 0);
+  CHECK_FALSE(follower.Advance(follower.position(), collect));  // same position: nothing new
+}

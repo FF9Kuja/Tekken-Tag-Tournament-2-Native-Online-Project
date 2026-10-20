@@ -409,6 +409,184 @@ class Triage(unittest.TestCase):
         self.assertTrue(any(r.startswith("The frames hold 1 GPU packets the GPU emulation does not execute") for r in recs))
         self.assertTrue(any(r.startswith("Pixel check (frame 1): front buffer 16x16") for r in recs))
 
+    def frames_activity(self, frames_part):
+        return ("ttt2: activity: files 6 opened, 1 failed (1 device paths); read 0.0 MB in 2 reads (0 failed); sector "
+                "queries 0; missing names 1; threads created 22; gpu: engines initialized, ring buffer 0x0BFE8000, "
+                "interrupt callback 0x82712560, vblanks 21448, ring write pointer 0xEBB; frames presented " + frames_part +
+                "; audio clients 1, audio frames 1; input polls 10676; traced kernel calls 329000000; kernel clock 180.1 s "
+                "(tick count 180.1 s)")
+
+    def test_frames_outside_the_ring_are_not_zero_draws(self):
+        # The owner's boot of PR #17 (checkout 8cadd71): every VdSwap buffer lay outside the 32 KB ring, so that host
+        # read no frame at all. Its "0 with draws" is no evidence of empty frames.
+        line = self.frames_activity("10674 (0 with draws, 0 with resolves; draws 0, resolves 0, clears 0, 10674 swaps "
+                                    "outside the ring; front buffer 1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_presented"], a["frames_with_draws"], a["swaps_outside_ring"]), (10674, 0, 10674))
+        self.assertEqual(MOD.frame_coverage(a), (0, 10674, "the ring between swaps"))
+        recs = t["recommendations"]
+        self.assertFalse(any("not one asked the GPU to draw" in r for r in recs))
+        none = [r for r in recs if r.startswith("None of the 10674 presented frames could be followed")]
+        self.assertEqual(len(none), 1)
+        self.assertIn("unknown, not zero", none[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("| Frames presented (VdSwap) | 10674 (0 followed in the GPU command stream by the ring between "
+                      "swaps, 10674 not followed): 0 with draws", md)
+
+    def test_frames_followed_by_the_write_pointer(self):
+        line = self.frames_activity("600 (599 followed in the GPU command stream by the ring write pointer; 0 with draws, "
+                                    "0 with resolves; draws 0, resolves 0, clears 0; last frame: 12 packets; front buffer "
+                                    "1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_followed"], a["follow_method"], a["frames_with_draws"]),
+                         (599, "the ring write pointer", 0))
+        self.assertNotIn("frames_not_followed", a)
+        self.assertEqual(a["last_frame"], "12 packets")
+        recs = t["recommendations"]
+        empty = [r for r in recs if r.startswith("600 frames were presented and not one asked the GPU to draw")]
+        self.assertEqual(len(empty), 1)
+        self.assertIn("read by the ring write pointer", empty[0])
+
+        line = self.frames_activity("600 (590 followed in the GPU command stream by the ring write pointer, 10 not "
+                                    "followed; 0 with draws, 0 with resolves; draws 0, resolves 0, clears 0; last frame: "
+                                    "12 packets; front buffer 1280x720)")
+        t = MOD.triage(head(backend="xenos") + [W(961, line)], {})
+        self.assertEqual(MOD.frame_coverage(t["activity"]), (590, 10, "the ring write pointer"))
+        self.assertTrue(any(r.startswith("590 of 600 frames were followed in the GPU command stream (by the ring write "
+                                         "pointer) and not one of them asked the GPU to draw") for r in t["recommendations"]))
+
+    def test_frames_with_draws_some_not_followed(self):
+        line = self.frames_activity("4 (3 followed in the GPU command stream by the ring between swaps, 1 not followed; 2 "
+                                    "with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, "
+                                    "1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)")
+        t = MOD.triage(head() + [W(961, line)], {})
+        a = t["activity"]
+        self.assertEqual((a["frames_with_draws"], a["frames_with_resolves"], a["draws_total"], a["skipped_packets"]),
+                         (2, 1, 5, 1))
+        self.assertEqual((a["frames_followed"], a["frames_not_followed"]), (3, 1))
+        recs = t["recommendations"]
+        self.assertTrue(any(r.startswith("The game draws: 5 draws and 1 resolves (1 clearing) in 2 of 3 frames followed "
+                                         "(of 4 presented)") for r in recs))
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("| Frames presented (VdSwap) | 4 (3 followed in the GPU command stream by the ring between swaps, 1 "
+                      "not followed): 2 with draws", md)
+
+    def test_lock_holds_calls_by_site_and_the_games_own_calls(self):
+        # The shape of the owner's boots with the new host: the main thread holds the heap lock 390 deep, two threads
+        # wait for it; thread 19's loop by call site; thread names, a C++ throw, a refused allocation, an APC.
+        lines = head(backend="xenos") + [
+            W(955, "ttt2: thread name 'nuscMain' for thread id 6: thread id 6 is named so now; set from 0x82BE70DC (sub_82BE70A0+0x3C) on nuscMain (id 6)"),
+            W(955, "ttt2: thread name 'nuscFileAsyncRequest' for thread id 99: no thread with that id; set from 0x82A4FE9C (sub_82A4FE80+0x1C) on thread id 26"),
+            W(956, "ttt2: C++ exception 1 thrown (type .?AVbad_alloc@std@@) from 0x82BD3F2C (sub_82BD3F08+0x24) on nuscMain (id 6): the runtime cannot unwind the guest stack, so the code after the throw runs next, which on the console never does", level="warning"),
+            W(956, "ttt2: memory: NtAllocateVirtualMemory(base 0x00000000, size 0x2000000, type 0x20003000, protect 0x4) -> 0xC0000017 (STATUS_NO_MEMORY) from 0x82BC3D50 (sub_82BC3CE8+0x68) on thread id 26", level="warning"),
+            W(957, "ttt2: APC 1 queued to handle 0xF8000108: routine 0x82AAE600 (sub_82AAE600) (context 0x40001000) -> 0x00000000 (STATUS_SUCCESS) from 0x82AAD800 (sub_82AAD7F0+0x10) on nuscMain (id 6)"),
+            W(957, "ttt2: NtSignalAndWaitForSingleObjectEx from 0x82BCA6DC (sub_82BCA698+0x44): wait mode 1, alertable 0 (the runtime reads the wait mode as the alertable flag; the host passes it the alertable flag)"),
+            W(961, self.frames_activity("600 (599 followed in the GPU command stream by the ring write pointer; 0 with draws, 0 "
+                                        "with resolves; draws 0, resolves 0, clears 0; last frame: 12 packets; front buffer "
+                                        "1280x720)").replace("(tick count 180.1 s)", "(tick count 180.1 s); exceptions raised 23 "
+                                        "(1 C++), APCs queued 1, memory call failures 1, debug breaks 0")),
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, "ttt2: thread state at window close:"),
+            W(965, "ttt2:   nuscMain                         id 6      running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: none (running guest code, or blocked outside the traced kernel calls)"),
+            W(965, "ttt2:     holds: critical section 0x40000618 at depth 390 since t+0.4 s (the section's own count: 390), unchanged for 179.6 s; 391 enters and 1 leaves since then; open enters from 0x82BD6888 (sub_82BD67E0+0xA8) x389, 0x82552570 (sub_82552220+0x350) x1"),
+            W(965, "ttt2:     holds: critical section 0x40000618 entered to depth 256 at t+0.4 s: 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BD7FAC (sub_82BD7F80+0x2C) <- 0x82552570 (sub_82552220+0x350)"),
+            W(965, "ttt2:   (unnamed)                        id 12     running priority 16 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40000618 (owned by nuscMain (id 6), recursion 390), no timeout, for at least 173.1 s, called from 0x82BD6888 (sub_82BD67E0+0xA8)"),
+            W(965, "ttt2:   (unnamed)                        id 19     running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     calls by site: NtWaitForSingleObjectEx on 0xF8000104 from 0x82BDA250 (sub_82BDA218+0x38): 164000000; NtSignalAndWaitForSingleObjectEx signal 0xF8000104 wait 0xF8000108 from 0x82BCA6DC (sub_82BCA698+0x44): 164000000"),
+            W(966, "ttt2: main guest thread ended by the window close (id 6)"),
+        ]
+        t = MOD.triage(lines, {}, closed_by="the boot step's 180 s timeout")
+        self.assertEqual(t["outcome"], "closed by the boot step's 180 s timeout while the game was running")
+        a = t["activity"]
+        self.assertEqual((a["exceptions_raised"], a["cpp_exceptions"], a["apcs_queued"], a["memory_failures"],
+                          a["debug_breaks"]), (23, 1, 1, 1, 0))
+        main = t["close_dump"]["threads"][0]
+        self.assertEqual(len(main["holds"]), 2)
+        self.assertIn("calls by site", MOD.render_markdown(t, "x.log"))
+        self.assertTrue(t["close_dump"]["threads"][2]["sites"].startswith("NtWaitForSingleObjectEx on 0xF8000104"))
+        recs = t["recommendations"]
+        held = [r for r in recs if r.startswith("Critical section 0x40000618 is held by nuscMain (id 6) at depth 390")]
+        self.assertEqual(len(held), 1)
+        self.assertIn("while 1 thread(s) wait for it: (unnamed) (id 12)", held[0])
+        self.assertIn("0x82BD6888 (sub_82BD67E0+0xA8) x389", held[0])
+        self.assertIn("the enter that took it to depth 256 (t+0.4 s) came through 0x82BD6888", held[0])
+        self.assertFalse(any("Nesting that deep is unusual" in r for r in recs))  # the older guess is replaced
+        cpp = [r for r in recs if r.startswith("The game threw 1 C++ exception(s), the first (type .?AVbad_alloc@std@@)")]
+        self.assertEqual(len(cpp), 1)
+        self.assertIn("from 0x82BD3F2C (sub_82BD3F08+0x24) on nuscMain (id 6).", cpp[0])
+        self.assertTrue(any(r.startswith("1 memory call(s) failed, first NtAllocateVirtualMemory(") and
+                            r.endswith("from 0x82BC3D50 (sub_82BC3CE8+0x68) on thread id 26: the game then runs a path the "
+                                       "console does not.") for r in recs))
+        apc = [r for r in recs if r.startswith("The game queued 1 user APC(s)")]
+        self.assertEqual(len(apc), 1)
+        self.assertIn("(wait mode, alertable) (1, 0)", apc[0])
+        self.assertTrue(any(r.startswith("1 of the 2 thread names the game set reached no thread") for r in recs))
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("## The game's own calls (thread names, exceptions, debug breaks, APCs, memory)", md)
+        self.assertIn("* thread name 'nuscMain' for thread id 6: thread id 6 is named so now", md)
+        self.assertIn("  * holds: critical section 0x40000618 at depth 390", md)
+
+    def test_file_information_reads_writes_and_directory_queries(self):
+        # The loader's first calls with the new host: the information classes it asks for (one the runtime refuses),
+        # each of its two reads, a write and a directory query; the window closed by the boot step while it ran.
+        activity = ("ttt2: activity: files 2 opened, 0 failed (0 device paths); read 0.0 MB in 2 reads (0 failed); sector "
+                    "queries 0; missing names 0; threads created 27; gpu: engines initialized, ring buffer 0x0BFE8000, "
+                    "interrupt callback 0x82A3B4C0, vblanks 600; frames presented 300; audio clients 1, audio frames 0; "
+                    "input polls 300; traced kernel calls 104532")
+        lines = head(backend="xenos") + [
+            W(955, "ttt2: file opened: 'game:\\data\\pack.bin' (NtCreateFile, thread id 26)"),
+            W(955, "ttt2: file information: query class 34 (network open) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD100 (sub_82BCD0C0+0x40) on thread id 26"),
+            W(955, "ttt2: file information: query class 5 (standard) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0xC0000003 (STATUS_INVALID_INFO_CLASS) from 0x82BCD180 (sub_82BCD0C0+0xC0) on thread id 26"),
+            W(955, "ttt2: file information: set class 14 (position) for '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD200 (sub_82BCD0C0+0x140) on thread id 26"),
+            W(956, "ttt2: file read 1: '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' at 0x0 length 2048 -> 0x00000000 (STATUS_SUCCESS), 2048 bytes from 0x82BCD300 (sub_82BCD0C0+0x240) on thread id 26"),
+            W(956, "ttt2: file read 2: '\\Device\\Harddisk0\\Partition1\\data\\pack.bin' at the current position length 4096 -> 0x00000103 (STATUS_PENDING), 4096 bytes; event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000) from 0x82BCD3A0 (sub_82BCD0C0+0x2E0) on nuscFile (id 27)"),
+            W(956, "ttt2: file write 1: '\\Device\\Harddisk0\\Partition1\\cache\\x.bin' at 0x0 length 16 -> 0x00000000 (STATUS_SUCCESS), 16 bytes from 0x82BCD400 (sub_82BCD0C0+0x340) on thread id 26"),
+            W(956, "ttt2: directory query 1: '\\Device\\Harddisk0\\Partition1\\data' for '*.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x82BCD500 (sub_82BCD0C0+0x440) on thread id 26"),
+            W(960, activity),
+            W(965, "Window closing, shutting down...", category="app"),
+            W(965, "ttt2: thread state at window close:"),
+            W(965, "ttt2:   nuscFile                         id 27     running priority 0 suspend 0 wait_result 0x0"),
+            W(965, "ttt2:     wait: RtlEnterCriticalSection on critical section 0x40000618 (owned by nuscMain (id 6), recursion 390), no timeout, for at least 170.0 s, called from 0x82BD6888 (sub_82BD67E0+0xA8)"),
+            W(965, "ttt2:     guest stack: 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BCD3C0 (sub_82BCD0C0+0x300)"),
+            W(966, "ttt2: main guest thread ended by the window close (id 6)"),
+        ]
+        t = MOD.triage(lines, {}, closed_by="the boot step's 180 s timeout")
+        fs = t["files"]
+        self.assertEqual([(i["what"], i["class"], i["status"]) for i in fs["info"]],
+                         [("query", 34, "0x00000000"), ("query", 5, "0xC0000003"), ("set", 14, "0x00000000")])
+        self.assertEqual([(r["n"], r["offset"], r["bytes"], r["thread"]) for r in fs["reads"]],
+                         [(1, "0x0", 2048, "thread id 26"), (2, "the current position", 4096, "nuscFile (id 27)")])
+        self.assertEqual(fs["reads"][1]["completion"],
+                         "event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000)")
+        self.assertEqual(fs["reads"][1]["caller"], "0x82BCD3A0 (sub_82BCD0C0+0x2E0)")
+        self.assertEqual((fs["writes"][0]["failed"], fs["writes"][0]["bytes"]), (False, 16))
+        self.assertEqual((fs["dir_queries"][0]["pattern"], fs["dir_queries"][0]["status"]), ("*.bin", "0x00000000"))
+        recs = t["recommendations"]
+        refused = [r for r in recs if r.startswith("The runtime refused 1 kind(s) of file information")]
+        self.assertEqual(len(refused), 1)
+        self.assertIn("query class 5 (standard) for \\Device\\Harddisk0\\Partition1\\data\\pack.bin -> 0xC0000003 "
+                      "STATUS_INVALID_INFO_CLASS from 0x82BCD180 (sub_82BCD0C0+0xC0) on thread id 26", refused[0])
+        self.assertIn("TTT2Recomp, which runs the game to its menus, answers class(es) 5", refused[0])
+        last = [r for r in recs if r.startswith("The game read 2 time(s) in all and every read is logged")]
+        self.assertEqual(len(last), 1)
+        self.assertIn("came from 0x82BCD3A0 (sub_82BCD0C0+0x2E0) on nuscFile (id 27)", last[0])
+        self.assertIn("; that thread, in the last dump: RtlEnterCriticalSection on critical section 0x40000618 (owned by "
+                      "nuscMain (id 6), recursion 390)", last[0])
+        self.assertIn("(guest stack 0x82BD6888 (sub_82BD67E0+0xA8) <- 0x82BCD3C0 (sub_82BCD0C0+0x300)).", last[0])
+        md = MOD.render_markdown(t, "x.log")
+        self.assertIn("* information query class 5 (standard) for", md)
+        self.assertIn("4096 bytes; event 0xF8000120; completion routine 0x82BCE000 (context 0x40002000) from", md)
+        self.assertIn("* directory query `\\Device\\Harddisk0\\Partition1\\data` for `*.bin` -> 0x00000000", md)
+        # A run that ended on its own does not get the "loader stopped" advice.
+        ended = [line for line in lines if "Window closing" not in line and "ended by the window close" not in line]
+        ended += [W(967, "ttt2: main guest thread exited (id 4)"), W(967, "ttt2: guest program ended; exiting with code 0")]
+        recs = MOD.triage(ended, {})["recommendations"]
+        self.assertFalse(any(r.startswith("The game read 2 time(s)") for r in recs))
+
     def test_parse_activity_without_gpu(self):
         a = MOD.parse_activity(
             "files 1 opened, 1 failed (1 device paths); read 0.0 MB in 1 reads (0 failed); sector queries 1; threads "

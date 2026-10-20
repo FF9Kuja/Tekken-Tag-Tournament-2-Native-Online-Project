@@ -10,9 +10,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -79,6 +81,17 @@ std::string FormatName(std::uint32_t format) {
   }
 }
 
+// How the frames' commands were found.
+enum class Method { kNone, kWritePointer, kBetweenSwaps };
+
+const char* MethodName(Method method) {
+  switch (method) {
+    case Method::kWritePointer: return "the ring write pointer";
+    case Method::kBetweenSwaps: return "the ring between swaps";
+    default: return "nothing";
+  }
+}
+
 struct State {
   std::mutex mutex;
   // The primary ring buffer (physical) and where the next frame's commands start in it.
@@ -89,15 +102,20 @@ struct State {
   std::unique_ptr<pm4::Parser> parser;
   std::vector<std::uint32_t> words;
   std::vector<std::uint32_t> part;
+  // Following the GPU's command stream by its write pointer (with the GPU emulation loaded).
+  std::function<std::optional<std::uint32_t>()> write_pointer;
+  std::unique_ptr<pm4::RingFollower> follower;
+  Method method = Method::kNone;
   // Totals.
-  std::uint64_t frames = 0;
+  std::uint64_t frames = 0;           // presented (VdSwap calls)
+  std::uint64_t followed = 0;         // frames whose commands were read (a swap packet ended them in the stream)
+  std::uint64_t not_followed = 0;     // presented frames whose commands could not be found
   std::uint64_t frames_with_draws = 0;
   std::uint64_t frames_with_resolves = 0;
   std::uint64_t draws = 0;
   std::uint64_t resolves = 0;
   std::uint64_t clears = 0;
   std::uint64_t unhandled = 0;
-  std::uint64_t outside_ring = 0;
   std::uint32_t max_draws = 0;
   pm4::FrameStats last;
   bool have_last = false;
@@ -111,6 +129,7 @@ struct State {
   bool logged_unhandled = false;
   bool logged_outside = false;
   bool logged_no_ring = false;
+  bool logged_method = false;
   // The pixel check.
   bool pixel_check = false;
   bool readback = false;
@@ -163,6 +182,36 @@ void SamplePixels(State& s, const Swap& swap, std::uint64_t frame) {
       s.readback ? "" : " (resolves are not read back: the guest copy is not what the window shows)");
 }
 
+/// One frame's commands, read: totals, and the first frames, the first one with draws and the first one with
+/// packets the GPU emulation skips logged.
+void CountFrame(State& s, const pm4::FrameStats& stats, std::uint32_t lr) {
+  const std::uint64_t frame = ++s.followed;
+  if (stats.draws) ++s.frames_with_draws;
+  if (stats.resolves) ++s.frames_with_resolves;
+  s.draws += stats.draws;
+  s.resolves += stats.resolves;
+  s.clears += stats.clears;
+  s.unhandled += stats.unhandled;
+  s.max_draws = std::max(s.max_draws, stats.draws);
+  s.last = stats;
+  s.have_last = true;
+  if (frame <= kLoggedFrames) {
+    REXLOG_INFO("ttt2: gpu: frame {}: {} ({} words of commands)", frame, pm4::Describe(stats), stats.dwords);
+  }
+  if (!s.logged_first_draws && (stats.draws || stats.resolves)) {
+    s.logged_first_draws = true;
+    REXLOG_INFO("ttt2: gpu: first frame with draws: frame {}: {} ({}, from {})", frame, pm4::Describe(stats),
+                monitor::CurrentThreadLabel(), monitor::DescribeGuestAddress(lr));
+  }
+  if (!s.logged_unhandled && stats.unhandled) {
+    s.logged_unhandled = true;
+    REXLOG_WARN(
+        "ttt2: gpu: frame {} holds packets the GPU emulation does not execute (it logs them as \"Unimplemented GPU "
+        "OPCODE\" and skips them): {}",
+        frame, pm4::Describe(stats));
+  }
+}
+
 }  // namespace
 
 void NoteRingBuffer(std::uint32_t physical, std::uint32_t size_log2) {
@@ -172,7 +221,14 @@ void NoteRingBuffer(std::uint32_t physical, std::uint32_t size_log2) {
   s.ring_base = physical & 0x1FFFFFFF;
   s.ring_bytes = 1u << (size_log2 + 3);
   s.next_offset = 0;  // the command processor starts at the beginning
+  s.follower.reset();
   s.ring_known = true;
+}
+
+void SetWritePointerSource(std::function<std::optional<std::uint32_t>()> source) {
+  auto& s = state();
+  std::lock_guard<std::mutex> lock(s.mutex);
+  s.write_pointer = std::move(source);
 }
 
 void NoteSwap(const Swap& swap) {
@@ -194,21 +250,46 @@ void NoteSwap(const Swap& swap) {
 
   auto* memory = GuestMemory();
   if (!s.ring_known || !memory) {
+    ++s.not_followed;
     if (!s.logged_no_ring) {
       s.logged_no_ring = true;
       REXLOG_INFO("ttt2: gpu: frame {} presented before any ring buffer was set up: its commands are not counted", frame);
     }
     return;
   }
+  t_committed.clear();  // memory can be freed between frames
+
+  // With the GPU emulation: the stream the GPU reads, up to the write pointer the game last gave it. The swap
+  // packet this VdSwap just wrote is kicked after it returns, so each call completes the frame before (the counts
+  // run one frame behind the presented ones).
+  const std::optional<std::uint32_t> write_pointer = s.write_pointer ? s.write_pointer() : std::nullopt;
+  if (write_pointer) {
+    if (!s.follower) {
+      s.follower = std::make_unique<pm4::RingFollower>(&ReadPhysical, s.ring_base, s.ring_bytes / 4, 0);
+    }
+    if (!s.logged_method) {
+      s.logged_method = true;
+      REXLOG_INFO(
+          "ttt2: gpu: frames are read the way the GPU reads them: the ring buffer at 0x{:08X} ({} bytes) up to its write "
+          "pointer (CP_RB_WPTR, now 0x{:X}) and the indirect buffers it names; a frame ends at its swap packet",
+          s.ring_base, s.ring_bytes, *write_pointer);
+    }
+    s.method = Method::kWritePointer;
+    s.follower->Advance(*write_pointer, [&](const pm4::FrameStats& stats) { CountFrame(s, stats, swap.lr); });
+    return;
+  }
+
+  // Without it (the headless harness): only a ring that holds VdSwap's buffer, between one swap and the next.
   const std::uint32_t physical = memory->GetPhysicalAddress(swap.buffer);
   if (physical == std::numeric_limits<std::uint32_t>::max() || (physical & 0x1FFFFFFF) < s.ring_base ||
       (physical & 0x1FFFFFFF) - s.ring_base >= s.ring_bytes) {
-    ++s.outside_ring;
+    ++s.not_followed;
     if (!s.logged_outside) {
       s.logged_outside = true;
       REXLOG_WARN(
-          "ttt2: gpu: frame {}: VdSwap's buffer 0x{:08X} (physical 0x{:08X}) is not in the ring buffer at 0x{:08X} "
-          "({} bytes): the frame's commands are not counted",
+          "ttt2: gpu: frame {}: VdSwap's buffer 0x{:08X} (physical 0x{:08X}) is not in the ring buffer at 0x{:08X} ({} "
+          "bytes) and the GPU's write pointer is not readable (no GPU emulation): the frame's commands cannot be "
+          "followed, its draws are unknown",
           frame, swap.buffer, physical, s.ring_base, s.ring_bytes);
     }
     return;
@@ -216,7 +297,6 @@ void NoteSwap(const Swap& swap) {
   const std::uint32_t offset = (physical & 0x1FFFFFFF) - s.ring_base;
 
   if (!s.parser) s.parser = std::make_unique<pm4::Parser>(&ReadPhysical);
-  t_committed.clear();  // memory can be freed between frames
   pm4::FrameStats stats;
   s.words.clear();
   for (const auto& span : pm4::RingSpans(s.ring_bytes, s.next_offset, offset)) {
@@ -228,32 +308,8 @@ void NoteSwap(const Swap& swap) {
   }
   s.parser->Parse(s.words.data(), s.words.size(), stats);
   s.next_offset = (offset + kSwapBlockBytes) % s.ring_bytes;
-
-  if (stats.draws) ++s.frames_with_draws;
-  if (stats.resolves) ++s.frames_with_resolves;
-  s.draws += stats.draws;
-  s.resolves += stats.resolves;
-  s.clears += stats.clears;
-  s.unhandled += stats.unhandled;
-  s.max_draws = std::max(s.max_draws, stats.draws);
-  s.last = stats;
-  s.have_last = true;
-
-  if (frame <= kLoggedFrames) {
-    REXLOG_INFO("ttt2: gpu: frame {}: {} ({} words of commands)", frame, pm4::Describe(stats), stats.dwords);
-  }
-  if (!s.logged_first_draws && (stats.draws || stats.resolves)) {
-    s.logged_first_draws = true;
-    REXLOG_INFO("ttt2: gpu: first frame with draws: frame {}: {} ({}, from {})", frame, pm4::Describe(stats),
-                monitor::CurrentThreadLabel(), monitor::DescribeGuestAddress(swap.lr));
-  }
-  if (!s.logged_unhandled && stats.unhandled) {
-    s.logged_unhandled = true;
-    REXLOG_WARN(
-        "ttt2: gpu: frame {} holds packets the GPU emulation does not execute (it logs them as \"Unimplemented GPU "
-        "OPCODE\" and skips them): {}",
-        frame, pm4::Describe(stats));
-  }
+  s.method = Method::kBetweenSwaps;
+  CountFrame(s, stats, swap.lr);
 }
 
 void ConfigurePixelCheck() {
@@ -282,11 +338,12 @@ std::string Describe() {
   auto& s = state();
   std::lock_guard<std::mutex> lock(s.mutex);
   if (!s.frames) return {};
-  std::string out = fmt::format("{} with draws, {} with resolves; draws {}, resolves {}, clears {}",
-                                s.frames_with_draws, s.frames_with_resolves, s.draws, s.resolves, s.clears);
+  std::string out = fmt::format("{} followed in the GPU command stream by {}", s.followed, MethodName(s.method));
+  if (s.not_followed) out += fmt::format(", {} not followed", s.not_followed);
+  out += fmt::format("; {} with draws, {} with resolves; draws {}, resolves {}, clears {}", s.frames_with_draws,
+                     s.frames_with_resolves, s.draws, s.resolves, s.clears);
   if (s.max_draws) out += fmt::format(", at most {} draws in a frame", s.max_draws);
   if (s.unhandled) out += fmt::format(", {} packet{} the GPU emulation skips", s.unhandled, s.unhandled == 1 ? "" : "s");
-  if (s.outside_ring) out += fmt::format(", {} swap{} outside the ring", s.outside_ring, s.outside_ring == 1 ? "" : "s");
   if (s.have_last) out += "; last frame: " + pm4::Describe(s.last);
   if (s.front_width) out += fmt::format("; front buffer {}x{}", s.front_width, s.front_height);
   return out;

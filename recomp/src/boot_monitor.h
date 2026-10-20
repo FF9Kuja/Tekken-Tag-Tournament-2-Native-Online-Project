@@ -44,6 +44,20 @@ enum class WaitKind : std::uint8_t {
   kDelay,            ///< KeDelayExecutionThread: a sleep, no object
 };
 
+/// Calls of one export from one call site on one object (or pair: signal-and-wait), as a thread makes them: the
+/// shape of a loop. Written only by its own thread; read by the watchdog.
+struct CallSignature {
+  std::atomic<std::uint32_t> export_id{0xFFFFFFFFu};
+  std::atomic<std::uint32_t> lr{0};
+  std::atomic<std::uint32_t> object{0};   ///< the handle or guest object waited on (0: none)
+  std::atomic<std::uint32_t> object2{0};  ///< the object signaled by a signal-and-wait (0: none)
+  std::atomic<std::uint64_t> count{0};
+  std::atomic<std::uint64_t> failures{0};    ///< calls that returned anything but STATUS_SUCCESS (0)
+  std::atomic<std::uint32_t> last_status{0};
+};
+/// Signatures kept per thread (the most frequent survive).
+inline constexpr std::uint32_t kMaxSignatures = 8;
+
 /// One guest thread's traced kernel activity. Written only by its own thread; read by the watchdog.
 struct ThreadActivity {
   explicit ThreadActivity(std::uint32_t id) : thread_id(id) {}
@@ -64,6 +78,8 @@ struct ThreadActivity {
   std::array<std::atomic<std::uint32_t>, kMaxWaitObjects> wait_objects{};
   std::atomic<std::int64_t> wait_timeout{kNoTimeout};  ///< 100 ns units as passed (negative: relative)
 
+  std::array<CallSignature, kMaxSignatures> signatures{};
+
   static constexpr std::uint32_t kNoExport = 0xFFFFFFFFu;
 };
 
@@ -83,6 +99,16 @@ inline ThreadActivity& NoteCall(std::uint32_t id, std::uint32_t lr) {
   t.last_export.store(id, std::memory_order_relaxed);
   t.last_lr.store(lr, std::memory_order_relaxed);
   return t;
+}
+
+/// Counts a call of export `id` from `lr` on `object` (and `object2`) in the thread's signatures; returns the slot,
+/// for NoteStatus after the call.
+CallSignature& NoteSignature(ThreadActivity& t, std::uint32_t id, std::uint32_t lr, std::uint32_t object,
+                             std::uint32_t object2 = 0);
+/// The status the call returned.
+inline void NoteStatus(CallSignature& sig, std::uint32_t status) {
+  sig.last_status.store(status, std::memory_order_relaxed);
+  if (status) sig.failures.store(sig.failures.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 }
 
 /// Marks a blocking call for the stall dump while it runs; restores an outer wait on exit (a wait can
@@ -125,6 +151,11 @@ struct Counters {
   std::atomic<std::uint32_t> ring_buffer_size_log2{0};
   std::atomic<std::uint32_t> interrupt_callback{0};   ///< VdSetGraphicsInterruptCallback (0: none)
   std::atomic<std::uint32_t> audio_clients{0};        ///< XAudioRegisterRenderDriverClient successes
+  std::atomic<std::uint64_t> exceptions_raised{0};    ///< RtlRaiseException calls (thread names included)
+  std::atomic<std::uint64_t> cpp_exceptions{0};       ///< ... of them C++ throws (0xE06D7363)
+  std::atomic<std::uint64_t> apcs_queued{0};          ///< NtQueueApcThread calls
+  std::atomic<std::uint64_t> memory_failures{0};      ///< allocations the runtime refused
+  std::atomic<std::uint64_t> debug_breaks{0};         ///< DbgBreakPoint / KeBugCheck(Ex) calls
 };
 
 Counters& counters();
@@ -170,6 +201,13 @@ void SetImage(const rex::PPCImageInfo& image);
 std::string DescribeGuestAddress(std::uint32_t address);
 /// A code address that is not a return address (a function or thread start), named the same way.
 std::string DescribeGuestCode(std::uint32_t address);
+
+/// The calling guest thread's call stack at a call it is making: `lr` first, then the return addresses on the back
+/// chain from `sp` (its r1), within its own stack.
+std::vector<std::uint32_t> CurrentGuestStack(std::uint32_t sp, std::uint32_t lr, std::size_t max_frames);
+
+/// "nuscMain (id 7)" / "thread id 9" / "a host thread" for a guest thread id.
+std::string LabelForThreadId(std::uint32_t id);
 
 /// Return addresses on a guest thread's stack, innermost first: its link register, then the saved
 /// return address of every frame on the back chain (the Xbox 360 ABI keeps it at -8 from the caller's

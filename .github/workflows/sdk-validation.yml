@@ -100,6 +100,8 @@ jobs:
           # dump; the host must exit 0 and the triage report the stall and the close.
           DISPLAY=:97 SDL_AUDIO_DRIVER=dummy TTT2_WATCHDOG_MS=1000 pwsh -NoProfile -File scripts/run-host.ps1 -Exe out/host-linux/ttt2 -GameRoot recomp/game -Work out/run-host-stall -TimeoutSeconds 8 -NoGpu
           grep -q '^\*\*stall: .*closed afterwards\*\*' out/run-host-stall/boot-triage.md
+          # The boot step closed the window on its timeout, not a person: the triage must say so.
+          grep -q "window closed by the boot step's 8 s timeout" out/run-host-stall/boot-triage.md
           # The same host rebuilt on a deliberate deadlock (recomp/tests/ppc/wait_ttt2.s): the boot monitor's stall dump
           # must name both waits (a critical section with its owner, an unsignaled event), their guest call sites and
           # stacks, and the worker's creation; the boot step's triage must then report the wait chain.
@@ -122,8 +124,9 @@ jobs:
           python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-io.log --report out/host-resolve-io.md --ignore-stamp
           cmake --build out/host-linux --parallel
           scripts/host-boot-test.sh out/host-linux/ttt2 recomp/game 60 --no-imports --expect-io
-          # And on three frames of GPU commands handed to VdSwap (recomp/tests/ppc/gpu_ttt2.s): the frame monitor must
-          # count each frame's draws, resolves, clears and skipped packets, across the end of the ring buffer.
+          # And on four frames of GPU commands handed to VdSwap (recomp/tests/ppc/gpu_ttt2.s): the frame monitor must
+          # count each frame's draws, resolves, clears and skipped packets, across the end of the ring buffer, and
+          # count the frame outside the ring, which it cannot follow without a GPU emulation, as not followed.
           scripts/make-ppc-test-xex.sh recomp/tests/ppc/gpu_ttt2.s recomp/game/default.xex
           python3 -I recomp/tools/find_switch_tables.py recomp/game/default.xex --toml recomp/game/ttt2_switch_tables.toml --json out/host-switch_tables-gpu.json
           python3 -I recomp/tools/resolve_functions.py codegen --rexglue out/sdk-install/bin/rexglue --manifest recomp/ttt2_manifest.toml --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml --reference recomp/ttt2_functions.ttt2web.toml --log out/host-codegen-gpu.log --report out/host-resolve-gpu.md --ignore-stamp

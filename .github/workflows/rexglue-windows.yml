@@ -232,6 +232,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "run-host.ps1 exit code $LASTEXITCODE" }
           $md = Get-Content out\run-host-stall\boot-triage.md -Raw
           if ($md -notmatch "\*\*stall: .*closed afterwards\*\*") { throw "the triage did not report the stall and the close" }
+          # The boot step closed the window on its timeout, not a person: the triage must say so.
+          if ($md -notmatch "window closed by the boot step's 8 s timeout") { throw "the triage did not name the timeout as the closer: $md" }
           Get-Content out\run-host-stall\boot-report.txt
       - name: Boot ttt2.exe on a deliberate deadlock (the boot monitor's stall dump)
         # The same host rebuilt on recomp/tests/ppc/wait_ttt2.s: two threads deadlocked on a critical section and an
@@ -280,9 +282,10 @@ jobs:
             --report out/host-resolve-io.md --ignore-stamp
           (cd recomp && cmake --build --preset win-amd64-release)
           scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --no-imports --expect-io
-      - name: Boot ttt2.exe on three frames of GPU commands (the frame monitor)
+      - name: Boot ttt2.exe on four frames of GPU commands (the frame monitor)
         # recomp/tests/ppc/gpu_ttt2.s: draws, a clearing resolve, an indirect buffer, a packet the GPU emulation skips
-        # and a frame that wraps around the end of the ring buffer, each counted by the host.
+        # and a frame that wraps around the end of the ring buffer, each counted by the host, and a frame outside the
+        # ring that cannot be followed without a GPU emulation (counted as not followed, its draws unknown).
         if: inputs.build_host
         shell: bash
         run: |

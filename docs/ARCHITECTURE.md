@@ -104,6 +104,12 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   rolled back, never forced. The owner pipeline's boot loop handles what remains (one trap, one verified entry,
   one rebuild per run) by itself, with stop conditions for no progress, repeated traps, time, disk space and
   failed rebuilds (`docs/RESEARCH.md` 8d).
+* **Fall-through at a function's end [implemented, session 10]**: the pinned SDK ends a generated function at its
+  recorded extent and returns there when the code runs on, which skips whatever follows (a lock release, an
+  epilogue). Project patch `third_party/rexglue-patches/0001-fall-through.patch` (applied by
+  `scripts/fetch-rexglue-sdk.*`) continues where the CPU does - a goto inside the function, else a tail call of the
+  function that starts there - logs and marks every site, and names itself in the codegen log; `codegen_report.py`
+  counts the sites and the owner pipeline refuses an SDK package without the patch (`docs/RESEARCH.md` 8g).
 * **Post-codegen patch tools** (`recomp/tools/*.py`): rewrite the generated C++ to add dirty-page tracking on guest
   stores and the sound-library call boundary. Pure text transforms over local files; the tools are ours.
 * **Cross-check path**: XenonAnalyse / XenonRecomp (MIT) on the same image to compare function boundaries and
@@ -157,6 +163,18 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   samples the presented front buffer with resolve readback on. The thread dumps add each thread's calls of the last
   tick by export and a `busy:` line for threads that poll; `OnGuestThreadExit` tells a window close from a program
   that ended.
+* Heap-lock, object, frame and call diagnostics **[implemented, session 10]** (`docs/RESEARCH.md` 8g).
+  `lock_tracker.cpp` (SDK-free, unit-tested) follows every critical-section enter and leave per thread: depth, the
+  call sites of the open enters and the guest stack at depths 1, 2, 4, ... 1024, printed as `holds:` lines.
+  `object_tracker.cpp` records each dispatcher object's kind and initial state from its create call and every
+  signal, because the runtime leaves the guest header of handle-created objects zeroed. The wait wrappers keep
+  per-thread call signatures (export, call site, objects, count, last status) and pass
+  `NtSignalAndWaitForSingleObjectEx` its real alertable flag (r6; the runtime reads WaitMode, r5).
+  `diag_overrides.cpp` logs thread names, C++ throws with their type, other exceptions, debug breaks, bug checks,
+  failed memory calls and queued APCs. `io_overrides.cpp` logs the first reads, writes, directory queries and each
+  information class with the runtime's answer. The frame monitor follows the command stream as the GPU does
+  (`pm4::RingFollower`: the ring up to `CP_RB_WPTR` from the Xenos plugin's register file, indirect buffers, frames
+  split at `XE_SWAP`) and counts the frames it cannot follow apart.
 * Graphics: SDK D3D12 Xenos backend (Vulkan as a secondary option). Internal resolution and present timing
   handled through SDK mechanisms plus game-specific hooks (as T6 NO does for its 1024x576 targets).
 * Audio: SDK XMA decoder + SDL3 audio driver; a deterministic stepping mode for netplay (D).

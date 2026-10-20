@@ -144,7 +144,10 @@ if ($newLogs.Count -eq 0) {
     $lines.Add("Log:        " + (($newLogs | ForEach-Object { $_.Name }) -join ", ") + " (copied to $copyDir)")
     $triageMd = Join-Path $Work "boot-triage.md"
     $triageJson = Join-Path $Work "boot-triage.json"
-    $triageOut = Invoke-Tool { & $python -I $triageTool $logDir --md $triageMd --json $triageJson --quiet 2>&1 | ForEach-Object { $_.ToString() } }
+    $triageArgs = @("-I", $triageTool, $logDir, "--md", $triageMd, "--json", $triageJson, "--quiet")
+    # The window this script closed after -TimeoutSeconds was not closed by a person: the triage says so.
+    if ($ended.StartsWith("after the close request")) { $triageArgs += @("--closed-by", "the boot step's $TimeoutSeconds s timeout") }
+    $triageOut = Invoke-Tool { & $python @triageArgs 2>&1 | ForEach-Object { $_.ToString() } }
     $triageCode = $LASTEXITCODE
     foreach ($o in $triageOut) { $lines.Add($o) }
     if ($triageCode -ne 0) { $lines.Add("(triage tool exit code $triageCode)") }

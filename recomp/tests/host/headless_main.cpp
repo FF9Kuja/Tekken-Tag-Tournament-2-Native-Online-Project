@@ -216,6 +216,10 @@ int main(int argc, char** argv) {
       rc = 1;
     }
   }
+  // What the frame monitor made of the presented frames (empty when none was presented).
+  if (const std::string frames = ttt2::frames::Describe(); !frames.empty()) {
+    std::printf("headless_host: frames: %s\n", frames.c_str());
+  }
   std::printf("headless_host: kernel stubs: %s\n", stubs->Summary().c_str());
   if (stubs->total_calls() > opt.max_stub_calls) {
     std::fprintf(stderr, "headless_host: %llu stub calls, at most %llu allowed\n",

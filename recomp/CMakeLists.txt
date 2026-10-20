@@ -23,6 +23,9 @@ set(TTT2_SOURCES
     src/pm4_stats.cpp
     src/io_overrides.cpp
     src/wait_overrides.cpp
+    src/diag_overrides.cpp
+    src/lock_tracker.cpp
+    src/object_tracker.cpp
     src/milestone_overrides.cpp
     src/input/input_core.cpp
 )

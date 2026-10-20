@@ -10,7 +10,7 @@ only things to send back are the text the tools print (title IDs, versions, hash
   for where it comes from). Without it everything runs on the retail executable 0.0.0.2 ("base-image mode").
 * Windows 10/11 with Visual Studio 2022 (Desktop development with C++), git and Python 3, **or** WSL/Ubuntu.
 
-## Status of your copy (2026-10-20)
+## Status of your copy (2026-10-20, updated after the third black-screen run)
 
 `ttt2-iso identify` on your disc image, built with Visual Studio 2022: title ID `4E4D0859`, media ID `5D762D06`,
 version `0.0.0.2`, normal retail AES-128-CBC encryption, basic compression, and the "Matches" line for the
@@ -117,6 +117,39 @@ run's length) and the frames row says how many frames had draws; "What to do nex
 Only if asked: `$env:TTT2_PIXEL_CHECK = "1"` before the command samples the pictures the game presents (it turns on
 the graphics emulation's copy-back, which is slower); `$env:TTT2_KERNEL_CLOCK = "runtime"` or
 `$env:TTT2_NOT_FOUND_STATUS = "runtime"` bring back the runtime's old behaviour for a comparison.
+
+Your latest run (2026-10-20, `main` at `8cadd71`) kept the clock running (180 s) but stayed black and silent. What it
+shows (`docs/RESEARCH.md` 8g): the main thread holds the game's memory-allocation lock and never lets go - 390 levels
+deep, the same number as the run before - so the loader thread and the sound engine, which both need memory, wait for
+it forever. The busy thread 19 is a loop the game also runs on TTT2 Web, a port that reaches the menus; it still
+finishes its work twice per frame, so it is not what holds the boot. And the "0 draws" was not a measurement: the game builds its frames in a buffer
+the frame monitor did not read, so it could not see them at all. Three changes:
+
+1. **A recompiler fix for the most likely cause of the stuck lock.** When one of the game's functions runs on past
+   its recorded size, the recompiled code returned early and skipped the rest - for instance the release of a lock.
+   TTT2 Web found and fixed the same thing in its recompiler, and the C runtime releases its memory lock in this kind
+   of code, so it fits; it is not yet confirmed on your copy. Our fix is a patch to
+   the SDK's code generator, so **you need the new SDK package once**: on GitHub open the Actions tab, the
+   "ReXGlue codegen tool (Windows)" workflow, the newest run on `main` (after this change was merged), download its
+   `rexglue-sdk-install-win-amd64` artifact and unzip it over `D:\rexglue-sdk` (replace the old files). The pipeline
+   checks this and stops with these instructions if the old package is still there.
+2. **The frame monitor reads the frames the way the graphics chip does**, so draws are counted for real, and the report
+   says how many frames it could follow.
+3. **More evidence for whatever is left:** for every lock a thread holds, where each still-open entry came from; what
+   each event really is and who signals it; each of the first file reads; every exception, debug break and failed
+   memory call the game makes. A closed-by-timeout run is no longer reported as closed by you.
+
+Next command (`git pull` first, then the SDK package above):
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot -BootTimeout 180
+```
+
+Send `work\report.txt`, `work\boot-triage.md`, `work\boot-report.txt`, the newest log in `work\boot-logs\` and
+`work\codegen-REPORT.md` (its "Fall-through at a function's end" section counts the places the fix changed). Watch
+the window for anything other than black and for sound. Only if asked: `$env:TTT2_SIGNAL_AND_WAIT_ALERTABLE =
+"runtime"` brings back the runtime's reading of one wait argument (`docs/RESEARCH.md` 8g); `-AllowUnpatchedSdk` runs
+the pipeline with an old SDK package for a comparison.
 
 ## No Title Update 3 yet? Use the base-image path
 

@@ -15,6 +15,10 @@
 #            unreadable buffer, 3 packets (7 words of commands)"
 #   frame 3: a NOP up to the end of the ring, RB_MODECONTROL = color+depth and two DRAW_INDX_2 of which the
 #            second wraps to the start of the ring: "2 draws, 4 packets (869 words of commands)"
+#   frame 4: VdSwap's 64 words in the block, outside the ring, as TTT2's Direct3D places them (in its own
+#            command buffer). Without a GPU emulation the host cannot read the GPU's write pointer, so this frame
+#            is "not followed" - its draws unknown, never counted as zero: "3 followed in the GPU command stream
+#            by the ring between swaps, 1 not followed; 2 with draws, 1 with resolves; draws 5, ...".
 # 192 of the front buffer's 256 pixels hold 0x11223344, for the pixel check (TTT2_PIXEL_CHECK=1).
 #
 #   expected results: 1 1 (the ring's and the block's physical addresses are not 0)
@@ -198,6 +202,10 @@ _start:
 	li r5, 2
 	bl copy_words
 	addi r3, r31, 2 * 4
+	bl swap
+
+	# Frame 4: VdSwap's words outside the ring (in the block).
+	addi r3, r29, 0x300
 	bl swap
 
 	li r3, 0

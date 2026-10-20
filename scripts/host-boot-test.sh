@@ -33,14 +33,18 @@
 # that spins on its own event) also checks what the host's boot monitor says about the stall: the threads'
 # creation with their start addresses, the main thread's wait on the critical section naming the worker as
 # its owner, the worker's wait on the unsignaled event, the spinner flagged as busy with its busiest call,
-# the guest call sites and stacks, and the thread dump the host writes on window close. --expect-io (image: recomp/tests/ppc/io_ttt2.s; writes the 16-byte io_data.bin it reads into
+# the guest call sites and stacks, the worker's hold on the critical section with the call site of its open
+# enter, the spinner's calls counted by call site and object, its event described from the create call with
+# its signals, the signal-and-wait's wait mode and alertable flag, and the thread dump the host writes on
+# window close. --expect-io (image: recomp/tests/ppc/io_ttt2.s; writes the 16-byte io_data.bin it reads into
 # the game root) checks the host's file-system trace: the sector query answered as unsupported, the
 # bare device \Device\Image failing to open with the runtime's "ResolvePath(\Device)" line, answered as a
 # missing name the way the console answers it (STATUS_OBJECT_NAME_NOT_FOUND) with the host's explanation,
 # the file opened, and the watchdog's activity counters. --expect-gpu-frames (image:
-# recomp/tests/ppc/gpu_ttt2.s, three frames of GPU commands handed to VdSwap) checks the host's frame
-# monitor: each frame's draws, resolves, clears, indirect buffers and skipped packets, the front buffer, and
-# the frame summary in the activity line. Every normal run also checks that the host keeps the kernel clock
+# recomp/tests/ppc/gpu_ttt2.s, four frames of GPU commands handed to VdSwap, the last one outside the ring)
+# checks the host's frame monitor: each frame's draws, resolves, clears, indirect buffers and skipped packets,
+# the front buffer, the frame it cannot follow without a GPU emulation (counted as not followed, its draws
+# unknown), and the frame summary in the activity line. Every normal run also checks that the host keeps the kernel clock
 # (KeTimeStampBundle) current. No game content is involved.
 set -eu
 exe="${1:?ttt2 executable}"
@@ -160,6 +164,14 @@ if [ "$expect_stall" = 1 ]; then
         check "kernel calls: [0-9]* in the last tick (NtSignalAndWaitForSingleObjectEx [0-9]*" "the spinner's busiest call was named"
         check "busy: [0-9]* traced kernel calls a second over the last [0-9.]* s (mostly NtSignalAndWaitForSingleObjectEx), last from 0x[0-9A-F]* (sub_" \
             "the spinning thread was flagged as busy"
+        check "holds: critical section 0x[0-9A-F]* at depth 1 since t+[0-9.]* s (the section's own count: 1), unchanged for [0-9.]* s; 1 enters and 0 leaves since then; open enters from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) x1" \
+            "the worker's hold on the critical section names the call site of its open enter"
+        check "calls by site: NtSignalAndWaitForSingleObjectEx signal 0x[0-9A-F]* wait 0x[0-9A-F]* from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*): [0-9]*" \
+            "the spinner's calls were counted by call site and object"
+        check "(synchronization event, created by thread id [0-9]* at t+[0-9.]* s; last signaled by thread id [0-9]* from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) at t+[0-9.]* s, [0-9]* signals)" \
+            "the spinner's event was described from its create call and its signals"
+        check "ttt2: NtSignalAndWaitForSingleObjectEx from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*): wait mode 0, alertable 0" \
+            "the signal-and-wait's wait mode and alertable flag were logged"
         check "ttt2: thread state at window close:" "the thread dump was written on window close"
     fi
 elif [ "$expect_fatal" = 1 ]; then
@@ -195,8 +207,14 @@ else
     check "ttt2: kernel clock: KeTimeStampBundle at 0x[0-9A-F]*: the host refreshes InterruptTime and SystemTime" \
         "the host keeps the kernel clock current"
     check "ttt2: activity: .*; kernel clock [0-9.]* s (tick count [0-9.]* s)" "the activity line reports the kernel clock"
+    check "ttt2: activity: .*; exceptions raised 0 (0 C++), APCs queued 0, memory call failures 0, debug breaks 0" \
+        "the activity line counts the game's exceptions, APCs, memory call failures and debug breaks"
     if [ "$expect_io" = 1 ]; then
         check "ttt2: file opened: 'game:.io_data.bin'" "the file open was traced"
+        check "ttt2: file information: query class 34 (network open) for '.*io_data.bin' -> 0x00000000 (STATUS_SUCCESS) from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) on " \
+            "the information class the program queried was logged with the runtime's answer"
+        check "ttt2: file read 1: '.*io_data.bin' at 0x0 length 8 -> 0x00000000 (STATUS_SUCCESS), 8 bytes from 0x[0-9A-F]* (sub_[0-9A-F]*+0x[0-9A-F]*) on " \
+            "the first read was logged with its file, offset, length, bytes and call site"
         check "ttt2: sector query: FileSectorInformation for .*io_data.bin' answered as unsupported" "the sector query was answered as unsupported"
         check "ResolvePath(.Device) failed - device not found" "the bare device open produced the runtime's line from the owner's log"
         check "ttt2: the game opened '.Device.Image', a device itself" "the host explained the device open"
@@ -219,8 +237,10 @@ else
         check "ttt2: gpu: frame 2: 1 draw with EDRAM mode off, 1 unreadable buffer, 3 packets (7 words of commands)" \
             "frame 2's non-rendering draw was told apart and its indirect buffer without memory left unread"
         check "ttt2: gpu: frame 3: 2 draws, 4 packets (869 words of commands)" "frame 3 was read across the end of the ring"
-        check "frames presented 3 (2 with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)" \
-            "the activity line summarised the frames"
+        check "ttt2: gpu: frame 4: VdSwap's buffer 0x[0-9A-F]* (physical 0x[0-9A-F]*) is not in the ring buffer at 0x[0-9A-F]* (4096 bytes) and the GPU's write pointer is not readable (no GPU emulation): the frame's commands cannot be followed, its draws are unknown" \
+            "frame 4, outside the ring, was reported as one whose draws are unknown"
+        check "frames presented 4 (3 followed in the GPU command stream by the ring between swaps, 1 not followed; 2 with draws, 1 with resolves; draws 5, resolves 1, clears 1, at most 3 draws in a frame, 1 packet the GPU emulation skips; last frame: 2 draws, 4 packets; front buffer 16x16)" \
+            "the activity line summarised the frames, the one not followed counted apart"
     fi
     absent "ttt2: HOST CRASH" "no host crash"
     absent "STUB" "no runtime stub was reached"

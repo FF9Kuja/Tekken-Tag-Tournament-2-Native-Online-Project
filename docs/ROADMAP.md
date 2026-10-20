@@ -128,7 +128,13 @@ therefore mandatory for TTT2 and are the path the pipeline uses.
    (`docs/RESEARCH.md` 8f). Missing names are answered as the console and both reference ports answer them;
    `\Device\Image` stays unmapped (neither port maps it). [x] Frame monitor (draws, resolves, clears per frame;
    optional pixel check), busy-thread flags, critical sections whose count grows between dumps.
-   [ ] Confirm on the owner's copy: the loader reads its data, the spinning thread calms down, frames get draws.
+   [x] The owner's third run (PR #17 host): the clock runs; the main thread holds the heap lock 390 deep while the
+   loader and the audio engine wait for it; thread 19's loop is the game's own (TTT2 Web has it too) and ends every
+   frame; the frames could not be read (D3D builds them outside the ring). Codegen patch 0001 continues code that runs
+   past a function's recorded end (TTT2 Web's recompiler fix; the likely cause of the held lock); frames are followed
+   by the GPU's write pointer; per-thread lock holds with open enter sites, real object kinds and signals, the game's
+   own exceptions, thread names, memory failures and first reads are logged (`docs/RESEARCH.md` 8g).
+   [ ] Confirm on the owner's copy: the heap lock is released, the loader reads its data, frames get draws.
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.
 5. Measurable milestone: boot to the title screen; then to the main menu.
 
