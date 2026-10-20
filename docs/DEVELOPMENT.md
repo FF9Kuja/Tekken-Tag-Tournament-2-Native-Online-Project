@@ -105,6 +105,16 @@ use to put a license-free program into the retail form) round-tripped. All input
   `tailcall_ttt2.functions` as its reference via `recomp/tests/ppc/functions_to_toml.py`) in
   `scripts/codegen-smoke-test.sh` (codegen errors, resolution, harness run with the runtime trap, boot resolution,
   clean run) and on the real host in both SDK workflows (`host-boot-test.sh --expect-fatal`, then `--no-imports`).
+  `codegen --indirect --switch-json <finder report>` then registers ahead of time the reference functions ReXGlue
+  did not register whose address a word in the image's data holds (checks and the batch's exclusion and rollback:
+  `docs/RESEARCH.md` 8d); `--drop-indirect` removes those entries. Tested by the unit tests, by
+  `recomp/tests/ppc/pointer_ttt2.s` (two pointer-only shapes, three negative controls; traps without the entries,
+  passes with them) and `tailcall_ttt2.s` from scratch in the smoke test, and in the Windows workflow.
+* `tests/powershell/test_boot_repair.ps1` runs the owner pipeline's boot-repair loop (`Invoke-BootRepair`, loaded
+  from the script's source) with scripted boots, resolutions and rebuilds: every stop condition. CI runs it under
+  PowerShell 7 (Linux) and Windows PowerShell 5.1. `tests/tools/make_test_iso.cpp` (`ttt2_make_test_iso`) writes
+  an XDVDFS disc from files; the Windows workflow puts `pointer_ttt2` on one, in the retail form, and runs
+  `owner-pipeline.ps1` on it end to end (with `-NoIndirect`: two automatic rebuilds; by default: none).
 
 * `recomp/tools/codegen_report.py <generated dir> [--log codegen.log]` - summarises a `rexglue codegen` run
   (functions, imports, jump tables, unimplemented sites, analysis errors, instruction mix) as REPORT.md / JSON

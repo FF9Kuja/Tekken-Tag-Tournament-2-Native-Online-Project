@@ -10,7 +10,7 @@ only things to send back are the text the tools print (title IDs, versions, hash
   for where it comes from). Without it everything runs on the retail executable 0.0.0.2 ("base-image mode").
 * Windows 10/11 with Visual Studio 2022 (Desktop development with C++), git and Python 3, **or** WSL/Ubuntu.
 
-## Status of your copy (2026-10-19)
+## Status of your copy (2026-10-20)
 
 `ttt2-iso identify` on your disc image, built with Visual Studio 2022: title ID `4E4D0859`, media ID `5D762D06`,
 version `0.0.0.2`, normal retail AES-128-CBC encryption, basic compression, and the "Matches" line for the
@@ -36,7 +36,7 @@ which adds such a function only after checking the branch in your image and find
 Web's table (used only because your helper fingerprint matches it 8 of 8), then reruns codegen. On your log it adds
 13 entry points and one function boundary, nothing else. When a boot later stops on a call to an unregistered
 function (the runtime logs `[FATAL] Call to invalid or unregistered function at guest address ...`), the pipeline
-verifies that address the same way, rebuilds and boots again (step 9b, up to `-BootRounds 3`).
+verifies that address the same way, rebuilds and boots again (step 9b; it now repeats by itself, see below).
 Your run also reported 18 switch dispatches the finder could not read. Any `bctr` the finder leaves is handled
 by ReXGlue's own jump-table detector, which on our test program switches on the wrong register in 6 of its 7
 tables (the game would trap there), or becomes an indirect call that traps if the game reaches it. Before your
@@ -51,6 +51,30 @@ and the dispatches the finder still cannot read, each with its few instructions 
 update yet), a complete recompilation, the host build and the first boot; validated on the real game so far:
 identification, the import/helper analysis, the plain image, the switch-table finder and ReXGlue's analysis up to
 those 14 errors.
+
+Your latest runs (2026-10-20) compiled the whole game, built `ttt2.exe` and reached native execution. Each boot ran
+until the game called a function only a pointer reaches (`[FATAL] Call to invalid or unregistered function at guest
+address ...`); step 9b verified the address against TTT2 Web's table, added it and rebuilt. With 21 verified entries
+saved, the last run stopped at the old limit of three runs right after adding `0x82D6FC78`. Two changes since
+(`docs/RESEARCH.md` 8d):
+
+1. **Step 6 now finds those functions before the game calls them.** Your first codegen log shows 695 functions in
+   TTT2 Web's table that ReXGlue never registers, `0x82D6FC78` among them, almost all tiny virtual methods. TTT2 Web
+   found them as addresses stored in the game's data (vtables), so the resolver now registers every one whose
+   address is in your image's data and whose code passes its checks, compiles once more, and takes out again any
+   that codegen fails with. `work\resolve-REPORT.md` gets an "Ahead of time" section with the counts. A function
+   without such a pointer is never added this way; the boot step still adds it if the game calls it.
+2. **The boot loop repeats by itself** until a run ends some other way: up to `-BootRounds` runs (default 10, at
+   most 50) within `-BootMinutes` (default 480), stopping early on no progress, a repeated trap, less than 5 GB free
+   or a failed rebuild. Step 9c of the report lists every run and why the loop stopped.
+
+Your 21 entries are kept (the file is tied to your executable's SHA-1), and a rerun after any stop continues from
+them. If something new breaks with the ahead-of-time entries, `-NoIndirect` runs without them for comparison. Next
+command (`git pull` first; `-BootRounds 20` lets the loop go further before it stops):
+
+```powershell
+scripts\owner-pipeline.ps1 -Iso "D:\path\TTT2.iso" -Codegen -BuildHost -SdkInstall D:\rexglue-sdk -ExtractGame -Boot -BootTimeout 300 -BootRounds 20
+```
 
 ## No Title Update 3 yet? Use the base-image path
 
@@ -301,14 +325,21 @@ thread ends, and after a crash it writes the report below and exits with code 3 
 runtime gives up (a `[FATAL] ...` line in the log, for instance a call to an address no recompiled function starts
 at), the host logs that and exits with code 4 instead of showing the "abort() has been called" box.
 
-**Calls to functions ReXGlue never registered (step 9b).** Functions that only a pointer reaches (vtables without
-RTTI, callback tables) pass codegen unregistered; the first call to one ends the run with
-`[FATAL] Call to invalid or unregistered function at guest address X`. The triage names X; the pipeline then runs
-`resolve_functions.py boot` on the run's log, adds X as an entry when your image has code there and TTT2 Web's
-table lists a function starting there, and (with `-Codegen -BuildHost`) recompiles, rebuilds and boots again, at
-most `-BootRounds` (default 3) runs. An X inside a function is a jump into its middle, usually a jump table the
-finder did not recognise: that is reported for us to fix, never turned into an entry. Each round's report is
-`work\resolve-boot-<N>.md`; send them with the triage.
+**Calls to functions ReXGlue never registered (steps 6b, 9b, 9c).** Functions that only a pointer reaches (vtables
+without RTTI, callback tables) pass codegen unregistered; the first call to one ends the run with
+`[FATAL] Call to invalid or unregistered function at guest address X`. Step 6b registers the ones it can prove ahead
+of time (their address is in your image's data and their code passes the checks; the resolve report's "Ahead of
+time" section counts them by reason). The boot loop handles the rest: the triage names X, `resolve_functions.py
+boot` adds X as an entry when your image has code there and TTT2 Web's table lists a function starting there, and
+(with `-Codegen -BuildHost`) the pipeline recompiles, rebuilds and boots again by itself. It stops, keeping every
+entry, when a run ends some other way, when a run's log gives nothing new, when the rebuilt host traps at an address
+already added (the entry did not take effect), after `-BootRounds` runs (default 10, at most 50), before a rebuild
+that would exceed `-BootMinutes` (default 480), below `-MinFreeGb` (default 5) GB free, or when a rebuild fails;
+step 9c says which, and rerunning the same command continues. The runs after a rebuild close the game after
+`-BootTimeout` seconds (300 if you gave 0). An X inside a function is a jump into its middle, usually a jump table
+the finder did not recognise: that is reported for us to fix, never turned into an entry. Each run's report is
+`work\resolve-boot-<N>.md`; send them with the triage. `-NoIndirect` drops the ahead-of-time entries (the others
+stay) if you want to compare.
 
 Expect the first boot to fail somewhere: the point is the log. The host writes it to the `logs\` folder next to
 `ttt2.exe` (`recomp\out\build\win-amd64-release\logs\`; the window itself shows nothing useful before the game

@@ -25,7 +25,11 @@
 # several shapes, measured in session 3) and once with the finder's [[switch_tables]] (must pass);
 # and the kernel-import program (imports_ttt2.s), whose calls through a real XEX import table must
 # reach the host's kernel overrides (recomp/src/kernel_overrides.cpp, compiled into the harness as
-# into the game host) and an implemented runtime export, with no runtime stub called.
+# into the game host) and an implemented runtime export, with no runtime stub called. The function-
+# boundary programs run both ways: tailcall_ttt2.s through the cycle of a runtime trap resolved from
+# its log, then from scratch with recomp/tools/resolve_functions.py codegen --indirect, which registers
+# the pointer-called leaf ahead of time (no trap); pointer_ttt2.s with its two pointer-only functions
+# registered ahead of time (must pass) and without them (must trap at the first pointer call).
 #
 # Exit code 0 when every case passes. No game content is involved.
 set -eu
@@ -64,7 +68,8 @@ rexglue="$(cd "$(dirname "$rexglue")" && pwd)/$(basename "$rexglue")"
 [ -z "$sdk" ] || sdk="$(cd "$sdk" && pwd)"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
-rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2
+rm -rf "$work"/smoke "$work"/jumptable "$work"/switch_ttt2 "$work"/switch_shapes "$work"/insn_ttt2 "$work"/imports_ttt2 "$work"/tailcall_ttt2 \
+    "$work"/pointer_ttt2
 status=0
 skipped=0
 syntax_note=0
@@ -321,6 +326,65 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         status=1
     fi
 
+    # Functions only a pointer in data reaches (pointer_ttt2.s): codegen alone succeeds (6 functions) and
+    # leaves the two pointer-called targets folded into the functions that branch to them. With
+    # recomp/tools/resolve_functions.py codegen --indirect both are registered ahead of time (8 functions)
+    # and the three negative controls are refused, each for its own reason. --exec below runs both forms:
+    # the resolved one must pass, the plain one (--drop-indirect) must trap at the first pointer call.
+    name=pointer_ttt2
+    dir="$work/$name"
+    mkdir -p "$dir"
+    if CC="$cc" "$root/scripts/make-ppc-test-xex.sh" "$root/recomp/tests/ppc/$name.s" "$dir/$name.xex" > "$dir/pack.log" 2>&1; then
+        sym() { tr -d '\r' < "$dir/$name.xex.syms" | awk -v n="$1" '$4 == n {print $1}'; }
+        printf '[project]\nname = "%s"\nsdk_version = "0.10.0"\n\n[entrypoint]\nfile_path = "%s.xex"\nout_directory_path = "generated/default"\nincludes = ["%s_config.toml"]\n' \
+            "$name" "$name" "$name" > "$dir/${name}_manifest.toml"
+        printf 'skip_lr = false\nskip_msr = false\nctr_as_local = false\nxer_as_local = false\nreserved_as_local = false\ncr_as_local = false\nnon_argument_as_local = false\nnon_volatile_as_local = false\nincludes = ["%s_resolved.toml"]\n' \
+            "$name" > "$dir/${name}_config.toml"
+        "$python" -I "$root/recomp/tests/ppc/functions_to_toml.py" "$dir/$name.xex.syms" \
+            "$root/recomp/tests/ppc/$name.functions" "$dir/${name}_reference.toml"
+        "$python" -I "$root/recomp/tools/find_switch_tables.py" "$dir/$name.xex" --json "$dir/switch_tables.json" > "$dir/finder.log" 2>&1
+        # resolve <run name> [options]: codegen through the resolver into $dir/<run name>.{log,md,json,out}
+        resolve() {
+            run="$1"; shift
+            "$python" -I "$root/recomp/tools/resolve_functions.py" codegen --rexglue "$rexglue" \
+                --manifest "$dir/${name}_manifest.toml" --image "$dir/$name.xex" --out "$dir/${name}_resolved.toml" \
+                --reference "$dir/${name}_reference.toml" --log "$dir/$run.log" --report "$dir/$run.md" \
+                --json "$dir/$run.json" --ignore-stamp "$@" > "$dir/$run.out" 2>&1
+        }
+        expect_funcs() {
+            "$python" -I "$report" "$dir/generated/default" --log "$dir/$1.log" --project "$name" --md "$dir/REPORT-$1.md" \
+                --json "$dir/report-$1.json" --quiet --expect-functions "$2" --expect-switches 0 --expect-unimplemented 0 \
+                --fail-on-errors
+        }
+        if resolve plain && grep -q 'codegen succeeded in round 1\*\*' "$dir/plain.md" && expect_funcs plain 6; then
+            echo "ok   $name: codegen alone succeeds with 6 functions; the pointer-called $(sym cond_target) and $(sym over_target) stay unregistered"
+        else
+            echo "FAIL $name: plain codegen (see $dir/plain.out, $dir/plain.md)"
+            cat "$dir/plain.out"
+            status=1
+        fi
+        if resolve indirect --indirect --switch-json "$dir/switch_tables.json" \
+            && grep -q "codegen succeeded in round 2 with 2 resolved entries (2 of them ahead of time)" "$dir/indirect.md" \
+            && grep -q "^\"$(sym cond_target)\" = {}  # entry: ahead of time, pointer at $(sym ptr_table) (.rdata)" "$dir/${name}_resolved.toml" \
+            && grep -q "^\"$(sym over_target)\" = {}  # entry: ahead of time, pointer at $(sym cb_table) (.data)" "$dir/${name}_resolved.toml" \
+            && grep -q "| no pointer to it in the image's data: no evidence, not registered | 1 | $(sym fold_only): " "$dir/indirect.md" \
+            && grep -q "| the instruction before it falls through into it | 1 | $(sym after_call): " "$dir/indirect.md" \
+            && grep -q "| inside a .pdata function (exception-handler label or other code of that function) | 1 | $(sym handler_label): " "$dir/indirect.md" \
+            && grep -q "Every entry of the output file is registered in the generated code" "$dir/indirect.md" \
+            && expect_funcs indirect 8; then
+            echo "ok   $name: --indirect registered $(sym cond_target) and $(sym over_target) ahead of time (8 functions); refused fold_only (no pointer), after_call (falls through), handler_label (.pdata)"
+        else
+            echo "FAIL $name: codegen --indirect (see $dir/indirect.out, $dir/indirect.md)"
+            cat "$dir/indirect.out"
+            sed -n '/Ahead of time/,$p' "$dir/indirect.md" 2>/dev/null
+            status=1
+        fi
+    else
+        echo "FAIL $name: could not build the test image (see $dir/pack.log)"
+        tail -5 "$dir/pack.log"
+        status=1
+    fi
+
     if [ "$exec_mode" = 1 ] && [ -n "$sdk" ]; then
         # Native execution through the ReXGlue runtime (recomp/tests/host). Each program stores words
         # at `results` (address from the packer's symbol map) and returns their sum.
@@ -423,6 +487,67 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
             tail -20 "$dir/exec2.log"
             status=1
         fi
+        # The same program from scratch with codegen --indirect: the pointer-called leaf is registered ahead of
+        # time (the cycle above needed the run's trap for it), so the first native run passes.
+        rm -f "$dir/tailcall_ttt2_resolved.toml"
+        rc=0
+        if "$python" -I "$root/recomp/tools/find_switch_tables.py" "$dir/tailcall_ttt2.xex" --json "$dir/switch_tables.json" \
+                > "$dir/finder.log" 2>&1 \
+            && "$python" -I "$root/recomp/tools/resolve_functions.py" codegen --rexglue "$rexglue" \
+                --manifest "$dir/tailcall_ttt2_manifest.toml" --image "$dir/tailcall_ttt2.xex" \
+                --out "$dir/tailcall_ttt2_resolved.toml" --reference "$dir/tailcall_ttt2_reference.toml" \
+                --log "$dir/codegen4.log" --report "$dir/RESOLVE4.md" --ignore-stamp \
+                --indirect --switch-json "$dir/switch_tables.json" > "$dir/resolve4.log" 2>&1 \
+            && grep -q "codegen succeeded in round 3 with 3 resolved entries (1 of them ahead of time)" "$dir/RESOLVE4.md" \
+            && grep -q "^\"$leaf\" = {}  # entry: ahead of time, pointer at " "$dir/tailcall_ttt2_resolved.toml"; then
+            run_host tailcall_ttt2 "$dir/generated/default" "$results" "1002,112,24,406,35" > "$dir/exec3.log" 2>&1 || rc=$?
+            if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec3.log"; then
+                echo "ok   exec: from scratch with --indirect, $leaf was registered ahead of time and the first run passed (no trap, no extra rebuild)"
+            else
+                echo "FAIL exec: the tailcall program after codegen --indirect (exit $rc, see $dir/exec3.log)"
+                tail -20 "$dir/exec3.log"
+                status=1
+            fi
+        else
+            echo "FAIL exec: codegen --indirect on the tailcall program (see $dir/resolve4.log, $dir/RESOLVE4.md)"
+            cat "$dir/resolve4.log"
+            status=1
+        fi
+
+        # Functions only a pointer reaches (pointer_ttt2.s): with the entries registered ahead of time the
+        # program runs through; without them (--drop-indirect) the first call through a pointer traps.
+        dir="$work/pointer_ttt2"
+        results="$(results_of "$dir/pointer_ttt2.xex.syms"):7"
+        target="$(tr -d '\r' < "$dir/pointer_ttt2.xex.syms" | awk '$4 == "cond_target" {print $1}')"
+        rc=0
+        run_host pointer_ttt2 "$dir/generated/default" "$results" "50,6,57,205,204,1004,62" > "$dir/exec1.log" 2>&1 || rc=$?
+        if [ "$rc" = 0 ] && grep -q "headless_host: PASS" "$dir/exec1.log" \
+            && grep -q "headless_host: kernel stubs: 0 calls" "$dir/exec1.log"; then
+            echo "ok   exec: with the two functions registered ahead of time the pointer program produced 50 6 57 205 204 1004 62"
+        else
+            echo "FAIL exec: native run of the pointer program after codegen --indirect (exit $rc, see $dir/exec1.log)"
+            tail -20 "$dir/exec1.log"
+            status=1
+        fi
+        rc=0
+        if "$python" -I "$root/recomp/tools/resolve_functions.py" codegen --rexglue "$rexglue" \
+                --manifest "$dir/pointer_ttt2_manifest.toml" --image "$dir/pointer_ttt2.xex" \
+                --out "$dir/pointer_ttt2_resolved.toml" --reference "$dir/pointer_ttt2_reference.toml" \
+                --log "$dir/drop.log" --report "$dir/drop.md" --ignore-stamp --drop-indirect > "$dir/drop.out" 2>&1 \
+            && grep -q "removed 2 entries registered ahead of time" "$dir/drop.out"; then
+            run_host pointer_ttt2 "$dir/generated/default" "$results" "50,6,57,205,204,1004,62" > "$dir/exec2.log" 2>&1 || rc=$?
+            if [ "$rc" != 0 ] && grep -q "Call to invalid or unregistered function at guest address $target" "$dir/exec2.log"; then
+                echo "ok   exec: without them (--drop-indirect) the first pointer call traps at $target (exit $rc), as measured"
+            else
+                echo "FAIL exec: expected the runtime trap for $target without the ahead-of-time entries (exit $rc, see $dir/exec2.log)"
+                tail -20 "$dir/exec2.log"
+                status=1
+            fi
+        else
+            echo "FAIL exec: codegen --drop-indirect on the pointer program (see $dir/drop.out)"
+            cat "$dir/drop.out"
+            status=1
+        fi
 
         dir="$work/imports_ttt2"
         rc=0
@@ -440,7 +565,7 @@ if [ -f "$bu/powerpc-none-elf-as$exe" ]; then
         fi
     fi
 else
-    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / tailcall_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
+    echo "skip switch_ttt2 / switch_shapes / insn_ttt2 / imports_ttt2 / tailcall_ttt2 / pointer_ttt2: PowerPC binutils not found at $bu (powerpc-none-elf-as$exe)"
     skipped=$((skipped + 1))
 fi
 [ "$skipped" = 0 ] || echo "note: $skipped case(s) skipped"

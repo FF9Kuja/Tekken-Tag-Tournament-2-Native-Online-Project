@@ -2,7 +2,7 @@
 # consumed as an installed CMake package (the SDK's own distribution model).
 #
 #   scripts\build-host.ps1 [-Game <patched default.xex>] [-SdkInstall <dir>] [-Preset win-amd64-release]
-#                          [-InstallSdk] [-Jobs <n>]
+#                          [-InstallSdk] [-Jobs <n>] [-SkipCodegen] [-NoIndirect] [-Reference <toml>]
 #
 # What it does:
 #   1. -Game copies the player's own, Title-Update-3-patched executable to recomp\game\default.xex
@@ -17,7 +17,9 @@
 #   3. Runs `rexglue codegen` (the SDK package's bin\rexglue.exe) on recomp\ttt2_manifest.toml through
 #      recomp\tools\resolve_functions.py, which turns each "target not in any function" error into a
 #      function boundary verified against the image and TTT2 Web's published table (when the image's helper
-#      fingerprint matches it) and reruns codegen (recomp\game\resolve-REPORT.md says what it added),
+#      fingerprint matches it) and reruns codegen (recomp\game\resolve-REPORT.md says what it added); with
+#      --indirect it also registers ahead of time the functions only a pointer in the image's data reaches
+#      (each one checked against the image; -NoIndirect drops those entries instead). It then
 #      audits how every bctr was emitted (recomp\tools\audit_switches.py, recomp\game\switch-audit.md), then
 #      configures recomp\ with the given preset (recomp\CMakePresets.json: clang + Ninja) and
 #      CMAKE_PREFIX_PATH pointing at the package, and builds. The generated glue only picks the
@@ -27,6 +29,9 @@
 #      build directory (names and sizes only).
 # -Jobs <n> compiles at most n files at once (default: Ninja's choice, about one per CPU thread). The real game
 # is about 300 generated files of up to 1 MB each; when the compiler runs out of memory, a lower number helps.
+# -SkipCodegen builds from the switch tables and generated code already there (the owner pipeline passes it
+# right after its own codegen step on the same image, so the finder and codegen do not run twice per round).
+# -Reference names the boundary reference (default: recomp\ttt2_functions.ttt2web.toml, TTT2 Web's table).
 # Requirements: LLVM clang 20+ on PATH (winget install LLVM.LLVM), CMake 3.25+, Ninja, Visual Studio
 # 2022 C++ workload (Windows SDK headers). Output: recomp\out\build\<preset>\ttt2.exe (git-ignored).
 # No game content leaves the machine: the generated code and the game image stay in ignored folders.
@@ -35,12 +40,16 @@ param(
     [string]$SdkInstall = "",
     [string]$Preset = "win-amd64-release",
     [switch]$InstallSdk,
-    [int]$Jobs = 0
+    [int]$Jobs = 0,
+    [switch]$SkipCodegen,
+    [switch]$NoIndirect,
+    [string]$Reference = ""
 )
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 $root = (Get-Location).Path
 if ($SdkInstall -eq "") { $SdkInstall = Join-Path $root "third_party\rexglue-sdk\src\out\install\win-amd64" }
+if ($Reference -eq "") { $Reference = Join-Path $root "recomp\ttt2_functions.ttt2web.toml" }
 
 function Find-Clang {
     $c = Get-Command clang -ErrorAction SilentlyContinue
@@ -82,10 +91,15 @@ if (-not (Test-Path $gameXex)) {
 $python = Find-Python
 if (-not $python) { throw "Python 3 not found on PATH (winget install Python.Python.3.12): the switch-table finder needs it" }
 $tables = Join-Path $gameDir "ttt2_switch_tables.toml"
-Write-Host "Finding switch jump tables in the image (recomp\tools\find_switch_tables.py)..."
-& $python -I (Join-Path $root "recomp\tools\find_switch_tables.py") $gameXex --toml $tables --json (Join-Path $gameDir "switch_tables.json")
-if ($LASTEXITCODE -ne 0) { throw "switch-table finder failed ($LASTEXITCODE)" }
-if (-not (Test-Path $tables)) { throw "the finder wrote no $tables" }
+if ($SkipCodegen) {
+    if (-not (Test-Path $tables)) { throw "-SkipCodegen: $tables is missing (run the finder and codegen first, or drop -SkipCodegen)" }
+    Write-Host "-SkipCodegen: using recomp\game\ttt2_switch_tables.toml and recomp\generated\default as they are"
+} else {
+    Write-Host "Finding switch jump tables in the image (recomp\tools\find_switch_tables.py)..."
+    & $python -I (Join-Path $root "recomp\tools\find_switch_tables.py") $gameXex --toml $tables --json (Join-Path $gameDir "switch_tables.json")
+    if ($LASTEXITCODE -ne 0) { throw "switch-table finder failed ($LASTEXITCODE)" }
+    if (-not (Test-Path $tables)) { throw "the finder wrote no $tables" }
+}
 
 # 2. the SDK package
 $config = Join-Path $SdkInstall "lib\cmake\rexglue\rexglueConfig.cmake"
@@ -111,19 +125,24 @@ $env:PATH = "$clangDir;$env:PATH"
 foreach ($tool in @("cmake", "ninja")) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool not found on PATH" }
 }
-Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml through recomp\tools\resolve_functions.py)..."
-& $python -I (Join-Path $root "recomp\tools\resolve_functions.py") codegen --rexglue $rexglue `
-    --manifest (Join-Path $root "recomp\ttt2_manifest.toml") --image $gameXex `
-    --out (Join-Path $gameDir "ttt2_resolved_functions.toml") --reference (Join-Path $root "recomp\ttt2_functions.ttt2web.toml") `
-    --log (Join-Path $gameDir "codegen.log") --report (Join-Path $gameDir "resolve-REPORT.md")
-if ($LASTEXITCODE -ne 0) {
-    throw "rexglue codegen failed (resolve_functions.py exit $LASTEXITCODE): see recomp\game\resolve-REPORT.md and recomp\game\codegen.log"
+if (-not $SkipCodegen) {
+    Write-Host "Generating the recompiled code (rexglue codegen ttt2_manifest.toml through recomp\tools\resolve_functions.py)..."
+    $resolveArgs = @("-I", (Join-Path $root "recomp\tools\resolve_functions.py"), "codegen", "--rexglue", $rexglue,
+        "--manifest", (Join-Path $root "recomp\ttt2_manifest.toml"), "--image", $gameXex,
+        "--out", (Join-Path $gameDir "ttt2_resolved_functions.toml"), "--reference", $Reference,
+        "--log", (Join-Path $gameDir "codegen.log"), "--report", (Join-Path $gameDir "resolve-REPORT.md"))
+    if ($NoIndirect) { $resolveArgs += "--drop-indirect" }
+    else { $resolveArgs += @("--indirect", "--switch-json", (Join-Path $gameDir "switch_tables.json")) }
+    & $python @resolveArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "rexglue codegen failed (resolve_functions.py exit $LASTEXITCODE): see recomp\game\resolve-REPORT.md and recomp\game\codegen.log"
+    }
+    # How the codegen emitted every bctr (informative; recomp\game\switch-audit.md): the finder's tables as
+    # written, the SDK detector's own switches checked against the finder's model, the unread dispatches.
+    & $python -I (Join-Path $root "recomp\tools\audit_switches.py") --image $gameXex --generated (Join-Path $root "recomp\generated\default") `
+        --finder (Join-Path $gameDir "switch_tables.json") --md (Join-Path $gameDir "switch-audit.md") --json (Join-Path $gameDir "switch-audit.json")
+    if ($LASTEXITCODE -ne 0) { Write-Host "PROBLEM: the switch audit reports a contradiction or did not run (exit $LASTEXITCODE): see recomp\game\switch-audit.md" }
 }
-# How the codegen emitted every bctr (informative; recomp\game\switch-audit.md): the finder's tables as
-# written, the SDK detector's own switches checked against the finder's model, the unread dispatches.
-& $python -I (Join-Path $root "recomp\tools\audit_switches.py") --image $gameXex --generated (Join-Path $root "recomp\generated\default") `
-    --finder (Join-Path $gameDir "switch_tables.json") --md (Join-Path $gameDir "switch-audit.md") --json (Join-Path $gameDir "switch-audit.json")
-if ($LASTEXITCODE -ne 0) { Write-Host "PROBLEM: the switch audit reports a contradiction or did not run (exit $LASTEXITCODE): see recomp\game\switch-audit.md" }
 Push-Location (Join-Path $root "recomp")
 try {
     if (-not (Test-Path "generated\default\sources.cmake")) { throw "codegen produced no generated\default\sources.cmake" }

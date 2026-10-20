@@ -130,12 +130,12 @@ jobs:
           name: rexglue-sdk-install-win-amd64
           path: out/rexglue-sdk-install/
           retention-days: 90
-      - name: Build the first-party tools (ttt2-xexinfo and the retail-form wrapper; VS 2022)
+      - name: Build the first-party tools (ttt2-xexinfo, ttt2-iso, the retail-form wrapper and the test-disc writer; VS 2022)
         if: inputs.build_host
         run: |
           cmake --preset windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
-          cmake --build --preset windows-msvc --target ttt2-xexinfo ttt2_make_retail_xex
+          cmake --build --preset windows-msvc --target ttt2-xexinfo ttt2-iso ttt2_make_retail_xex ttt2_make_test_iso
           if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
           .\out\build\windows-msvc\bin\Release\ttt2-xexinfo.exe --version
       - name: Pack the license-free kernel-import program as the host's game image, in the disc's retail form, and prepare it
@@ -276,6 +276,84 @@ jobs:
           grep -q "codegen succeeded in round 1 with 3 resolved entries" out/host-resolve-tailcall2.md
           (cd recomp && cmake --build --preset win-amd64-release)
           scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --no-imports
+      - name: Function-boundary cycle, part 4 (from scratch with --indirect; no trap, no extra rebuild)
+        # The same program with a fresh resolved file: after the two entries its codegen errors call for, the
+        # resolver registers the pointer-called leaf ahead of time (its address is in .rdata), so the first run
+        # ends cleanly; parts 1 to 3 needed the trap, its log and a rebuild for it.
+        if: inputs.build_host
+        shell: bash
+        run: |
+          rexglue="$PWD/out/rexglue-sdk-install/bin/rexglue.exe"
+          rm -f recomp/game/ttt2_resolved_functions.toml
+          python -I recomp/tools/resolve_functions.py codegen --rexglue "$rexglue" --manifest recomp/ttt2_manifest.toml \
+            --image recomp/game/default.xex --out recomp/game/ttt2_resolved_functions.toml \
+            --reference out/tailcall-reference.toml --log out/host-codegen-tailcall3.log --report out/host-resolve-tailcall3.md \
+            --ignore-stamp --indirect --switch-json out/host-switch_tables-tailcall.json
+          grep -q "codegen succeeded in round 3 with 3 resolved entries (1 of them ahead of time)" out/host-resolve-tailcall3.md
+          (cd recomp && cmake --build --preset win-amd64-release)
+          scripts/host-boot-test.sh recomp/out/build/win-amd64-release/ttt2.exe recomp/game 60 --no-imports
+      - name: Pack the pointer test program as a disc in the retail form (input of the owner pipeline runs below)
+        # recomp/tests/ppc/pointer_ttt2.s has two functions only a pointer reaches, which ReXGlue folds into the
+        # functions that branch to them: each one traps at run time unless it is registered.
+        if: inputs.build_host
+        shell: bash
+        run: |
+          export TTT2_PPC_BINUTILS="$PWD/third_party/rexglue-sdk/src/tools/binutils"
+          mkdir -p out/e2e
+          scripts/make-ppc-test-xex.sh recomp/tests/ppc/pointer_ttt2.s out/e2e/plain.xex
+          out/build/windows-msvc/bin/Release/ttt2_make_retail_xex.exe out/e2e/plain.xex out/e2e/default.xex
+          out/build/windows-msvc/bin/Release/ttt2_make_test_iso.exe out/e2e/disc.iso default.xex=out/e2e/default.xex
+          python -I recomp/tests/ppc/functions_to_toml.py out/e2e/plain.xex.syms recomp/tests/ppc/pointer_ttt2.functions out/e2e/reference.toml
+          for s in cond_target over_target; do tr -d '\r' < out/e2e/plain.xex.syms | awk -v n="$s" '$4 == n {print $1}' > "out/e2e/$s.txt"; done
+          cat out/e2e/cond_target.txt out/e2e/over_target.txt
+      - name: Owner pipeline end to end, boot repair from the boot logs alone (-NoIndirect; two automatic rebuilds)
+        # scripts\owner-pipeline.ps1 under Windows PowerShell 5.1, as the owner runs it, on the test disc: identify,
+        # extract, prepare, codegen, host build, extraction, then the boot repair loop by itself. Without entries
+        # registered ahead of time, each pointer-only function ends a run with the runtime's trap: run 1 at
+        # cond_target, run 2 (after the loop's own rebuild) at over_target, run 3 ends cleanly. -MinFreeGb 1: the
+        # runner's disk is small (the owner keeps the default 5).
+        if: inputs.build_host
+        shell: powershell
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          $ct = (Get-Content out\e2e\cond_target.txt).Trim()
+          $ot = (Get-Content out\e2e\over_target.txt).Trim()
+          if (Test-Path recomp\game\ttt2_resolved_functions.toml) { Remove-Item recomp\game\ttt2_resolved_functions.toml }
+          try {
+            scripts\owner-pipeline.ps1 -Iso out\e2e\disc.iso -Work out\e2e\work-plain -Preset windows-msvc -SkipBuild -Codegen -BuildHost -SdkInstall out\rexglue-sdk-install -ExtractGame -Boot -BootTimeout 60 -NoGpu -NoIndirect -MinFreeGb 1 -Reference out\e2e\reference.toml *> out\e2e\pipeline-plain.log
+          } catch { Get-Content out\e2e\pipeline-plain.log -Tail 60; throw }
+          $report = Get-Content out\e2e\work-plain\report.txt -Raw
+          foreach ($needle in @('-NoIndirect: nothing registered ahead of time', "run 1: fatal: the game called $ct through a pointer[^\r\n]*; added $ct",
+                                "run 2: fatal: the game called $ot through a pointer[^\r\n]*; added $ot", 'run 3: clean exit',
+                                '3 runs in [0-9.,]+ minutes:', 'Stopped: run 3 did not end on a call to an unregistered function',
+                                '2 verified entries \(0 of them registered ahead of time\), kept for the next run')) {
+            if ($report -notmatch $needle) { Get-Content out\e2e\work-plain\report.txt -Tail 80; throw "report lacks '$needle'" }
+          }
+          if ($report -match 'CRITICAL') { throw "the pipeline stopped on a critical failure" }
+          Write-Host "boot repair from the boot logs: 3 runs, 2 automatic rebuilds, clean end"
+      - name: Owner pipeline end to end with the functions registered ahead of time (the default; no rebuild)
+        # The same disc and command without -NoIndirect, from an empty resolved file: step 6 registers both
+        # pointer-only functions ahead of time, so the first run ends cleanly and the loop has nothing to repair.
+        if: inputs.build_host
+        shell: powershell
+        env:
+          SDL_AUDIO_DRIVER: dummy
+        run: |
+          Remove-Item recomp\game\ttt2_resolved_functions.toml
+          try {
+            scripts\owner-pipeline.ps1 -Iso out\e2e\disc.iso -Work out\e2e\work-aot -Preset windows-msvc -SkipBuild -Codegen -BuildHost -SdkInstall out\rexglue-sdk-install -ExtractGame -Boot -BootTimeout 60 -NoGpu -MinFreeGb 1 -Reference out\e2e\reference.toml *> out\e2e\pipeline-aot.log
+          } catch { Get-Content out\e2e\pipeline-aot.log -Tail 60; throw }
+          $report = Get-Content out\e2e\work-aot\report.txt -Raw
+          foreach ($needle in @('codegen succeeded in round 2 with 2 resolved entries \(2 of them ahead of time\)',
+                                '2 functions registered ahead of time; codegen accepted them in round 2', 'run 1: clean exit',
+                                '1 run in [0-9.,]+ minutes:', 'Stopped: run 1 did not end on a call to an unregistered function',
+                                '2 verified entries \(2 of them registered ahead of time\), kept for the next run')) {
+            if ($report -notmatch $needle) { Get-Content out\e2e\work-aot\report.txt -Tail 80; throw "report lacks '$needle'" }
+          }
+          if ($report -match '9b\. Calls to functions ReXGlue never registered') { throw "the loop had to repair a run" }
+          if ($report -match 'CRITICAL') { throw "the pipeline stopped on a critical failure" }
+          Write-Host "ahead of time: both functions registered in step 6, the first run ends cleanly"
       - name: Upload the host boot log and the boot-step reports
         if: always() && inputs.build_host
         uses: actions/upload-artifact@v4
@@ -287,6 +365,10 @@ jobs:
             out/run-host-stall/
             out/run-host-fatal/
             out/host-resolve*.md
+            out/e2e/work-*/report.txt
+            out/e2e/work-*/resolve-*.md
+            out/e2e/work-*/boot-triage.md
+            out/e2e/pipeline-*.log
           if-no-files-found: ignore
       - name: Upload the host build listing
         if: always() && inputs.build_host

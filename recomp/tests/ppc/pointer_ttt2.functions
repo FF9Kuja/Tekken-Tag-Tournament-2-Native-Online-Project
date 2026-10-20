@@ -1,0 +1,15 @@
+# Function boundaries of pointer_ttt2.s, one "start end" label pair per line, as a control-flow walk
+# gives them, plus two deliberately wrong starts (after_call, handler_label) that the resolver's
+# ahead-of-time checks must refuse. scripts/codegen-smoke-test.sh turns this into the [functions]
+# reference recomp/tools/resolve_functions.py checks against (the stand-in for TTT2 Web's table).
+# _start has a .pdata entry and needs no line.
+cond_split cond_target
+cond_target jump_over
+jump_over mid_leaf
+mid_leaf over_target
+over_target jump_twice
+jump_twice twice_caller
+twice_caller after_call
+after_call twice_end
+fold_only fold_end
+handler_label handler_end

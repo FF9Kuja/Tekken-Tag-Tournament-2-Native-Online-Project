@@ -528,6 +528,72 @@ is then most likely a case label, not a missing function).
 within 8 instructions of a `bctr`, at or before its compare): the 596 tables stay, some of the 18 resolve, and the
 audit shows the rest, with the SDK detector's verdicts on all other `bctr` sites.
 
+## 8d. Functions only a pointer reaches: the boot traps, predicted and registered ahead of time (session 7)
+
+**What the owner's boots showed.** With the codegen errors resolved (8b), the whole game compiled and `ttt2.exe` ran
+natively. Each run then ended on the runtime's `[FATAL] Call to invalid or unregistered function at guest address X`,
+which pipeline step 9b turned into a verified entry (TTT2 Web's table lists a function starting at X) before
+rebuilding: one entry per run, one rebuild per entry. By the latest run (2026-10-20) 21 entries were saved, the last
+`0x82D6FC78`, and the loop had stopped at its three-run limit each time.
+
+**The pool, from the owner's first codegen log and TTT2 Web's table.** The debug log names every function ReXGlue
+discovered (`FunctionNode ... DISCOVERED`). **695** of TTT2 Web's 18,351 function starts are not among them; the 14
+targets the codegen errors named are, and so is `0x82D6FC78`. They are small: 652 (94%) are 32 bytes or shorter (245
+exactly 32 bytes, `0x82D6FC78` among them; 195 a single instruction; 143 two), 15 KB of code in all, the largest 320
+bytes. That is the profile of virtual methods (an empty `blr`, `li r3,0; blr`, short accessors). ReXGlue's
+`VTableScanner` registers the slots of RTTI vtables only, and the 337 it found are nearly all Havok classes (`hk*`,
+`hcl*`, `hkcd*`); the game's own classes carry no RTTI, so a slot function that nothing calls directly and gap fill
+does not cover stays unregistered until the game calls it through the vtable.
+
+**How TTT2 Web found them.** Its `tools/find_switch_tables.py` (CC0) takes as function starts the `.pdata` entries,
+the `bl` targets, every 4-aligned word in a non-code section other than `.pdata` and `.reloc` that points into code,
+is no switch label, lies inside no `.pdata` function (SEH scope tables point at handler labels inside framed
+functions) and is not preceded by an instruction that falls through into it; then every address another function
+branches into; and, in a final sweep, every address no function covers. So most of the pool should carry the same
+evidence in the owner's image: a pointer in its data.
+
+**The ahead-of-time pass (`resolve_functions.py codegen --indirect`, pipeline step 6b, `build-host.ps1`).** After a
+successful codegen it reads the registered functions from the generated `*_register.cpp` and decides for every
+reference start missing there. One is registered only when a 4-aligned word in a data section (not code, `.pdata` or
+`.reloc`) holds its address (code is never searched: an instruction can equal a code address, `0x82D6FC78` itself
+decodes as `lwz r22,-904(r22)`), the image has code there, the instruction before it cannot fall through into it, it
+lies inside no `.pdata` function, it is no case label of the finder's tables, its reference extent is plain code (no
+zero word) ending in a branch or return, and ReXGlue registered nothing inside that extent. A start no data word
+points at (TTT2 Web's sweep finds those too) is never registered this way: the boot step still adds one the game
+calls, with the call as its evidence. Jump tables cannot pass for pointers: the owner's 531 four-byte (absolute)
+tables all sit in `.text` right after their `bctr`, and the 65 tables in data sections hold 1- or 2-byte offsets.
+The verified ones are compiled as one batch. If codegen then fails in a way the error resolution cannot fix, the
+batch entries the errors point into are taken out and listed in the output file (later runs skip them); if that does
+not help, the whole batch is rolled back to the entries that compiled before and codegen reruns on those. Every
+entry of the output file must then be registered in the generated code; the report names any that is not.
+`--drop-indirect` (the pipeline's `-NoIndirect`) removes the ahead-of-time entries and keeps every other one.
+
+**What registering does to the function that branches there (measured with the pinned SDK).** A pointer-only
+function that a branch of a registered function reaches is not loose code but an internal label of that function
+(ReXGlue follows the branch into it). Registering it splits the function: an unconditional `b` becomes a tail call
+(`sub_X(ctx, base); return;`), a conditional branch a conditional tail call (`if (ctx.cr0.eq) { sub_X(ctx, base);
+return; }`). `recomp/tests/ppc/pointer_ttt2.s` has both shapes, with the pointers in `.rdata` and in `.data`, plus
+three negative controls the pass must refuse (no pointer; a `bl` falling through into the address; a label inside a
+`.pdata` function). Codegen alone: 6 functions, and the first call through a pointer traps at `0x820100E4` with the
+same `[FATAL]` line. With `--indirect`: both functions registered, the three controls refused for their own reasons,
+8 functions, and the native run computes `50 6 57 205 204 1004 62`. `tailcall_ttt2.s` from scratch: the 2 entries its
+codegen errors call for, then its pointer-called leaf ahead of time; the first run passes without the trap, log and
+rebuild its boot cycle needed before.
+
+**The boot loop (pipeline steps 9b and 9c).** It repeats by itself, up to `-BootRounds` runs (default 10, never more
+than 50), and stops with the reason in the report, keeping every verified entry: a run that ends some other way; a run
+whose log gives no new verified entry; a trap at an address the loop already added, or one the entries the host was
+built with already list (the entry did not take effect); `-BootMinutes` (default 480) before a rebuild that would
+exceed it; less than `-MinFreeGb` (default 5) GB free before a rebuild; a failed rebuild. The runs after a rebuild
+close the game after 300 s even with `-BootTimeout 0`, so the loop never waits for a person. Step 9c lists every
+run (how it ended, what its log added). The loop reads the triage and the resolver's summary lines, not their JSON.
+`tests/powershell/test_boot_repair.ps1` runs the loop's own code with scripted boots and rebuilds (CI: PowerShell 7
+and Windows PowerShell 5.1); the Windows workflow runs the whole pipeline on a test disc carrying `pointer_ttt2`
+(`tests/tools/make_test_iso.cpp`): with `-NoIndirect` three runs and two automatic rebuilds, with the default one run.
+
+**Not yet measured:** the owner's image. The resolve report's ahead-of-time section will say how many of the pool have
+a pointer in data, how many each check refuses, and whether codegen accepts the batch.
+
 ## 9. Sources
 
 * https://github.com/Ekspym/Tekken6-native-online and https://github.com/Ekspym/tekken6-native-online-source

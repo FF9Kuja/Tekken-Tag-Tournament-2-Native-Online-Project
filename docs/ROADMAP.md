@@ -113,6 +113,10 @@ therefore mandatory for TTT2 and are the path the pipeline uses.
    real boot.
 3. Iterate on boot failures with the owner's test reports (**needs Windows + GPU + game files**): threads, waits,
    vblank/DPC timing, XAM UI/content calls, TLS, file I/O through the SDK VFS (`game:`, `update:`).
+   [x] The whole game compiles and runs natively on the owner's PC (2026-10-20); each boot so far ended on a call
+   to a function only a pointer reaches. [x] Those are registered ahead of time from pointers in the image's data
+   (`resolve_functions.py codegen --indirect`), and the pipeline's boot loop repairs the rest by itself with stop
+   conditions (no progress, repeated trap, run limit, time, disk space, failed rebuild; `docs/RESEARCH.md` 8d).
 4. Graphics: first frames through the D3D12 backend; audio: XMA playback; input: pads + keyboard.
 5. Measurable milestone: boot to the title screen; then to the main menu.
 

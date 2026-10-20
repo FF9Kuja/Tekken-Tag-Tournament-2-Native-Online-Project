@@ -2,6 +2,52 @@
 
 Newest first. Each entry says what was done, what was verified and where, and what is blocked.
 
+## 2026-10-20 - Session 7: the boot repair runs by itself; functions only a pointer reaches registered ahead of time
+
+**The owner's report (2026-10-20).** The latest real-game run compiled the whole game, built `ttt2.exe` and reached
+native execution again. The boot repair verified three more calls to unregistered functions against TTT2 Web's table
+and added them (21 saved entries; the last `0x82D6FC78`), then stopped at its three-run limit, so the owner had to
+restart the pipeline every three rebuilds.
+
+**Completed**
+* **PRs #13 and #14 merged** (merge commits `0af48d7`, `1025d28`); on `main` afterwards CI 39330841504 and the
+  Windows workflow 39330859742, green.
+* **Investigation (`docs/RESEARCH.md` 8d).** On the owner's first codegen log, 695 of TTT2 Web's 18,351 function
+  starts are functions ReXGlue never registered, `0x82D6FC78` and the 14 codegen-error targets among them; 94% are 32
+  bytes or shorter (vtable methods: ReXGlue's VTableScanner only reads RTTI vtables, and the 337 it found are nearly
+  all Havok's). TTT2 Web derived those starts from pointers in the image's data, so they are predictable from the
+  image before a boot traps on them.
+* **Ahead-of-time registration (`recomp/tools/resolve_functions.py codegen --indirect`).** After a successful codegen
+  it registers every reference function ReXGlue did not register whose address a 4-aligned word in a data section
+  holds, when the code checks pass (code at the address, no fall-through into it, not inside a `.pdata` function, no
+  switch case label, an extent of plain code ending in a branch or return, nothing registered inside it); a start
+  without a pointer is never registered this way. One batch, one more codegen round; entries codegen fails with are
+  taken out and remembered, and failing that the batch is rolled back to the entries that compiled before. Every
+  entry must then be registered in the generated code (the report names any that is not). `--drop-indirect`
+  removes the ahead-of-time entries; the 21 verified entries and every other one are never touched.
+* **The boot loop runs by itself (`scripts/owner-pipeline.ps1`).** Up to `-BootRounds` runs (default 10, capped at
+  50); it stops on a run that ends some other way, no new verified entry, a repeated trap (an address the loop
+  added, or one the host was built with), `-BootMinutes` (default 480, checked before each rebuild), less than
+  `-MinFreeGb` (default 5) GB free, or a failed rebuild, and keeps every entry. The runs after a rebuild close the
+  game after 300 s even with `-BootTimeout 0`. Step 9c summarises every run. It reads the triage and the resolver's
+  summary lines instead of JSON (Windows PowerShell 5.1). `build-host.ps1 -SkipCodegen` stops each rebuild from
+  running the finder and codegen twice; `-NoIndirect`, `-NoGpu` and `-Reference` pass through.
+* **Tests.** 13 new Python tests (every ahead-of-time rule on a purpose-built image, the batch accepted, narrowed,
+  rolled back and rolled back at the round limit, `--drop-indirect`, unregistered entries, the boot summary lines);
+  `recomp/tests/ppc/pointer_ttt2.s` (two pointer-only shapes folded into the functions that branch to them, three
+  negative controls) and `tailcall_ttt2.s` from scratch with `--indirect` in the smoke test, both run natively;
+  `tests/powershell/test_boot_repair.ps1` (19 cases, the loop's own code with scripted boots; CI under PowerShell 7
+  and 5.1); `tests/tools/make_test_iso.cpp` and the Windows workflow running the whole pipeline on a test disc.
+* **Measured with the pinned SDK:** registering a function that ReXGlue had folded into another one splits it
+  cleanly: an unconditional branch becomes a tail call, a conditional one a conditional tail call; `pointer_ttt2`
+  computes `50 6 57 205 204 1004 62` with the two entries and traps at its first pointer call without them.
+* **Local runs:** the smoke test with `--exec` (40 checks, 6 new), 88 Python tests, 26 ctests on both Linux presets
+  with warnings as errors, the loop test under PowerShell 7.4 (19 cases; 4 mutations of the loop each caught),
+  hygiene.
+
+**Not verified yet:** the owner's image: how many of the 695 carry a pointer in data, whether codegen accepts the
+batch, and how far the next boots get.
+
 ## 2026-10-19 - Session 6: PR #12 merged; switch dispatches made exact before the owner's rerun
 
 **Completed**

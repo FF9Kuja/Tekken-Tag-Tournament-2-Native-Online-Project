@@ -98,6 +98,12 @@ Own code (clean-room, from public format documentation), unit-tested with synthe
   and a boundary reference agree (TTT2 Web's published table, accepted only when ReXGlue's own helper detection
   matches its fingerprint, plus `.pdata`). The entries live in `recomp/game/ttt2_resolved_functions.toml`
   (image-specific, git-ignored), which the default manifest includes; `docs/RESEARCH.md` 8b has the measurements.
+  `codegen --indirect` registers the functions only a pointer reaches before the game calls them: a reference
+  function ReXGlue did not register gets an entry when a word in the image's data sections holds its address and
+  the code checks pass (the rule TTT2 Web's table was derived with); a batch codegen fails with is narrowed or
+  rolled back, never forced. The owner pipeline's boot loop handles what remains (one trap, one verified entry,
+  one rebuild per run) by itself, with stop conditions for no progress, repeated traps, time, disk space and
+  failed rebuilds (`docs/RESEARCH.md` 8d).
 * **Post-codegen patch tools** (`recomp/tools/*.py`): rewrite the generated C++ to add dirty-page tracking on guest
   stores and the sound-library call boundary. Pure text transforms over local files; the tools are ours.
 * **Cross-check path**: XenonAnalyse / XenonRecomp (MIT) on the same image to compare function boundaries and
