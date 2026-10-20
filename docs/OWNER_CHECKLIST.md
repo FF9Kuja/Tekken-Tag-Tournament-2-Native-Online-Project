@@ -121,8 +121,8 @@ the graphics emulation's copy-back, which is slower); `$env:TTT2_KERNEL_CLOCK = 
 Your latest run (2026-10-20, `main` at `8cadd71`) kept the clock running (180 s) but stayed black and silent. What it
 shows (`docs/RESEARCH.md` 8g): the main thread holds the game's memory-allocation lock and never lets go - 390 levels
 deep, the same number as the run before - so the loader thread and the sound engine, which both need memory, wait for
-it forever. The busy thread 19 is a loop the game also runs on the working ports; it still finishes its work twice per
-frame, so it is not what holds the boot. And the "0 draws" was not a measurement: the game builds its frames in a buffer
+it forever. The busy thread 19 is a loop the game also runs on TTT2 Web, a port that reaches the menus; it still
+finishes its work twice per frame, so it is not what holds the boot. And the "0 draws" was not a measurement: the game builds its frames in a buffer
 the frame monitor did not read, so it could not see them at all. Three changes:
 
 1. **A recompiler fix for the most likely cause of the stuck lock.** When one of the game's functions runs on past

@@ -44,6 +44,14 @@ stubs. Thread 19: about 329 million traced calls. Critical section `0x40000618` 
   both workflows check that the boot step's triage names its timeout as the closer.
 * **Local runs (Linux, pinned SDK with patch 0001):** the smoke test with `--exec` (68 checks); the real host on
   `imports_ttt2`, `io_ttt2`, `gpu_ttt2` and `wait_ttt2`; 100 Python tests; 86 doctest cases with Clang and GCC.
+* **CI and workflows on PR #18 (`4538dc6`):** CI green (push 39506578542, PR 39506634556); SDK validation on Linux
+  39506642116 (the SDK built with patch 0001, the smoke test with native execution including `falloff_ttt2`, the real
+  host on every test program, the boot step's triage naming its timeout); the Windows workflow with `build_host` and
+  `native_run` 39506645624: `rexglue.exe` and the installed SDK package built with the patch (`TTT2 SDK patches:
+  0001-fall-through` in its codegen logs), the host booted on the deadlock (holds, calls by site, object descriptions,
+  the alertable flag), the file-system program (the first read and the information class logged) and the GPU-frames
+  program (frame 4 counted as not followed), the boot step's triage naming its timeout, and the owner pipeline end to
+  end twice (its patch check passes with the package).
 
 **Not verified yet:** the owner's copy - whether the patched codegen frees the heap lock, and what the frames draw.
 
